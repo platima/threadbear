@@ -20,7 +20,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { dataDirFor } from '../../runner/src/platform.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const dist = path.resolve(here, '..', 'dist');
+const dist = path.resolve(process.env.THREADBEAR_DIST || path.join(here, '..', 'dist'));
 const BRIDGE_PORT = Number(process.env.THREADBEAR_BRIDGE_PORT || 5185);
 const home = path.resolve(process.env.THREADBEAR_HOME || process.env.THREADBEAR_DATA_DIR || dataDirFor());
 

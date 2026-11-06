@@ -4,6 +4,8 @@ import { clampWidth, readWidth } from '../../../web/src/sections.ts';
 import { Sidebar } from './Sidebar.tsx';
 import { ThreadView } from './ThreadView.tsx';
 import { Composer } from './Composer.tsx';
+import { Rail } from './Rail.tsx';
+import { PAGES } from './registry.ts';
 
 export function useSnap(store: AppStore) {
   return useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -21,6 +23,13 @@ const saved = (): string | null => {
 export function App({ store }: { store: AppStore }) {
   const snap = useSnap(store);
   const [width, setWidth] = useState(() => clampWidth(readWidth(saved()), window.innerWidth));
+  const [route, setRoute] = useState(() => location.hash.replace(/^#\/?/, '').split('/')[0] || 'threads');
+  const go = (r: string) => {
+    setRoute(r);
+    history.replaceState(null, '', r === 'threads' ? '#/' : `#/${r}`);
+  };
+  const page = PAGES.find((p) => p.id === route);
+  const pageProps = { store, snap, openThread: (id: string) => { go('threads'); void store.open(id); } };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -56,8 +65,9 @@ export function App({ store }: { store: AppStore }) {
 
   const offline = snap.conn !== 'open';
   return (
-    <div className="app" style={{ ['--side' as string]: `${width}px` }}>
-      <Sidebar store={store} snap={snap} />
+    <div className="app" style={{ ['--side' as string]: `${page && !page.Sidebar ? 0 : width}px` }}>
+      <Rail route={page ? route : 'threads'} go={go} conn={snap.conn} />
+      {page ? page.Sidebar ? <aside className="side"><page.Sidebar {...pageProps} /></aside> : <div /> : <Sidebar store={store} snap={snap} />}
       <div className="grip" onPointerDown={drag} />
       <main className="main">
         {offline && (
@@ -70,7 +80,7 @@ export function App({ store }: { store: AppStore }) {
             {n.message}
           </div>
         ))}
-        {snap.selected ? <ThreadView store={store} snap={snap} /> : <NewThread store={store} snap={snap} />}
+        {page ? <page.Main {...pageProps} /> : snap.selected ? <ThreadView store={store} snap={snap} /> : <NewThread store={store} snap={snap} />}
       </main>
     </div>
   );

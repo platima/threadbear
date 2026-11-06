@@ -37,7 +37,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 input, textarea, select { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
 input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
-.app { display: grid; grid-template-columns: var(--side, 300px) 5px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100%; overflow: hidden; }
+.app { display: grid; grid-template-columns: 44px var(--side, 300px) 5px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100%; overflow: hidden; }
 .side { background: var(--bg-side); display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .grip { cursor: col-resize; margin-left: -3px; z-index: 2; }
 .grip:hover { background: var(--accent); opacity: 0.4; }
@@ -113,3 +113,18 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .banner.bad { background: var(--bad); color: #fff; }
 .empty { margin: auto; color: var(--dim); text-align: center; padding: 40px; }
 .loadmore { text-align: center; padding: 8px; }
+
+.rail { background: var(--bg-side); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; }
+.rail button { width: 34px; height: 34px; padding: 0; font-size: 17px; border-radius: 8px; }
+.rail button.on { background: var(--bg-raised); border-color: var(--line); }
+.railDot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-bottom: 6px; }
+.railDot.open { background: var(--ok); }
+.page { padding: 20px 28px; overflow: auto; flex: 1; min-height: 0; }
+.page h2 { margin: 0 0 12px; font-size: 18px; }
+.thread { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.thread .center { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.pane { width: var(--pane, 360px); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--bg-side); }
+.pane .tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.pane .tabs button.on { background: var(--bg-raised); border-color: var(--line); }
+.pane .body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px; }
+.badge { background: var(--warn); color: #000; border-radius: 999px; padding: 0 6px; font-size: 11px; margin-left: 4px; }

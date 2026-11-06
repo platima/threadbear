@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import type { AppStore, Snapshot } from '../core/store.ts';
+import { PANES } from './registry.ts';
 import { modelLabel } from '../../../web/src/format.ts';
 import { Transcript } from './Transcript.tsx';
 import { Composer } from './Composer.tsx';
@@ -10,13 +12,35 @@ const tomorrow9 = () => {
   return d.toISOString();
 };
 
+const PANE_KEY = 'threadbear.pane';
+const readPane = (): string | undefined => {
+  try {
+    return localStorage.getItem(PANE_KEY) || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export function ThreadView({ store, snap }: { store: AppStore; snap: Snapshot }) {
+  const [tab, setTab] = useState<string | undefined>(readPane);
   const t = snap.threads.get(snap.selected!);
   if (!t) return <div className="empty">{snap.loading ? 'Opening...' : 'That thread has gone.'}</div>;
   const busy = store.model.busy;
+  const panes = PANES.filter((p) => p.available?.(t) ?? true);
+  const shown = panes.find((p) => p.id === tab);
+  const pick = (id: string) => {
+    const next = tab === id ? undefined : id;
+    setTab(next);
+    try {
+      localStorage.setItem(PANE_KEY, next ?? '');
+    } catch {
+      // not kept
+    }
+  };
   const status = t.status === 'running' || t.status === 'starting' ? 'live' : t.status === 'waiting' || t.needsYou ? 'warn' : '';
   return (
-    <>
+    <div className="thread">
+      <div className="center">
       <div className="head">
         <div className="grow">
           <h1>{t.title || 'New thread'}</h1>
@@ -30,6 +54,12 @@ export function ThreadView({ store, snap }: { store: AppStore; snap: Snapshot })
           {t.permissionMode}
         </span>
         {t.costUsd !== undefined && <span className="chip">${t.costUsd.toFixed(2)}</span>}
+        {panes.map((p) => (
+          <button key={p.id} className={p.id === tab ? 'on' : ''} title={p.title} onClick={() => pick(p.id)}>
+            {p.title}
+            {p.badge?.(t) ? <span className="badge">{p.badge(t)}</span> : null}
+          </button>
+        ))}
         <button title={t.starredAt ? 'Unstar' : 'Star'} onClick={() => void store.update(t.id, { starred: !t.starredAt })}>
           {t.starredAt ? '★' : '☆'}
         </button>
@@ -54,6 +84,21 @@ export function ThreadView({ store, snap }: { store: AppStore; snap: Snapshot })
       </div>
       {snap.loading ? <div className="empty">Opening...</div> : <Transcript store={store} snap={snap} />}
       <Composer store={store} snap={snap} busy={busy} />
-    </>
+      </div>
+      {shown && (
+        <div className="pane">
+          <div className="tabs">
+            <b style={{ padding: '4px 8px' }}>{shown.title}</b>
+            <span className="grow" />
+            <button className="ghost" title="Close" onClick={() => pick(shown.id)}>
+              ✕
+            </button>
+          </div>
+          <div className="body">
+            <shown.Pane store={store} snap={snap} thread={t} />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
