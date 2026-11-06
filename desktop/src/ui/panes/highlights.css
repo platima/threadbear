@@ -1,0 +1,25 @@
+.hl { display: flex; flex-direction: column; gap: 14px; }
+.hl-empty { color: var(--dim); padding: 24px 8px; text-align: center; }
+.hl-bad { color: var(--bad); }
+.hl-line { font-size: 13px; }
+.hl-brief { margin: 0; color: var(--dim); font-size: 13px; }
+.hl-sec h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.hl-count { color: var(--dim); font-weight: 400; }
+.hl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.hl-row { border-radius: 8px; padding: 3px 4px; }
+.hl-row:hover { background: color-mix(in srgb, var(--bg-raised) 70%, transparent); }
+.hl-head { display: flex; align-items: center; gap: 4px; }
+.hl-main { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; padding: 2px 4px; border: 0; background: none; color: inherit; text-align: left; text-decoration: none; cursor: pointer; border-radius: 6px; }
+.hl-main:hover { background: var(--bg-raised); }
+a.hl-main { color: var(--accent); }
+.hl-main svg { flex: none; color: var(--dim); }
+.hl-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hl-chev { color: var(--dim); font-size: 11px; margin-left: auto; flex: none; }
+.hl-sha { font: 12px var(--mono); color: var(--dim); margin-left: auto; flex: none; }
+.hl-x { padding: 0 6px; color: var(--dim); font-size: 12px; opacity: 0; }
+.hl-row:hover .hl-x, .hl-x:focus-visible { opacity: 1; }
+.hl-note { margin: 1px 4px 2px 26px; font-size: 13px; overflow-wrap: anywhere; }
+.hl-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-left: 26px; color: var(--dim); font-size: 12px; }
+.hl-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.hl-preview { margin: 6px 0 4px; }
+.hl-more { margin-top: 4px; font-size: 12px; }

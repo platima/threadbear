@@ -1,0 +1,104 @@
+/* The thread view's own parts: the box at the bottom (cards joined to the
+   composer, pictures, choices), pictures in the transcript, editing a message.
+   Colours come from the variables at the top of ../styles.css. */
+
+/* ---- the composer as one joined box ---- */
+.composer .box.joined { gap: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); position: relative; }
+.composer .box.joined:focus-within { border-color: var(--accent); }
+.composer .box.joined.drag { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.composer .box.joined > textarea { border: 0; border-radius: 0; background: transparent; outline: none; min-height: 44px; }
+.composer .box.joined > .bar { padding: 4px 8px 8px; }
+.composer .bar .tb-add { font-size: 18px; line-height: 1; padding: 0 8px; }
+
+/* ---- what is waiting, above the message box ---- */
+.tb-dock { max-height: min(52vh, 500px); overflow: auto; border-bottom: 1px solid var(--line); border-radius: 13px 13px 0 0; background: color-mix(in srgb, var(--warn) 6%, var(--bg)); }
+.tb-dock.with-review { max-height: min(74vh, 700px); }
+.tb-asks { padding: 10px 12px; display: flex; flex-direction: column; gap: 12px; }
+.tb-ask { display: flex; gap: 10px; align-items: flex-start; }
+.tb-tickbox { margin-top: 4px; flex: none; }
+.tb-ask-body { flex: 1; min-width: 0; }
+.tb-ask.ticked .tb-ask-text, .tb-ask.ticked .tb-why { opacity: 0.55; }
+.tb-ask-text { display: flex; gap: 6px; align-items: baseline; font-weight: 500; }
+.tb-ask-text .md { flex: 1; min-width: 0; }
+.tb-num { color: var(--dim); font-weight: 600; }
+.tb-why { margin-top: 2px; }
+.tb-links { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 2px; }
+.tb-link { font: inherit; font-size: 12.5px; padding: 1px 10px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); background: transparent; text-decoration: none; cursor: pointer; display: inline-block; }
+.tb-link:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: var(--accent); }
+.tb-opts { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.tb-opt { display: flex; gap: 8px; align-items: flex-start; text-align: left; width: 100%; background: transparent; border-color: transparent; padding: 4px 8px; border-radius: 8px; }
+.tb-opt:hover { background: var(--bg-raised); border-color: transparent; }
+.tb-opt.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.tb-radio { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--dim); flex: none; margin-top: 3px; }
+.tb-opt.on .tb-radio { border-color: var(--accent); background: radial-gradient(var(--accent) 42%, transparent 48%); }
+.tb-opt-text { min-width: 0; }
+.tb-opt-text small { display: block; color: var(--dim); font-size: 12.5px; }
+.tb-mine { margin-left: 8px; font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 6px; white-space: nowrap; }
+.tb-own { width: 100%; margin-top: 4px; resize: vertical; }
+
+.tb-done { padding: 10px 12px; background: color-mix(in srgb, var(--ok) 6%, var(--bg)); border-radius: 13px 13px 0 0; }
+.tb-done-head { display: flex; gap: 10px; align-items: center; color: var(--dim); }
+.tb-next { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tb-follow { text-align: left; border-radius: 999px; padding: 3px 12px; background: transparent; }
+.tb-follow:hover { border-color: var(--accent); }
+
+/* ---- a design review ---- */
+.tb-review { padding: 10px 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+.tb-review:last-child { border-bottom: 0; }
+.tb-review-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.tb-options { display: flex; gap: 12px; overflow-x: auto; padding: 4px 0 8px; align-items: flex-start; }
+.tb-option { flex: 1 0 190px; max-width: 380px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--bg); }
+.tb-option.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.tb-option-title { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.tb-option textarea, .tb-reply { width: 100%; resize: vertical; }
+.tb-pickrow { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.tb-review-foot { display: flex; flex-direction: column; gap: 6px; }
+.tb-review-foot .btns { display: flex; gap: 8px; align-items: center; }
+.tb-shotbar { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.tb-shotbar button { padding: 0 8px; font-size: 12px; }
+.tb-shotbar button.on { border-color: var(--accent); }
+
+/* ---- pictures ---- */
+.pic { display: block; max-width: 100%; }
+.pic img { display: block; max-width: 100%; max-height: 260px; border-radius: 8px; cursor: zoom-in; object-fit: contain; background: var(--bg-code); }
+.pic-wait { min-height: 64px; min-width: 120px; border-radius: 8px; background: var(--bg-code); animation: tb-pulse 1.4s ease-in-out infinite; }
+.pic-fail { font-size: 12px; color: var(--dim); border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; overflow-wrap: anywhere; }
+@keyframes tb-pulse { 50% { opacity: 0.45; } }
+.tb-pics { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.tb-pics .pic img { max-height: 180px; }
+.tb-shot img { width: 100%; max-height: 200px; }
+.tb-keep { position: relative; display: inline-block; }
+.lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, 0.82); display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+.lightbox img { max-width: 94vw; max-height: 94vh; object-fit: contain; border-radius: 6px; }
+
+.tb-thumbs { display: flex; gap: 8px; padding: 8px 10px 0; flex-wrap: wrap; }
+.tb-thumb { position: relative; width: 64px; height: 64px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+.tb-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tb-thumb.wait img { opacity: 0.45; }
+.tb-n { position: absolute; left: 3px; bottom: 3px; background: rgba(0, 0, 0, 0.7); color: #fff; border-radius: 4px; padding: 0 5px; font-size: 11px; }
+.tb-x { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; border-radius: 50%; line-height: 1; background: rgba(0, 0, 0, 0.7); color: #fff; border-color: transparent; font-size: 14px; }
+.picchip { display: inline-block; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; font-size: 12px; margin: 0 2px; }
+
+/* ---- editing the person's own message ---- */
+.bubblewrap { position: relative; }
+.tb-edit { position: absolute; top: -10px; right: 8px; font-size: 12px; padding: 0 8px; opacity: 0; transition: opacity 0.12s; }
+.bubblewrap:hover .tb-edit, .tb-edit:focus-visible { opacity: 1; }
+.tb-editbox { border: 1px solid var(--accent); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--bg); }
+.tb-editbox textarea { width: 100%; resize: vertical; }
+.tb-editbox .btns { display: flex; gap: 8px; align-items: center; }
+.tb-warn { color: var(--warn); }
+.tb-title-edit { font-size: 15px; font-weight: 600; width: 100%; padding: 1px 6px; }
+
+/* ---- a short list that opens from a button ---- */
+.tb-menu { position: relative; display: inline-block; }
+.tb-menu-btn { padding: 2px 9px; font-size: 12px; border-radius: 999px; background: transparent; color: var(--dim); white-space: nowrap; }
+.tb-menu-btn:hover:not(:disabled) { color: var(--text); }
+.tb-caret { margin-left: 5px; font-size: 9px; }
+.tb-menu-list { position: absolute; left: 0; z-index: 40; min-width: 240px; max-width: 340px; max-height: 340px; overflow: auto; background: var(--bg-raised); border: 1px solid var(--line); border-radius: 10px; padding: 4px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35); }
+.tb-menu-list.up { bottom: calc(100% + 6px); }
+.tb-menu-list.down { top: calc(100% + 6px); }
+.tb-menu-list button { display: flex; gap: 6px; width: 100%; text-align: left; background: transparent; border-color: transparent; align-items: flex-start; }
+.tb-menu-list button:hover:not(:disabled) { background: var(--bg-side); border-color: transparent; }
+.tb-tick { width: 14px; flex: none; color: var(--accent); }
+.tb-item { display: flex; flex-direction: column; min-width: 0; }
+.tb-item small { color: var(--dim); font-size: 12px; }

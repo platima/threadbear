@@ -14,8 +14,9 @@
   --font: system-ui, 'Segoe UI', -apple-system, sans-serif;
   --mono: ui-monospace, 'Cascadia Mono', Consolas, Menlo, monospace;
 }
+/* The system's setting, unless the rail's appearance button has picked one. */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme='dark']) {
     --bg: #ffffff;
     --bg-side: #f2f2f4;
     --bg-raised: #ececef;
@@ -26,6 +27,18 @@
     --accent: #0a6cff;
   }
 }
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-side: #f2f2f4;
+  --bg-raised: #ececef;
+  --bg-code: #f6f6f8;
+  --line: #d8d8dc;
+  --text: #1c1c1e;
+  --dim: #6c6c72;
+  --accent: #0a6cff;
+}
+:root[data-theme='dark'] { color-scheme: dark; }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); }
@@ -66,7 +79,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .trow:hover .acts { display: flex; }
 .acts button { padding: 0 6px; font-size: 12px; }
 
-.head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); min-height: 52px; }
+.head { display: flex; align-items: center; gap: 6px 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); min-height: 52px; flex-wrap: wrap; }
+.head > .grow { flex: 1 1 220px; }
 .head h1 { font-size: 15px; margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .head .sub { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip { border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; font-size: 12px; color: var(--dim); white-space: nowrap; }
@@ -128,3 +142,10 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .pane .tabs button.on { background: var(--bg-raised); border-color: var(--line); }
 .pane .body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px; }
 .badge { background: var(--warn); color: #000; border-radius: 999px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
+
+.overlay { position: fixed; inset: 0; background: #0008; display: flex; align-items: center; justify-content: center; z-index: 50; }
+.sheet { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 18px 24px; min-width: 340px; max-width: 90vw; }
+.sheet h2 { margin: 0 0 10px; font-size: 16px; }
+.sheet table { border-collapse: collapse; width: 100%; }
+.sheet td { padding: 4px 0; } .sheet td:first-child { padding-right: 24px; color: var(--dim); white-space: nowrap; }
+kbd { font: 12px var(--mono); background: var(--bg-raised); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }

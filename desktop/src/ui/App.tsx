@@ -1,10 +1,11 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppStore } from '../core/store.ts';
 import { clampWidth, readWidth } from '../../../web/src/sections.ts';
 import { Sidebar } from './Sidebar.tsx';
 import { ThreadView } from './ThreadView.tsx';
 import { Composer } from './Composer.tsx';
 import { Rail } from './Rail.tsx';
+import { Shortcuts } from './Shortcuts.tsx';
 import { PAGES } from './registry.ts';
 
 export function useSnap(store: AppStore) {
@@ -23,11 +24,14 @@ const saved = (): string | null => {
 export function App({ store }: { store: AppStore }) {
   const snap = useSnap(store);
   const [width, setWidth] = useState(() => clampWidth(readWidth(saved()), window.innerWidth));
+  const [help, setHelp] = useState(false);
   const [route, setRoute] = useState(() => location.hash.replace(/^#\/?/, '').split('/')[0] || 'threads');
   const go = (r: string) => {
     setRoute(r);
     history.replaceState(null, '', r === 'threads' ? '#/' : `#/${r}`);
   };
+  const goRef = useRef(go);
+  goRef.current = go;
   const page = PAGES.find((p) => p.id === route);
   const pageProps = { store, snap, openThread: (id: string) => { go('threads'); void store.open(id); } };
 
@@ -36,6 +40,18 @@ export function App({ store }: { store: AppStore }) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
         store.deselect();
+      }
+      if (e.key === 'Escape') setHelp(false);
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        setHelp((h) => !h);
+      }
+      if ((e.ctrlKey || e.metaKey) && /^[1-9]$/.test(e.key)) {
+        const target = e.key === '1' ? 'threads' : PAGES[Number(e.key) - 2]?.id;
+        if (target) {
+          e.preventDefault();
+          goRef.current(target);
+        }
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -66,9 +82,10 @@ export function App({ store }: { store: AppStore }) {
   const offline = snap.conn !== 'open';
   return (
     <div className="app" style={{ ['--side' as string]: `${page && !page.Sidebar ? 0 : width}px` }}>
-      <Rail route={page ? route : 'threads'} go={go} conn={snap.conn} />
+      <Rail route={page ? route : 'threads'} go={go} conn={snap.conn} help={() => setHelp(true)} />
       {page ? page.Sidebar ? <aside className="side"><page.Sidebar {...pageProps} /></aside> : <div /> : <Sidebar store={store} snap={snap} />}
       <div className="grip" onPointerDown={drag} />
+      {help && <Shortcuts onClose={() => setHelp(false)} />}
       <main className="main">
         {offline && (
           <div className={snap.conn === 'closed' ? 'banner bad' : 'banner'}>

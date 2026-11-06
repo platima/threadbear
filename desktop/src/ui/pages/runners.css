@@ -1,0 +1,6 @@
+.runners-threads { display: flex; flex-direction: column; gap: 2px; }
+.runners-thread { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 8px; }
+.runners-thread:hover { background: var(--bg-raised); }
+.runners-thread-body { flex: 1; min-width: 0; }
+.runners-thread-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runners-threads > .ghost { align-self: flex-start; }

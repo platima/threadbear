@@ -1,0 +1,15 @@
+.fp { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); overflow: hidden; }
+.fp-bar { display: flex; align-items: center; gap: 2px; padding: 3px 6px; border-bottom: 1px solid var(--line); background: var(--bg-raised); font-size: 12px; flex-wrap: wrap; }
+.fp-bar button { padding: 1px 6px; font-size: 12px; }
+.fp-bar button.on { background: var(--bg); border-color: var(--line); }
+.fp-meta { color: var(--dim); margin-right: 4px; }
+.fp-note { color: var(--dim); font-size: 13px; padding: 8px 10px; }
+.fp-bad { color: var(--bad); }
+.fp-text { margin: 0; padding: 8px 10px; max-height: 360px; overflow: auto; font: 12px/1.45 var(--mono); white-space: pre; background: var(--bg-code); }
+.fp.compact .fp-text { max-height: 220px; }
+.fp-md { padding: 8px 12px; max-height: 420px; overflow: auto; font-size: 13.5px; }
+.fp-md h1 { font-size: 17px; margin: 0 0 8px; } .fp-md h2 { font-size: 15px; margin: 12px 0 6px; } .fp-md h3 { font-size: 14px; margin: 10px 0 4px; }
+.fp-img { padding: 8px; max-height: 420px; overflow: auto; text-align: center; background: var(--bg-code); }
+.fp-img img { max-width: 100%; height: auto; cursor: zoom-in; border-radius: 4px; }
+.fp-img.full img { max-width: none; cursor: zoom-out; }
+.fp-html { display: block; width: 100%; height: 360px; border: 0; background: #fff; color-scheme: light; }

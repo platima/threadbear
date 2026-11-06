@@ -1,0 +1,31 @@
+.set-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.set-tabs button.on { background: var(--bg-raised); border-color: var(--line); }
+
+.set-row { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 4px 20px; align-items: start; }
+@media (max-width: 760px) { .set-row { grid-template-columns: 1fr; } }
+.set-label { padding-top: 5px; font-size: 13px; }
+.set-control { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.set-control input:not([type='checkbox']), .set-control textarea, .set-control select { width: 100%; max-width: 460px; }
+.set-control input[type='number'] { width: 100px; }
+.set-control textarea { resize: vertical; font: 12.5px var(--mono); }
+.set-inline { display: inline-flex; align-items: center; gap: 8px; }
+.set-check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.set-days { width: 70px; }
+
+.set-logins { display: flex; flex-direction: column; gap: 6px; }
+.set-login { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.set-login-name { font-weight: 500; }
+.set-pool { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--bg-side); }
+.set-pool textarea { width: 100%; resize: vertical; font: 12.5px var(--mono); }
+.set-pool-title { width: 220px; font-weight: 600; }
+.set-members { display: flex; gap: 6px 18px; flex-wrap: wrap; font-size: 13px; }
+
+.set-devices { display: flex; flex-direction: column; }
+.set-device { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--line); }
+.set-device:first-child { border-top: 0; }
+.set-device-name { font-weight: 500; }
+.set-pairing { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: var(--bg-side); }
+.set-pairing svg { border-radius: 6px; flex: none; }
+.set-pairing-text { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; font-size: 13px; }
+.set-pairing-text p { margin: 0; color: var(--dim); }
+.set-link { color: var(--accent); }

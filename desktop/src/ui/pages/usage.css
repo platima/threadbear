@@ -1,0 +1,23 @@
+.usage-left { font-size: 13px; font-weight: 600; color: var(--text); }
+.usage-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.usage-chart { width: 100%; }
+.usage-chart svg { width: 100%; height: 150px; display: block; overflow: visible; }
+.usage-readout { font-size: 12px; color: var(--dim); min-height: 18px; }
+.usage-grid { stroke: var(--line); stroke-width: 1; opacity: 0.7; }
+.usage-day { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.8; }
+.usage-tick { fill: var(--dim); font-size: 10px; font-family: var(--font); }
+.usage-bar.fresh { fill: var(--ops-s1); }
+.usage-bar.cache { fill: var(--ops-s1); opacity: 0.38; }
+.usage-hover { fill: var(--text); opacity: 0.1; }
+.usage-cursor { stroke: var(--dim); stroke-width: 1; }
+.usage-line { fill: none; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+.usage-line.s1 { stroke: var(--ops-s1); }
+.usage-line.s2 { stroke: var(--ops-s2); }
+.usage-legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
+.usage-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.usage-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.usage-swatch.fresh { background: var(--ops-s1); }
+.usage-swatch.cache { background: var(--ops-s1); opacity: 0.38; }
+.usage-swatch.line { height: 3px; border-radius: 2px; width: 14px; }
+.usage-swatch.line.s1 { background: var(--ops-s1); opacity: 1; }
+.usage-swatch.line.s2 { background: var(--ops-s2); }

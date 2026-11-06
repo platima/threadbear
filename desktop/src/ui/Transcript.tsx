@@ -1,23 +1,18 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { AppStore, Snapshot } from '../core/store.ts';
+import { errorText, type AppStore, type Snapshot } from '../core/store.ts';
 import type { Row, ToolData } from '../core/model.ts';
+import { sentByAgent, type ImageRef } from '../core/types.ts';
+import { RpcError } from '../core/rpc.ts';
 import { fold, workedTitle, type Item } from '../../../web/src/turns.ts';
 import { Card } from './Cards.tsx';
+import { Md } from './thread/Md.tsx';
+import { Picture } from './thread/Picture.tsx';
+import { dropMarker, splitMarkers } from './thread/text.ts';
+import './thread/thread.css';
 
-const plugins = [remarkGfm];
-
-export const Md = memo(function Md({ text }: { text: string }) {
-  return (
-    <div className="md">
-      <Markdown remarkPlugins={plugins} components={{ a: (p) => <a {...p} target="_blank" rel="noopener noreferrer" /> }}>
-        {text}
-      </Markdown>
-    </div>
-  );
-});
+// Other parts of the window import this from here.
+export { Md };
 
 type Entry = { key: string; item?: Item<Row>; stream?: { text: string; reasoning: boolean }; earlier?: true };
 const EST = 48;
@@ -108,7 +103,7 @@ export function Transcript({ store, snap }: { store: AppStore; snap: Snapshot })
 }
 
 function ItemView({ item, open, toggle, store, threadId }: { item: Item<Row>; open: Set<string>; toggle: (id: string) => void; store: AppStore; threadId: string }) {
-  if (item.kind === 'message') return <MessageView row={item.m} />;
+  if (item.kind === 'message') return <MessageView row={item.m} rev={item.m.rev ?? 0} store={store} threadId={threadId} />;
   if (item.kind === 'tools') {
     return (
       <div className="row">
@@ -119,12 +114,20 @@ function ItemView({ item, open, toggle, store, threadId }: { item: Item<Row>; op
     );
   }
   const id = `w${item.key}`;
+  const made = open.has(id) ? [] : picturesOf(item);
   return (
     <div className="row">
       <div className="worked" onClick={() => toggle(id)}>
         <span>{open.has(id) ? '▾' : '▸'}</span>
         <span>{workedTitle(item.ms)}</span>
       </div>
+      {made.length > 0 && (
+        <div className="tb-pics">
+          {made.map((im, i) => (
+            <Picture key={im.path + i} store={store} image={im} />
+          ))}
+        </div>
+      )}
       {open.has(id) && (
         <div className="detail">
           {item.items.map((sub, i) => (
@@ -136,18 +139,16 @@ function ItemView({ item, open, toggle, store, threadId }: { item: Item<Row>; op
   );
 }
 
-const MessageView = memo(function MessageView({ row, rev }: { row: Row; rev?: number }) {
+// The pictures a folded stretch of work made, so they stay in view.
+function picturesOf(item: Item<Row>): ImageRef[] {
+  if (item.kind === 'message') return [];
+  if (item.kind === 'tools') return item.items.flatMap((r) => r.tool?.result?.images ?? []);
+  return item.items.flatMap(picturesOf);
+}
+
+const MessageView = memo(function MessageView({ row, rev, store, threadId }: { row: Row; rev?: number; store: AppStore; threadId: string }) {
   void rev;
-  if (row.kind === 'user') {
-    return (
-      <div className="row">
-        <div className="bubble">
-          {row.text}
-          {row.images?.length ? <div className="note">{row.images.length} picture{row.images.length === 1 ? '' : 's'}: {row.images.map((i) => i.path.split(/[\\/]/).pop()).join(', ')}</div> : null}
-        </div>
-      </div>
-    );
-  }
+  if (row.kind === 'user') return <UserMessage row={row} store={store} threadId={threadId} />;
   return (
     <div className="row" style={row.narration ? { opacity: 0.75 } : undefined}>
       <Md text={row.text} />
@@ -155,8 +156,159 @@ const MessageView = memo(function MessageView({ row, rev }: { row: Row; rev?: nu
   );
 });
 
+// What the person wrote. Their own messages that began a turn can be edited:
+// the agent forgets everything from there and the new words are sent as if
+// the rest had never happened (docs/protocol.md, "Editing a message").
+function UserMessage({ row, store, threadId }: { row: Row; store: AppStore; threadId: string }) {
+  const [editing, setEditing] = useState(false);
+  const canEdit = row.startsTurn === true && (!row.origin || row.origin === 'phone') && !row.reviewId && !sentByAgent(row.text);
+  const images = row.images ?? [];
+  if (editing) {
+    return (
+      <div className="row">
+        <EditBox row={row} store={store} threadId={threadId} close={() => setEditing(false)} />
+      </div>
+    );
+  }
+  return (
+    <div className="row">
+      <div className="bubblewrap">
+        <div className="bubble">
+          {splitMarkers(row.text).map((p, i) =>
+            typeof p === 'string' ? (
+              <span key={i}>{p}</span>
+            ) : images[p - 1] ? (
+              <span key={i} className="picchip" title={`Picture ${p}`}>
+                Picture {p}
+              </span>
+            ) : (
+              <span key={i}>[Picture {p}]</span>
+            ),
+          )}
+          {images.length > 0 && (
+            <div className="tb-pics">
+              {images.map((im, i) => (
+                <Picture key={im.path + i} store={store} image={im} label={`Picture ${i + 1}`} />
+              ))}
+            </div>
+          )}
+        </div>
+        {canEdit && (
+          <button type="button" className="tb-edit" title="Edit this message and send it again" onClick={() => setEditing(true)}>
+            Edit
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EditBox({ row, store, threadId, close }: { row: Row; store: AppStore; threadId: string; close: () => void }) {
+  const [text, setText] = useState(row.text);
+  const [images, setImages] = useState(row.images ?? []);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [background, setBackground] = useState<string>();
+  const area = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = area.current;
+    el?.focus();
+    el?.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+  const run = async (stopBackground: boolean) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await store.edit(threadId, row.seq, text.trim(), images, stopBackground);
+      close();
+    } catch (e) {
+      // -32050: background work would be stopped. Ask before going on.
+      if (e instanceof RpcError && e.code === -32050) setBackground(e.message);
+      else setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const ready = !busy && (!!text.trim() || images.length > 0);
+  return (
+    <div className="tb-editbox">
+      <textarea
+        ref={area}
+        rows={Math.min(12, Math.max(2, text.split('\n').length))}
+        value={text}
+        disabled={busy}
+        title="Your message. Enter saves and sends it again, Escape cancels."
+        onChange={(e) => {
+          setText(e.target.value);
+          setBackground(undefined);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') close();
+          else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            if (ready) void run(false);
+          }
+        }}
+      />
+      {images.length > 0 && (
+        <div className="tb-pics">
+          {images.map((im, i) => (
+            <span key={im.path + i} className="tb-keep">
+              <Picture store={store} image={im} label={`Picture ${i + 1}`} />
+              <button
+                type="button"
+                className="tb-x"
+                title={`Leave Picture ${i + 1} out`}
+                disabled={busy}
+                onClick={() => {
+                  setImages(images.filter((_, j) => j !== i));
+                  setText((x) => dropMarker(x, i + 1));
+                }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="note">The agent forgets everything after this message and its file changes are put back. Changes made by commands are not.</div>
+      {background && (
+        <div className="tb-warn" role="alert">
+          Work is still running in the background, and going back to this message stops it.
+          <div className="note">{background}</div>
+        </div>
+      )}
+      {error && <div className="error">{error}</div>}
+      <div className="btns">
+        <span className="grow" />
+        <button type="button" disabled={busy} title="Leave the message as it was" onClick={close}>
+          Cancel
+        </button>
+        {background ? (
+          <button type="button" className="primary" disabled={!ready} title="Stop the background work, go back to this message and send it again" onClick={() => void run(true)}>
+            Stop it and send
+          </button>
+        ) : (
+          <button type="button" className="primary" disabled={!ready} title="Go back to this message and send it again" onClick={() => void run(false)}>
+            Send again
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const Bit = memo(function Bit({ row, open, toggle, store, threadId }: { row: Row; rev: number; open: boolean; toggle: (id: string) => void; store: AppStore; threadId: string }) {
   if (row.kind === 'card') return <Card row={row} store={store} threadId={threadId} />;
+  if (row.kind === 'review') {
+    const review = store.model.reviews.get(row.reviewId ?? '');
+    return (
+      <div className="toolline" title="A design review the agent asked you to look at">
+        <span className="k">review</span>
+        <span className="t">{review ? `${review.title} (${review.status})` : row.text}</span>
+      </div>
+    );
+  }
   if (row.kind === 'note') return <div className="note">{row.text}</div>;
   if (row.kind === 'error') return <div className="error">{row.text}</div>;
   if (row.kind === 'turnEnd') return <div className={row.outcome === 'failed' ? 'error' : 'note'}>{row.text}</div>;
@@ -190,6 +342,13 @@ const Bit = memo(function Bit({ row, open, toggle, store, threadId }: { row: Row
         <span className="k">{t.kind}</span>
         <span className="t">{row.text}</span>
       </div>
+      {t.result?.images?.length ? (
+        <div className="tb-pics">
+          {t.result.images.map((im, i) => (
+            <Picture key={im.path + i} store={store} image={im} />
+          ))}
+        </div>
+      ) : null}
       {open && <ToolDetail t={t} />}
     </>
   );

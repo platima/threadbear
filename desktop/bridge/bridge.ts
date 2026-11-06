@@ -62,11 +62,112 @@ const MIME: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
+// Pictures the person pastes, drops or chooses: a page can't hand the runner a
+// path, so it posts the bytes here, we keep them in a temp file the runner can
+// read, the page calls media.import with that path, and then deletes the file
+// (DELETE /upload/<id>). Images only, 20 MB at most. Same Origin and Host
+// checks as the WebSocket. Anything left behind is swept after an hour.
+const UPLOAD_DIR = path.join(os.tmpdir(), 'threadbear-uploads');
+const UPLOAD_MAX = 20 * 1024 * 1024;
+const UPLOAD_KEEP_MS = 60 * 60 * 1000;
+
+function imageExt(b: Buffer): string | undefined {
+  const at = (i: number, s: string) => b.length >= i + s.length && b.toString('latin1', i, i + s.length) === s;
+  if (at(1, 'PNG')) return 'png';
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
+  if (at(0, 'GIF8')) return 'gif';
+  if (at(0, 'RIFF') && at(8, 'WEBP')) return 'webp';
+  if (at(0, 'BM')) return 'bmp';
+  if (at(0, 'II*\0') || at(0, 'MM\0*')) return 'tiff';
+  if (at(4, 'ftyp') && /^(heic|heix|hevc|hevx|mif1|msf1)$/.test(b.toString('latin1', 8, 12))) return 'heic';
+  return undefined;
+}
+
+function sweepUploads(): void {
+  try {
+    for (const name of fs.readdirSync(UPLOAD_DIR)) {
+      const file = path.join(UPLOAD_DIR, name);
+      if (Date.now() - fs.statSync(file).mtimeMs > UPLOAD_KEEP_MS) fs.rmSync(file, { force: true });
+    }
+  } catch {
+    // no folder yet
+  }
+}
+sweepUploads();
+setInterval(sweepUploads, 10 * 60 * 1000).unref();
+
+function upload(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): boolean {
+  const del = /^\/upload\/([0-9a-f]{32})$/.exec(pathname);
+  if (pathname !== '/upload' && !del) return false;
+  const reply = (code: number, body = '', type = 'text/plain; charset=utf-8') => res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', connection: 'close' }).end(body);
+  if (!allowed(req.headers.origin, req.headers.host)) {
+    reply(403, 'not allowed');
+    return true;
+  }
+  if (del && req.method === 'DELETE') {
+    try {
+      for (const name of fs.readdirSync(UPLOAD_DIR)) if (name.startsWith(`${del[1]}.`)) fs.rmSync(path.join(UPLOAD_DIR, name), { force: true });
+    } catch {
+      // already gone
+    }
+    reply(204);
+    return true;
+  }
+  if (pathname !== '/upload' || req.method !== 'POST') {
+    reply(405, 'method not allowed');
+    return true;
+  }
+  if (!/^image\//i.test(req.headers['content-type'] ?? '')) {
+    reply(415, 'Pictures only.');
+    return true;
+  }
+  const declared = Number(req.headers['content-length'] ?? 0);
+  if (declared > UPLOAD_MAX) {
+    reply(413, 'That picture is over 20 MB.');
+    return true;
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let over = false;
+  req.on('data', (c: Buffer) => {
+    if (over) return;
+    size += c.length;
+    if (size > UPLOAD_MAX) {
+      over = true;
+      chunks.length = 0;
+      reply(413, 'That picture is over 20 MB.');
+      return;
+    }
+    chunks.push(c);
+  });
+  req.on('end', () => {
+    if (over) return;
+    const body = Buffer.concat(chunks);
+    const ext = imageExt(body);
+    if (!ext) {
+      reply(415, "That doesn't look like a picture.");
+      return;
+    }
+    try {
+      fs.mkdirSync(UPLOAD_DIR, { recursive: true, mode: 0o700 });
+      const id = crypto.randomBytes(16).toString('hex');
+      const file = path.join(UPLOAD_DIR, `${id}.${ext}`);
+      fs.writeFileSync(file, body, { flag: 'wx', mode: 0o600 });
+      reply(200, JSON.stringify({ id, path: file }), 'application/json');
+    } catch {
+      reply(500, "The picture couldn't be saved.");
+    }
+  });
+  req.on('error', () => res.destroy());
+  return true;
+}
+
 const server = http.createServer((req, res) => {
   if (!ALLOWED_HOSTS.has(new URL(`http://${req.headers.host ?? ''}`).hostname)) {
     res.writeHead(421).end();
     return;
   }
+  if (upload(req, res, new URL(req.url ?? '/', 'http://x').pathname)) return;
   let rel = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
   if (rel === '/') rel = '/index.html';
   const file = path.resolve(dist, '.' + rel);

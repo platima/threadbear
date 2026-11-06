@@ -2,9 +2,16 @@
 // transcript. A plain store with subscribe/getSnapshot, read in React with
 // useSyncExternalStore. Every change makes a new snapshot object.
 
-import { RpcClient, type ConnState } from './rpc.ts';
+import { RpcClient, RpcError, type ConnState } from './rpc.ts';
 import { TranscriptModel, type Streaming } from './model.ts';
-import type { Account, AnyEvent, ApprovalDecision, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, ThreadSummary } from './types.ts';
+import type { Account, AnyEvent, ApprovalDecision, AskAnswer, DesignReview, EffortLevel, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, ReviewDraft, ThreadSummary } from './types.ts';
+
+// What to show a person when a request fails: a runner that doesn't have the
+// method (-32601) is too old for it, not broken.
+export function errorText(e: unknown): string {
+  if (e instanceof RpcError && e.code === -32601) return "This runner can't do that yet.";
+  return (e as Error)?.message || 'Something went wrong.';
+}
 
 export type Notice = { level: 'info' | 'warning' | 'error'; message: string };
 
@@ -124,6 +131,7 @@ export class AppStore {
       for (const e of sub.events) this.applyLive(e, true);
       this.model.setInProgress(sub.inProgress);
       this.set({ loading: false });
+      void this.loadPendingReviews(threadId);
       const t = this.snap.threads.get(threadId);
       if (t && t.lastSeq > t.lastSeenSeq) void this.rpc.request('threads.markSeen', { threadId, seq: t.lastSeq }).catch(() => {});
     } catch (e) {
@@ -165,11 +173,11 @@ export class AppStore {
 
   // ---- actions ------------------------------------------------------------
 
-  async send(threadId: string, text: string, images: ImageRef[] = []): Promise<void> {
-    await this.rpc.request('threads.send', { threadId, text, ...(images.length ? { images } : {}) });
+  async send(threadId: string, text: string, images: ImageRef[] = [], answers: AskAnswer[] = []): Promise<void> {
+    await this.rpc.request('threads.send', { threadId, text, ...(images.length ? { images } : {}), ...(answers.length ? { answers } : {}) });
   }
 
-  async create(text: string, opts: { cwd?: string; accountId?: string; model?: string; permissionMode?: PermissionMode; images?: ImageRef[] } = {}): Promise<ThreadSummary> {
+  async create(text: string, opts: { cwd?: string; accountId?: string; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode; images?: ImageRef[] } = {}): Promise<ThreadSummary> {
     const { thread } = await this.rpc.request<{ thread: ThreadSummary }>('threads.create', { text, ...opts });
     this.upsert(thread);
     await this.open(thread.id);
@@ -183,6 +191,77 @@ export class AppStore {
   async update(threadId: string, patch: Record<string, unknown>): Promise<void> {
     const { thread } = await this.rpc.request<{ thread: ThreadSummary }>('threads.update', { threadId, ...patch });
     this.upsert(thread);
+  }
+
+  // Ticks or unticks one ask on the open card. Sends nothing to the agent.
+  async tickAsk(threadId: string, asksSeq: number, index: number, ticked: boolean): Promise<void> {
+    const { thread } = await this.rpc.request<{ thread: ThreadSummary }>('threads.tickAsk', { threadId, asksSeq, index, ticked });
+    this.upsert(thread);
+  }
+
+  // Edits one of the person's own messages and carries on from there. A
+  // runner with background work running answers -32050 (an RpcError) until
+  // stopBackground is true.
+  edit(threadId: string, seq: number, text: string, images: ImageRef[] = [], stopBackground = false): Promise<unknown> {
+    return this.rpc.request('threads.edit', { threadId, seq, text, ...(images.length ? { images } : {}), ...(stopBackground ? { stopBackground: true } : {}) });
+  }
+
+  // The pending reviews the runner lists for the thread, including ones from
+  // before the page of events the window loaded. A runner without reviews
+  // (-32601) just has none here.
+  async loadPendingReviews(threadId: string): Promise<void> {
+    try {
+      const { reviews } = await this.rpc.request<{ reviews: DesignReview[] }>('reviews.list', { threadId });
+      if (this.snap.selected !== threadId) return;
+      for (const r of reviews) this.model.mergeReview(r);
+      if (reviews.length) this.bump();
+    } catch {
+      // not there on this runner
+    }
+  }
+
+  // Sends the answer to a design review. A stale revision (another client
+  // saved meanwhile) is read again and tried once more.
+  async respondReview(threadId: string, review: DesignReview, draft: ReviewDraft): Promise<void> {
+    let revision = review.revision;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.rpc.request('reviews.respond', { threadId, reviewId: review.id, revision, draft });
+        return;
+      } catch (e) {
+        if (attempt > 0 || !(e instanceof RpcError) || e.code !== -32602) throw e;
+        const { review: fresh } = await this.rpc.request<{ review: DesignReview }>('reviews.get', { threadId, reviewId: review.id });
+        if (fresh.status !== 'pending') throw new RpcError(-32602, `This review is ${fresh.status}.`);
+        this.model.mergeReview(fresh);
+        revision = fresh.revision;
+      }
+    }
+  }
+
+  async cancelReview(threadId: string, review: DesignReview): Promise<void> {
+    await this.rpc.request('reviews.cancel', { threadId, reviewId: review.id, revision: review.revision });
+  }
+
+  // A file on the runner's machine, as base64 (a picture's bytes). The page
+  // can't read the runner's disk itself.
+  readFile(path: string): Promise<{ data: string; mediaType: string; size: number; truncated: boolean }> {
+    return this.rpc.request('files.read', { path });
+  }
+
+  // A picture the person pasted, dropped or chose: the bridge keeps it in a
+  // temp file the runner can reach (POST /upload), the runner imports it
+  // (media.import) and the temp file is removed again.
+  async importImage(file: Blob): Promise<ImageRef> {
+    const up = await fetch('upload', { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
+    if (up.status === 404) throw new Error("This build can't take pictures yet.");
+    if (!up.ok) throw new Error((await up.text().catch(() => '')) || `The picture wasn't accepted (${up.status}).`);
+    const { id, path } = (await up.json()) as { id: string; path: string };
+    try {
+      const { image } = await this.rpc.request<{ image: ImageRef }>('media.import', { path });
+      return image;
+    } finally {
+      void fetch(`upload/${id}`, { method: 'DELETE' }).catch(() => {});
+    }
   }
 
   respond(threadId: string, approvalId: string, decision: ApprovalDecision, extra: { message?: string; answers?: Record<string, string> } = {}): Promise<unknown> {
