@@ -15,7 +15,7 @@ import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 import type { CliStatus, Provider } from '../../src/protocol.ts';
 import { testConfig, tmpDir } from '../helpers/fakes.ts';
-import { IS_WINDOWS, NO_CODEX_ON_WINDOWS, cmdAware, fakeProgram } from '../helpers/platform.ts';
+import { IS_WINDOWS, NO_CODEX_COPIES_ON_WINDOWS, cmdAware, fakeProgram } from '../helpers/platform.ts';
 
 const runExec: Exec = cmdAware(defaultExec);
 const NATIVE = ['node_modules', '@openai', 'codex-darwin-arm64', 'vendor', 'aarch64-apple-darwin', 'bin', 'codex'];
@@ -222,7 +222,7 @@ test('claude: an update that exits 0 without moving the link waits and retries, 
   assert.equal(of(t.u.list(), 'claude').update?.state, 'succeeded');
 });
 
-test('nothing installs while a runner restart is pending; it runs once the restart is out of the way', NO_CODEX_ON_WINDOWS, async () => {
+test('nothing installs while a runner restart is pending; it runs once the restart is out of the way', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   const t = setup();
   t.hooks.pending = true;
   t.u.update('codex', { version: '0.165.0' });
@@ -237,7 +237,7 @@ test('nothing installs while a runner restart is pending; it runs once the resta
   assert.equal(of(t.u.list(), 'codex').installedVersion, '0.165.0');
 });
 
-test('codex: the first start installs the latest into its own copy and activates it', NO_CODEX_ON_WINDOWS, async () => {
+test('codex: the first start installs the latest into its own copy and activates it', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   const t = setup();
   assert.equal(t.u.codexBinary(), path.join(path.dirname(t.npm.execPath), 'codex'), 'the fallback until a copy exists');
   t.u.start();
@@ -257,7 +257,7 @@ test('codex: the first start installs the latest into its own copy and activates
   assert.equal(resolve(t.u.codexBinary()).native, true);
 });
 
-test('codex: a version whose schema lacks a method we use is held; the first start falls back to the tested one; force installs it anyway', NO_CODEX_ON_WINDOWS, async () => {
+test('codex: a version whose schema lacks a method we use is held; the first start falls back to the tested one; force installs it anyway', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   const t = setup({ latest: { codex: '0.166.0' } });
   fs.writeFileSync(path.join(t.root, 'drop-0.166.0'), '');
   t.u.check('codex');
@@ -280,7 +280,7 @@ test('codex: a version whose schema lacks a method we use is held; the first sta
   assert.deepEqual(t.npm.installs(), ['0.166.0', '0.164.0']);
 });
 
-test('codex: new names only still activate, and are recorded', NO_CODEX_ON_WINDOWS, async () => {
+test('codex: new names only still activate, and are recorded', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   const t = setup();
   fs.writeFileSync(path.join(t.root, 'add-0.165.0'), '');
   t.u.update('codex', { version: '0.165.0' });
@@ -290,7 +290,7 @@ test('codex: new names only still activate, and are recorded', NO_CODEX_ON_WINDO
   assert.deepEqual(act?.added, ['thread/brandNew']);
 });
 
-test('codex: "Go back" swaps current to the kept previous version with no download', NO_CODEX_ON_WINDOWS, async () => {
+test('codex: "Go back" swaps current to the kept previous version with no download', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   const t = setup();
   t.u.update('codex', { version: '0.164.0' });
   await t.u.settled();
@@ -306,7 +306,7 @@ test('codex: "Go back" swaps current to the kept previous version with no downlo
   assert.deepEqual(t.hooks.released, [['codex', '0.164.0']]);
 });
 
-test('codex: going back holds the version left behind, so a check doesn\'t put it back; a newer one or force still installs', NO_CODEX_ON_WINDOWS, async () => {
+test('codex: going back holds the version left behind, so a check doesn\'t put it back; a newer one or force still installs', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   const t = setup();
   t.u.update('codex', { version: '0.164.0' });
   await t.u.settled();
@@ -350,7 +350,7 @@ test('codex: going back holds the version left behind, so a check doesn\'t put i
   assert.deepEqual(t.npm.installs(), ['0.164.0', '0.165.0', '0.166.0', '0.165.0']);
 });
 
-test('codex: a failed install leaves no .partial folder and changes nothing', NO_CODEX_ON_WINDOWS, async () => {
+test('codex: a failed install leaves no .partial folder and changes nothing', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   const t = setup();
   t.u.update('codex', { version: '0.164.0' });
   await t.u.settled();
@@ -371,7 +371,7 @@ test('codex: a failed install leaves no .partial folder and changes nothing', NO
   assert.ok(!fs.existsSync(path.join(t.tools, '0.170.0.partial')));
 });
 
-test('codex: an old version is deleted only once nothing runs it', NO_CODEX_ON_WINDOWS, async () => {
+test('codex: an old version is deleted only once nothing runs it', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   let psOut = '';
   const exec: Exec = (cmd, args, opts) => (cmd === '/bin/ps' ? Promise.resolve({ code: 0, stdout: psOut, stderr: '' }) : defaultExec(cmd, args, opts));
   const t = setup({ exec });
@@ -398,7 +398,7 @@ test('codex: an old version is deleted only once nothing runs it', NO_CODEX_ON_W
   assert.deepEqual(fs.readdirSync(t.tools).filter((n) => /^\d/.test(n)).sort(compareVersions), ['0.165.0', '0.166.0']);
 });
 
-test('codex: a session running on the old binary carries on while the new version activates', NO_CODEX_ON_WINDOWS, async () => {
+test('codex: a session running on the old binary carries on while the new version activates', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   const t = setup();
   t.u.update('codex', { version: '0.164.0' });
   await t.u.settled();

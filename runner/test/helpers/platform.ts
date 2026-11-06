@@ -15,8 +15,16 @@ export function skipOnWindows(reason: string): { skip: string | false } {
   return { skip: IS_WINDOWS ? reason : false };
 }
 
-export const NO_CODEX_ON_WINDOWS = skipOnWindows('Codex is not supported on Windows');
-export const NO_SIGNALS_ON_WINDOWS = skipOnWindows('Windows has no process groups or signals to send');
+// The other way round, for a test of something only Windows has.
+export function onlyOnWindows(reason: string): { skip: string | false } {
+  return { skip: IS_WINDOWS ? false : reason };
+}
+
+// Codex itself runs on Windows when a codex.exe is on the PATH (config.ts). What
+// doesn't is Threadbear's own copy of it: made with npm, switched by a symlink,
+// and off by default there.
+export const NO_CODEX_COPIES_ON_WINDOWS = skipOnWindows("Threadbear's own copies of Codex (npm installs, a current symlink, ps) are off by default on Windows, and these tests fake them with shell scripts");
+export const NO_SIGNALS_ON_WINDOWS = skipOnWindows('Windows has no process groups, and the only signal it has is a hard kill');
 export const NO_LINKS_ON_WINDOWS = skipOnWindows("The current release link is a symlink swapped in place, which isn't ported to Windows yet");
 
 // The shell the product runs project commands in: /bin/sh -c on macOS and
@@ -88,5 +96,17 @@ export function testSkippedOnWindows(reason: string): typeof nodeTest {
   };
   return wrapped as unknown as typeof nodeTest;
 }
-export const codexTest = testSkippedOnWindows('Codex is not supported on Windows');
 export const macOnlyTest = testSkippedOnWindows('A Mac-only feature, off on Windows');
+
+// The environment with every folder that holds powershell.exe taken off PATH,
+// so on Windows the runner's start-time probe (proc.ts) fails the way it does
+// when policy or a timeout stops PowerShell. Elsewhere it is the environment
+// as it is.
+export function withoutPowerShell(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!IS_WINDOWS) return { ...env };
+  const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+  const kept = (env[key] ?? '')
+    .split(path.delimiter)
+    .filter((dir) => dir && !fs.existsSync(path.join(dir, 'powershell.exe')) && !fs.existsSync(path.join(dir, 'pwsh.exe')));
+  return { ...env, [key]: kept.join(path.delimiter) };
+}

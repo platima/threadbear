@@ -3,6 +3,7 @@
 # check and these as a report. Take a file off this list when it passes there.
 #
 # Empty since 6 Nov 2026: every file passes on Windows, or skips what Windows
-# doesn't have with a reason (Codex, the Mac-only features, process groups,
-# lsof handovers, the symlinked current release). A file that fails there
-# again goes back on this list, with a comment beside it saying why.
+# doesn't have with a reason (Threadbear's own copies of Codex, the Mac-only
+# features, process groups, lsof handovers, the symlinked current release). The
+# Codex adapter, app-server and normaliser tests run there. A file that fails
+# there again goes back on this list, with a comment beside it saying why.

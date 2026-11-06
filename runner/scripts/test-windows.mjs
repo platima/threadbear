@@ -7,8 +7,13 @@
 //   node scripts/test-windows.mjs --known    the known-failing files, as a report
 //   node scripts/test-windows.mjs a.test.ts  just those files
 //
-// Each test gets 15 seconds, not the package's five minutes, so a test
-// waiting on something Windows can't give fails quickly.
+// Each test gets 30 seconds (60 on CI), not the package's five minutes, so a
+// test waiting on something Windows can't give fails fairly quickly. The
+// limit has to leave room for load: node runs several files at once, and a
+// test that starts runners or reads process start times through PowerShell
+// takes 3 s on a quiet machine and over 40 s when every core is busy. At
+// 15 s, CI failed main.test.ts on the clock alone (6 Nov). The limit can be
+// set with THREADBEAR_TEST_TIMEOUT_MS.
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -40,12 +45,14 @@ const wantKnown = args.includes('--known');
 const named = args.filter((a) => !a.startsWith('--'));
 const files = named.length ? named : all.filter((f) => known.has(f) === wantKnown);
 
-console.log(`${wantKnown ? 'known-failing' : 'expected-to-pass'}: ${files.length} files`);
+const perTest = Number(process.env.THREADBEAR_TEST_TIMEOUT_MS) || (process.env.CI ? 60_000 : 30_000);
+
+console.log(`${wantKnown ? 'known-failing' : 'expected-to-pass'}: ${files.length} files, ${perTest / 1000} s a test`);
 // node --test with no files would run whatever it finds in the folder.
 if (!files.length) process.exit(0);
 const r = spawnSync(
   process.execPath,
-  ['--test', '--test-reporter=spec', '--test-timeout=15000', '--test-force-exit', ...files.map((f) => path.join(unit, f))],
+  ['--test', '--test-reporter=spec', `--test-timeout=${perTest}`, '--test-force-exit', ...files.map((f) => path.join(unit, f))],
   { cwd: root, stdio: 'inherit' },
 );
 // The known list is a report: it never fails the run.

@@ -1,5 +1,4 @@
-import { after } from 'node:test';
-import { codexTest as test } from '../helpers/platform.ts';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -226,7 +225,7 @@ test('a binary set by hand, or one that is missing, is spawned as given', () => 
   fs.writeFileSync(f, '#!/bin/sh\n', { mode: 0o755 });
   assert.deepEqual(resolveCodexBinary(f), { command: f, args: [], native: false });
   assert.deepEqual(resolveCodexBinary('/nowhere/codex'), { command: '/nowhere/codex', args: [], native: false });
-  assert.equal(fallbackCodexPath('/x/node/bin/node'), '/x/node/bin/codex');
+  assert.equal(fallbackCodexPath(path.join('/x', 'node', 'bin', 'node')), path.join('/x', 'node', 'bin', 'codex'));
 });
 
 // ---- A real process
@@ -377,8 +376,7 @@ test('spawn retry: a binary that appears a moment later', async () => {
   const p = proc(late);
   const started = p.start();
   await new Promise((r) => setTimeout(r, 250));
-  fs.copyFileSync(f.bin, late);
-  fs.chmodSync(late, 0o755);
+  f.install(late);
   const conn = await f.next();
   await conn.init();
   await started;

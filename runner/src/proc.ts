@@ -67,7 +67,11 @@ export class ProcessRegistry {
   }
 
   add(pid: number, command: string): void {
-    const lstart = processInfo(pid)?.lstart;
+    // Taken before the probe, which can take a while: the process was started
+    // moments ago, so on Windows this stands in for its start time if
+    // PowerShell can't give the real one (approxStartTime).
+    const spawnedAt = Date.now();
+    const lstart = processInfo(pid)?.lstart ?? (IS_WINDOWS ? approxStartTime(spawnedAt) : undefined);
     this.entries.set(pid, { pid, command, startedAt: new Date().toISOString(), ...(lstart ? { lstart } : {}), groups: [] });
     this.save();
     this.scanTimer ??= setInterval(() => void this.scan(), SCAN_MS).unref();
@@ -193,6 +197,18 @@ export function killGroup(pgid: number, signal: NodeJS.Signals): boolean {
   }
 }
 
+// Whether the SIGKILL that follows a SIGTERM a few seconds on should still go
+// out. On a Mac it goes if the group is still there. On Windows a pid can be
+// reused as soon as its process is gone, and the kill would end whatever has
+// it now, so it goes only while the process hasn't been seen to exit.
+export function followUpKillDue(pid: number, exited: boolean): boolean {
+  return (!IS_WINDOWS || !exited) && groupAlive(pid);
+}
+
+export function hasExited(child: { exitCode: number | null; signalCode: NodeJS.Signals | null }): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 export function groupAlive(pgid: number): boolean {
   try {
     process.kill(IS_WINDOWS ? pgid : -pgid, 0);
@@ -220,7 +236,7 @@ function sameGroup(g: Group, commandHint?: string): boolean {
   const leader = processInfo(g.pgid);
   // A pid is reused on Windows, and nothing holds it as a group does on a
   // Mac: unless the start time recorded matches, it isn't ours to stop.
-  if (IS_WINDOWS) return Boolean(leader && g.lstart && leader.lstart === g.lstart);
+  if (IS_WINDOWS) return Boolean(leader && g.lstart && sameStartTime(g.lstart, leader.lstart));
   if (!leader) return true; // leader gone; the group's members are the original ones
   if (leader.pgid !== g.pgid) return false;
   if (g.lstart) return leader.lstart === g.lstart;
@@ -261,6 +277,46 @@ function processInfoWindows(pid: number): { pgid: number; lstart: string; comman
     return m ? { pgid: pid, lstart: m[1], command: m[2] } : null;
   } catch {
     return null;
+  }
+}
+
+// Windows only. When PowerShell can't be run (policy, AppLocker, or the probe
+// timing out under load) a start time is worked out in this process instead:
+// the same 100 ns count since 1601, with a "~" in front to say it is an
+// estimate. The clock behind it isn't the one the system stamped the process
+// with (node starts counting a little after the process does), so an estimate
+// matches a real start time within START_SLACK rather than exactly. A real
+// reading is never matched loosely. A reused pid has a start time seconds to
+// days away from the one recorded, so it still doesn't match.
+const FILETIME_AT_UNIX_EPOCH_MS = 11_644_473_600_000n;
+const START_SLACK = 100_000_000n; // 10 s in 100 ns units
+
+export function approxStartTime(unixMs: number): string {
+  return '~' + ((BigInt(Math.round(unixMs)) + FILETIME_AT_UNIX_EPOCH_MS) * 10_000n).toString();
+}
+
+// This process's own start time, from node's uptime clock.
+export function ownStartTime(): string {
+  return approxStartTime(Date.now() - process.uptime() * 1000);
+}
+
+// True if a start time recorded earlier is the one just read.
+export function sameStartTime(recorded: string, read: string): boolean {
+  if (recorded === read) return true;
+  const est = /^~(\d+)$/.exec(recorded);
+  if (!est || !/^\d+$/.test(read)) return false;
+  const gap = BigInt(est[1]) - BigInt(read);
+  return (gap < 0n ? -gap : gap) <= START_SLACK;
+}
+
+// True if a process with this pid exists, whoever it belongs to. Sends no
+// signal: on Windows as elsewhere, signal 0 only checks.
+export function pidExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
@@ -316,7 +372,7 @@ export function groupSpawner(
         if (!pid || child.exitCode !== null) return;
         killGroup(pid, 'SIGTERM');
         setTimeout(() => {
-          if (child.exitCode === null && groupAlive(pid)) killGroup(pid, 'SIGKILL');
+          if (followUpKillDue(pid, hasExited(child))) killGroup(pid, 'SIGKILL');
         }, 3000).unref();
       },
       { once: true },
