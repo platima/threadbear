@@ -391,6 +391,200 @@ are reported and come off the list as M1 fixes them.
 - The bridge needs a key made for each launch on its WebSocket and uploads: any
   program on the PC can reach a loopback port, and Origin is only a browser's
   word. A connection with no key, a wrong one, or no Origin is refused.
-- Not done: an installer and code signing (M4), the Mac app's docking
-  (Mac-only), the per-ask picture boxes and draft autosave of design reviews,
-  and a run through a real model turn.
+- Not done: the Mac app's docking (Mac-only) and the per-ask picture boxes and
+  draft autosave of design reviews. The installer and signing came next, and a
+  real model turn has run since (both below).
+
+### After M3: upstream merged, a real turn, and M4 (packaging)
+
+Done on 6 Nov 2026, in the same branch.
+
+- **Upstream merged.** 150 commits from `mikecann/threadbear` (to `d488512`),
+  with three small conflicts, all in the lines the port had already touched.
+  Upstream's new tests came to 1,875 in all, with 28 failing on Windows. They
+  are fixed: five real Windows bugs (the patch-trust code lost `/dev/stdin` and
+  `/dev/fd` after path normalising, named files with backslashes in messages,
+  took a quoted `C:\...` command for something other than a path so the script
+  it names was never hashed, didn't count a script a home patch names by a
+  drive path as code, and `runCheck` hard-coded `/bin/sh`), and the rest were
+  tests assuming a Mac. The run is now 1,883 tests: 1,704 pass, 179 are
+  skipped with a reason, none fail, and `windows-known-failing.txt` is still
+  empty. The one that mattered most is the quoted drive path: it let a trusted
+  patch run a changed script on Windows, and it has its own test now.
+- **A real model turn works.** From the staged copy (the installer's layout, its
+  own `node.exe`, a temp data folder, a spare port): a Haiku turn ("reply with
+  the single word ok") completed in 15 seconds, calling `end_turn` through the
+  `threadbear` tool. A Codex turn on the free plan completed in 8 seconds, but
+  only with `codexPath` set: the runner looked for a `codex` file beside Node,
+  where npm puts a `codex.cmd` it can't start. On Windows it now uses the
+  `codex.exe` a native install puts on the PATH, and with none found Codex stays
+  off as before.
+- **A bug found on the way:** `install-windows.mjs` read the user's PATH with
+  `GetEnvironmentVariable`, which expands `%VARIABLES%`, and wrote it back with
+  `SetEnvironmentVariable`, which stores the expanded text as a plain string.
+  Run on a real PATH it would have rewritten the rest of it. It now reads the
+  registry value as stored, writes an expandable string, and writes at all only
+  when its own folder has to go on or come off. Checked against a throwaway
+  registry key (kind and `%USERPROFILE%` kept).
+- **Packages**, named like npad's, `threadbear-v<version>-<type>-win-<arch>`:
+  `setup-win-x64.exe` (Inno Setup, per user by default), `msi-win-x64.msi` (WiX 6,
+  per user or `ALLUSERS=1`) and `portable-win-x64.zip`, each with a `.sha256`, and
+  a `CHECKSUMS.txt` on the release. The same three for `arm64`. They carry the
+  shell as `Threadbear.exe`, a pinned Node 24.22.2 (checked against its
+  SHA-256 from nodejs.org), the runner's source and production packages, the
+  bridge and the built UI, and the guide. The x64 set is 38 MB (setup), 45 MB
+  (MSI) and 63 MB (zip); 180 MB unpacked. It was 543 MB until the Agent SDK's
+  own 283 MB copy of Claude Code was left out: the runner always passes the
+  path of the person's own `claude`.
+- **Checked here:** the unsigned and the signed builds; signing with a
+  throwaway certificate (the shell, the uninstaller, the setup exe and the MSI
+  all carry it, and Windows calls it `UnknownError`, the untrusted root, which
+  is the pass condition; the certificate was removed afterwards); the setup exe
+  and the MSI installing, upgrading (the setup exe over itself) and uninstalling
+  silently into temp folders; both programs inside the zip being x64; the asset
+  validation script on the x64 set (it fails on the missing arm64 files, as it
+  should); the release notes script on the changelog entry; the shell's command
+  switches (`--runner --installed`, `--stop`, `--dry-run`, `--quit`) from the
+  staged copy, using its bundled Node; the arm64 package fetch (npm gives the
+  arm64 native packages).
+- **Not checked:** an arm64 build (it needs the MSVC arm64 tools and the Rust
+  target, and the workflow does it), the workflows on GitHub (nothing is pushed,
+  so none has run), signing with a real Azure account, SmartScreen, the
+  missing-WebView2 message, and the first-run dialog and the tray menu item
+  (not clicked, to leave the desktop alone).
+- **Release pipeline**, from npad's: `windows.yml` (runner tests and desktop
+  checks, also called first by a release), `installers.yml` (one job per
+  architecture, optional Azure Artifact Signing through OIDC), `release.yml`
+  (`v*.*.*` tags, a dry run with `-f version=`, create release, build,
+  validate, `CHECKSUMS.txt`, final notes). The version is
+  `desktop/package.json`, kept the same as `Cargo.toml`, `Cargo.lock` and
+  `tauri.conf.json` by `desktop/scripts/version.mjs`, and a tag has to equal it.
+  `installer/release.sh` checks all that, the changelog's Highlights and the
+  type checks before it tags.
+- **Updates:** the installed app asks GitHub for the latest release once a day,
+  shows a link in the rail when it is newer, and can be told not to in Settings,
+  "This app". It installs nothing. The runner is not updated by following
+  `main` on Windows; installing the next release over it is the way.
+- **To turn real signing on** (the same as npad): an Azure Artifact Signing
+  account and certificate profile; an app registration granted "Artifact
+  Signing Certificate Profile Signer", with a federated credential bound to the
+  GitHub environment `release`; the six `AZURE_*` repository variables named in
+  `installers.yml`; and `THREADBEAR_PUBLISHER` if the certificate's subject
+  isn't "Platima". Two traps from npad's LESSONS.md: GitHub's OIDC subject is
+  name-based unless the repository opts in to the immutable one (Entra's form
+  wants the ID-based one), and Entra matches the owner case-sensitively in
+  lower case. With none of it set a release still builds, unsigned.
+
+## Upstream pull requests
+
+Scoped on 6 Nov 2026, against `mikecann/threadbear` at `d488512`. Nothing is
+pushed or opened; each one waits for a yes, and anything sent goes out as
+`Platima <13729856+platima@users.noreply.github.com>` with no other author line.
+
+Mike's rules that apply to all of them (AGENTS.md): the agent-facing byte
+budget (`runner/context-budget.json`) is untouched, because no tool, argument
+or standing instruction changed (`context-budget.test.ts` passes); the docs have
+to stay true (`docs/on-your-mac.md`, `docs/forking.md`, INSTALL.md); errors go
+to Sentry only from his release builds, which a Windows runner is not (there is
+no `release.json`); UI copy is plain words with no em dashes, and every
+control has a tooltip.
+
+| PR | What | Size | Stands alone | Status |
+|---|---|---|---|---|
+| 1. Runner: run on Windows | `runner/src` (25 files, mostly small branches behind `IS_WINDOWS`), the Task Scheduler install, the unit tests made to run on Windows, the `windows` CI job | 82 files, +1,151 -263 | Yes | Cut as the local branch `pr/windows-runner` (`ea4b296`) on `d488512`: typecheck clean, 1,883 tests, 0 fail on Windows. Not run on a Mac |
+| 2. Desktop app for Windows | `desktop/`: the UI, the bridge, the Tauri shell (a window, tray, toasts) | 98 files, about 18.7k lines, mostly UI | Needs 1 (the bridge imports `runner/src/platform.ts`) | Built and checked. Raise it with Mike before a PR: it is a second UI for him to look after |
+| 3. Windows packages and releases | `installer/`, `installers.yml`, `release.yml`, the version script, the update check | 11 files, about 1.3k lines | Needs 2 | Mostly belongs in the fork: the publisher, the two product GUIDs, the signing set-up and the update check's repository are the maintainer's own (docs/forking.md lists them). Offer it only if he wants Windows downloads from his repo |
+
+The docs are cut with the PR they describe: the "On Windows" section of
+`docs/on-your-mac.md` grows a bullet per PR, `docs/forking.md` gets a row per
+PR, and INSTALL.md section 7 starts as the checkout steps and gains the
+release steps with PR 3. This plan document stays in the fork.
+
+What Mike should know before PR 1:
+
+- Every change is either behind `IS_WINDOWS` or a helper in `platform.ts`, so
+  macOS and Linux should run exactly as before, but that was read, not run.
+  `./check.sh` on a Mac is the real test, and I'd ask him to run it.
+- It touches 25 files in `runner/src`, including the patch-trust code. The one
+  change there that isn't Windows-only is a message wording: file names in
+  patch-trust messages now use forward slashes (a no-op where the separator is
+  already `/`).
+- On Windows the patch hash is built from native separators, so a hash made there
+  differs from one made on a Mac for the same patch. Trust is per machine, so it
+  doesn't matter yet; `claude-trust.ts` already uses forward slashes and
+  `patchHash` could follow.
+- A patch whose live command calls a script by a backslash path (`C:\...`) gets
+  `command not found` from Git Bash, because bash eats the backslashes. The
+  runner doesn't build that command, the patch does, so it was left alone.
+
+A note the user could send Mike, in their own words:
+
+> G'day Mike. I've been porting Threadbear to Windows with Claude Code, mainly
+> for my own use. The runner runs there now, with all 97 unit test files passing
+> on a Windows CI job, and I've built a Windows desktop app (Tauri around a React
+> UI) and installers on top. The first piece is a branch against your main that
+> only touches the runner, 82 files, nearly all small branches behind a
+> Windows check, and I'd like to send it as a PR if you're happy for me to. I
+> haven't run it on a Mac, so a `./check.sh` from you would be the real test.
+> The desktop app is a bigger thing and I'd only send it if you want it in the
+> repo. Let me know either way.
+
+## Android
+
+Mike has only made an iPhone app, and the user is on Android, so an Android
+client is the next thing to scope. Nothing here is built.
+
+What the iPhone app is: 108 Swift files, about 17k lines. `ThreadbearKit` (the
+models, the Convex transport, the inbox sections, the turn folding, Markdown
+blocks, pairing, the push key) is about 5k of it, tests aside. The rest is SwiftUI screens, a
+notification service extension that opens the sealed push, and `QuickAsk` (voice
+in and out, about 26 files). It talks only to the phone API in `convex/phone.ts`
+(docs/convex-backend.md, section 6), never to a runner. `web/` is a React client
+of the same API with the same inbox and thread logic in TypeScript (`sections.ts`,
+`turns.ts`), already laid out for a phone (the rail becomes a tab bar), and
+`desktop/` already reuses it.
+
+Three ways to do it:
+
+| | What | Reuse | Effort | Catches |
+|---|---|---|---|---|
+| A. Web app on the phone | An installable web app (PWA) of `web/` | All of it | Days | A phone token lives in the browser; Web Push needs a service worker and the sealed message opened with WebCrypto; no Play Store listing that works for everyone, since each person's site is a different origin |
+| **B. Tauri 2 Android** (recommended) | The `web/` and `desktop/` UI built into an Android app by Tauri's mobile target, with a Kotlin plugin for Firebase push and the Keystore | About 90% of the UI, and the Rust/Tauri toolchain already here | MVP in 1 to 2 weeks | One more shell to keep, a WebView's feel rather than native, and the deployment address must be set at pairing, not at build time |
+| C. Native Kotlin and Compose | Port `ThreadbearKit` and the screens | Only the design | 6 to 10 weeks | A third copy of the inbox and turn logic to keep in step with Swift and TypeScript |
+
+**B in outline.** Pairing as the iPhone does it (a link or QR from the Mac or
+Windows app's "Phone and browser" tab, which carries the deployment address and
+a phone token), the inbox and sections, the thread with approvals, asks and the
+done card, the composer with photos and the camera, and notifications.
+
+**Notifications are the real work.** The iPhone gets a notification sealed with
+a 32-byte key only that phone and its backend hold (AES-256-GCM), sent through
+Apple by the push relay (docs/push-relay.md). Android needs the same through
+Firebase Cloud Messaging: a second sender next to `convex/push.ts` and `relay/`
+(a platform field on `phone:registerDevice`, which is a change to Mike's backend
+and the protocol document, so it is an upstream PR of its own), a Kotlin service
+that opens the sealed message with a key held in the Android Keystore, and a
+Firebase project. The relay holds the sending key, so whoever publishes the app
+owns it: the user's Firebase project would send for everyone who installs their
+build, or each person runs their own relay as the doc already allows for Apple. A
+backend with no relay key at all gets no phone notifications.
+
+**What it would need from the user:** Android Studio (the SDK, the NDK and a JDK,
+about 5 GB), the Rust Android targets (`rustup target add aarch64-linux-android
+armv7-linux-androideabi x86_64-linux-android i686-linux-android`), a phone with
+USB debugging or an emulator (which needs virtualisation switched on), a Firebase
+project and its `google-services.json`, and for Play a developer account ($25
+once) and an upload key kept somewhere safe. Signing and the Play listing are
+the user's to do; the build can produce a signed `.aab` once the key exists.
+
+**Estimate for B**, on the same footing as the table above: MVP (pair, inbox,
+thread, composer, photos, push) 8 to 12k lines, 1 to 2 weeks, 0.25 to 0.5M
+output tokens, 40 to 90M in all. For scale, this packaging round moved the
+weekly allowance by about one point, and the whole of M0 to M3 by about two,
+so the MVP is probably 2 to 5 points; that is a guess. Phase 2: a share target
+(send a link or picture to a new thread), home-screen widget, and voice (Android's
+speech recognition in place of QuickAsk): another 1 to 2 weeks.
+
+Decisions for the user: B or C; whose Firebase and relay; and whether Mike's
+backend takes the platform field upstream or the Android build runs against a
+fork's backend until then.

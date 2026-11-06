@@ -160,16 +160,36 @@ Threads that need those belong on the Mac.
 
 ## 7. A runner on Windows (optional)
 
-The runner runs on Windows 11 from a checkout, and the desktop app in
-`desktop/` or the website is the way in. It is newer than the Mac and Linux
-setups, there is no Mac app, and it runs Claude Code only (no Codex).
-docs/windows-port-plan.md says what is done and what isn't.
+The runner runs on Windows 10 and 11, and the desktop app in `desktop/` (or
+the website) is the way in. It is newer than the Mac and Linux setups, and
+there is no Mac app. It runs Claude Code, and Codex when its `codex.exe` is on
+the PATH. docs/windows-port-plan.md says what is done and what isn't.
 
-1. **Tools:** Node 24 (nvm-windows works), Git for Windows (patch commands and
-   project checks run in its bash), and Claude Code with its native installer.
-   Then **Ask** them to run `claude auth login` in a terminal and sign in:
-   a runner started by a task has no other login to use. A git identity, as on
-   any machine that commits.
+**If they only want to use it,** send them to the fork's latest release, which
+has the packages for x64 and for Windows on Arm (`arm64`). The files are named
+`threadbear-v<version>-<type>-win-<arch>.<ext>`, and `CHECKSUMS.txt` has the
+SHA-256 of each:
+
+- `setup-win-x64.exe`: the installer. Per user, no admin rights, unless they
+  choose a system-wide install in its dialog.
+- `msi-win-x64.msi`: the same app for a managed or silent install,
+  `msiexec /i <file> /qn` (add `ALLUSERS=1` for every user of the PC).
+- `portable-win-x64.zip`: unzip it anywhere and run `Threadbear.exe`.
+
+Node comes inside every package. They still need Git for Windows (patch
+commands and project checks run in its bash) and Claude Code with its native
+installer. **Ask** them to run `claude auth login` in a terminal and sign in:
+a runner started by a task has no other login to use. The first time the app
+opens it offers to start the runner when they sign in to Windows, which adds
+the Task Scheduler task described under "On Windows" in docs/on-your-mac.md.
+They can say no and use `Threadbear.exe --runner` later. Uninstalling removes
+the task and `tb`, and leaves their data in `%APPDATA%\Threadbear`.
+
+**From a checkout,** to work on it or to build the packages:
+
+1. **Tools:** Node 24 (nvm-windows works), Git for Windows, and Claude Code
+   with its native installer, signed in as above. A git identity, as on any
+   machine that commits.
 2. **The code:** clone their fork anywhere, then `npm ci` in `runner/` and in
    `desktop/`.
 3. **Install:** `node runner/scripts/install-windows.mjs --dry-run`, show
@@ -177,22 +197,34 @@ docs/windows-port-plan.md says what is done and what isn't.
    registers a Task Scheduler task, "Threadbear Runner", that starts at logon
    (this user, no admin rights), writes `tb.cmd` to
    `%LOCALAPPDATA%\Threadbear\bin` and adds that folder to their PATH.
-   `--status` and `--uninstall` do what they say. docs/on-your-mac.md lists
-   everything it leaves.
+   `--status`, `--stop` and `--uninstall` do what they say. docs/on-your-mac.md
+   lists everything it leaves.
 4. **The window:** the app is a small Rust shell (Tauri) around a TypeScript
    UI. It needs Rust (`rustup`, the MSVC toolchain) and the Visual Studio
    C++ build tools (the "Desktop development with C++" workload) to build.
    In `desktop/`: `npm ci`, then `npx tauri build --no-bundle`, and run
-   `src-tauri	argetelease	hreadbear-desktop.exe`. It starts `node
-   bridge/bridge.ts` (Node on the PATH), a loopback server that passes the
-   page's connection to the runner and does the token handshake, with a key for
-   that launch. Without the shell, `npm run build` and `node bridge/bridge.ts`
-   print an address with a `#key=` to open in a browser. There is no installer
-   yet.
-5. **Updates:** the runner doesn't follow `main` on Windows. After a `git pull`,
-   restart it from the Runners page, or `schtasks /End /TN "Threadbear Runner"`
-   then `schtasks /Run /TN "Threadbear Runner"`.
+   `desktop\src-tauri\target\release\threadbear-desktop.exe`. It starts
+   `node bridge/bridge.ts` (Node on the PATH, or the one in `node\` beside the
+   program in an installed copy), a loopback server that passes the page's
+   connection to the runner and does the token handshake, with a key for that
+   launch. Without the shell, `npm run build` and `node bridge/bridge.ts`
+   print an address with a `#key=` to open in a browser.
+5. **Packages:** `pwsh installer/build-installers.ps1 -Arch x64` builds the
+   three files into `dist/` (unsigned unless `-SignCmd` is given). It needs
+   Inno Setup 6 (`winget install JRSoftware.InnoSetup`) and WiX 6
+   (`dotnet tool install --global wix --version 6.0.2`). Releases are made by
+   `installer/release.sh v<version>`, which tags and lets the release workflow
+   build, sign and publish them; `gh workflow run release.yml -f version=v<version>`
+   rehearses one and publishes nothing. docs/forking.md lists what to change in
+   a fork (the publisher, the signing variables, the repository the update
+   check asks).
+6. **Updates:** the runner doesn't follow `main` on Windows. After a
+   `git pull`, restart it from the Runners page, or end and run the task with
+   `node runner/scripts/install-windows.mjs --stop` and then `--status`. An
+   installed copy is updated by installing the next release over it, and the
+   app says in its rail when one is out (Settings, "This app", turns that off).
 
 What's left out on Windows: everything that needs a Mac (the iOS simulator,
-Xcode, BrowserBear, ComputerCub, dialogs on the screen), Codex, runner
-releases and handovers, and the idle check the Mac uses to hold back restarts.
+Xcode, BrowserBear, ComputerCub, dialogs on the screen), Threadbear installing
+or updating Codex for them, runner releases and handovers, and the idle check
+the Mac uses to hold back restarts.

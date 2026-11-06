@@ -292,10 +292,14 @@ said otherwise.
   "Threadbear Runner", for the current user at logon (no admin rights,
   hidden, restarted if it fails), which runs
   `conhost.exe --headless node scripts/windows-run.mjs`; that script keeps the
-  runner running from the checkout. It also writes `tb.cmd` to
-  `%LOCALAPPDATA%\Threadbear\bin` and adds the folder to the user's PATH
-  (through PowerShell, `[Environment]::SetEnvironmentVariable`). `--uninstall`
-  removes the task, the file and the PATH entry.
+  runner running from the checkout (or from the installed copy, with the
+  `node.exe` that comes in it). It also writes `tb.cmd` to
+  `%LOCALAPPDATA%\Threadbear\bin` and adds the folder to the user's PATH. The
+  PATH is read from the registry unexpanded and written back as an expandable
+  string through PowerShell, so the rest of it is left as it was, and it is only
+  written when the folder has to be added or taken off. `--uninstall` removes
+  the task, the file and the PATH entry; `--stop` ends the task but leaves it
+  registered; `--installed` says whether it is.
 - **Where things are:** the data folder is `%APPDATA%\Threadbear` (the Mac's
   layout inside it), the runner's log is
   `%LOCALAPPDATA%\Threadbear\Logs\threadbear-runner.log`, and the supervisor's
@@ -321,6 +325,35 @@ said otherwise.
   upload without the key made for that launch, and one from any origin but its own. Pictures pasted
   into the composer are saved briefly under `%TEMP%\threadbear-uploads` and
   imported by the runner.
-- **Not on Windows:** Codex, runner releases and handovers (there is no
+- **Installers** (`installer/`, built by `.github/workflows/release.yml`): a
+  setup exe (Inno Setup), an MSI (WiX) and a zip, for x64 and arm64. They put
+  the app in `%LOCALAPPDATA%\Programs\Threadbear` (or Program Files for a
+  system-wide install): `Threadbear.exe`, a pinned `node\node.exe` (its
+  SHA-256 is checked at build time, `installer/node.json`), the runner's
+  source and its production packages, the bridge and built UI, and the guide.
+  They add a Start menu entry and an entry in Add/Remove Programs
+  (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall` and `App Paths`,
+  or `HKLM` for system-wide), and nothing else: no service, no PATH change, no
+  file association. An installer replacing a running copy first asks the app to
+  quit (`Threadbear.exe --quit`) and ends the runner's task
+  (`--runner --stop`); uninstalling runs `--runner --uninstall`. A release is
+  signed (Azure Artifact Signing) when its repository has the signing
+  variables, and says so in the workflow log when it isn't.
+- **The runner's task is offered, not assumed:** the first time the installed
+  app opens, it asks once whether to start the runner when you sign in to
+  Windows, and sets that task up (the item above) if you say yes. "No thanks"
+  is remembered in `%LOCALAPPDATA%\Threadbear\declined-runner-task`; the tray
+  menu's "Start the runner at sign-in..." asks again. `Threadbear.exe
+  --runner [--installed | --stop | --status | --uninstall | --dry-run]` runs
+  the same script from a terminal or an installer.
+- **The update check** (`desktop/src/core/updates.ts`): the installed app asks
+  `api.github.com/repos/<the fork>/releases/latest` once a day (a plain
+  request, so GitHub sees the PC's address and the app's user agent, and
+  nothing else is sent), keeps the answer in the page's local storage, and
+  shows a link to the release in the rail if it is newer. It downloads
+  nothing. Settings, "This app", turns it off. A page opened in an ordinary
+  browser never asks.
+- **Not on Windows:** Threadbear installing or updating Codex (a `codex.exe` on
+  the PATH is used if there is one), runner releases and handovers (there is no
   `current` link or `launch.mjs` supervision), `lsof` and `ps` checks, the idle
   check, the screen-dialog and secret checks, BrowserBear and ComputerCub.
