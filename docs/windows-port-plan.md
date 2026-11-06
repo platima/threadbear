@@ -567,9 +567,18 @@ copy in the default folder); `Threadbear.exe --runner --installed`, `--start`,
 reaches a redirected file; a terminal prompt returns before a GUI-subsystem
 program has printed).
 
-Still unproven, and said so where the docs claim it: an arm64 build, the three
-workflows end to end (they only ran partly, and only `windows.yml` has run at
-all), real Azure signing and SmartScreen, the installers' action that restarts
+After the port branch went onto the fork's `main` (fast-forward to `6a652705`,
+7 Nov), `windows.yml` ran green there and `installers.yml` built the x64 and
+arm64 packages on GitHub, unsigned, with the right names and checksums (the
+arm64 setup exe, MSI and zip are 35, 40 and 57 MB). The first `windows.yml` run
+on `main` failed on a timing assertion in `rpc.test.ts` (the first reconnect gap
+was 176 ms against a 40 ms start on that runner), the same commit having passed
+on the branch; the assertion was dropped and the floor checks on the later waits
+kept.
+
+Still unproven, and said so where the docs claim it: the arm64 packages run on
+an Arm PC (they were built, not run), `release.yml` end to end (it has not run),
+real Azure signing and SmartScreen, the installers' action that restarts
 a registered runner task and the uninstaller's quit of a running app (the
 installers were run for real, into folders of their own, and are covered
 below, but with no task registered and no app running), a click on a link, a
