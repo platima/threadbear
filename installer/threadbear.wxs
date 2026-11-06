@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Threadbear MSI (silent-install oriented; no UI suite - use msiexec /qn or /qb).
+
+  Build: wix build threadbear.wxs -arch x64 -d Version=x.y.z -d StageDir=<build\stage-x64> -o ..\dist\threadbear-vx.y.z-msi-win-x64.msi
+  Windows on Arm: -arch arm64 with the arm64 stage folder, output
+  threadbear-vx.y.z-msi-win-arm64.msi (build-installers.ps1 -Arch arm64). Both
+  share the UpgradeCode, so either architecture's MSI upgrades the other in
+  place.
+
+  Scope: per-user by default; machine-wide with ALLUSERS=1:
+    msiexec /i threadbear.msi /qn                  (current user)
+    msiexec /i threadbear.msi /qn ALLUSERS=1       (system-wide; needs elevation)
+
+  The runner's logon task is per user, so the MSI does not create it for a
+  deployment: each person is asked the first time they open the app (or uses
+  the runner switch of Threadbear.exe themselves). Removing the product
+  removes the task of the user who removes it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?ifndef Publisher ?>
+    <?define Publisher = Platima ?>
+  <?endif ?>
+  <?ifndef StageDir ?>
+    <?define StageDir = ..\build\stage-x64 ?>
+  <?endif ?>
+  <Package Name="Threadbear"
+           Manufacturer="$(var.Publisher)"
+           Version="$(var.Version)"
+           UpgradeCode="B04D7E19-5C28-4A63-9F81-2D6E3A7C5B40"
+           Scope="perUserOrMachine"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="Threadbear for Windows" />
+    <!-- AllowSameVersionUpgrades: the x64 and arm64 MSIs of one release share
+         a version, and without it FindRelatedProducts skips an equal-version
+         product, so switching architecture would install a second copy rather
+         than replace the first. ProductCode is new per build, so a same-version
+         reinstall of the same architecture becomes a major upgrade too. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Threadbear is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="ThreadbearIcon" SourceFile="..\desktop\src-tauri\icons\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ThreadbearIcon" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/platima/threadbear" />
+
+    <!-- ============================ Files ============================ -->
+    <!-- The whole staged folder, harvested with its directory layout. -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Threadbear">
+        <Files Include="$(var.StageDir)\**" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- ======================= Start Menu shortcut ======================= -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="ThreadbearShortcut" Name="Threadbear"
+                  Target="[INSTALLFOLDER]Threadbear.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKMU" Key="Software\Platima\Threadbear"
+                       Name="startmenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- ====================== Stopping a running copy ====================== -->
+    <!-- The app has no window to close and the runner keeps its files open, so
+         both are asked to stop through their own routes (the quit and stop
+         switches) before files change. Return="ignore": on a first install
+         there is nothing to run. -->
+    <CustomAction Id="QuitApp" Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]Threadbear.exe&quot; --quit"
+                  Execute="immediate" Return="ignore" />
+    <CustomAction Id="StopRunner" Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]Threadbear.exe&quot; --runner --stop"
+                  Execute="immediate" Return="ignore" />
+    <CustomAction Id="RemoveRunnerTask" Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]Threadbear.exe&quot; --runner --uninstall"
+                  Execute="immediate" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="QuitApp" After="CostFinalize" />
+      <Custom Action="StopRunner" After="QuitApp" />
+      <!-- Only for a removal, not for the removal half of an upgrade. -->
+      <Custom Action="RemoveRunnerTask" After="StopRunner" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

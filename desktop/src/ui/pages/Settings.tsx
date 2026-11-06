@@ -4,6 +4,7 @@ import { CliSection } from '../pages-lib/settings-cli.tsx';
 import { DevicesSection } from '../pages-lib/settings-devices.tsx';
 import { GeneralSection } from '../pages-lib/settings-general.tsx';
 import { PoolsSection } from '../pages-lib/settings-pools.tsx';
+import { AppSection } from '../pages-lib/settings-app.tsx';
 import './settings.css';
 
 const SECTIONS = [
@@ -11,6 +12,7 @@ const SECTIONS = [
   { id: 'pools', label: 'Logins and pools', Section: PoolsSection },
   { id: 'cli', label: 'Claude Code updates', Section: CliSection },
   { id: 'devices', label: 'Phone and browser', Section: DevicesSection },
+  { id: 'app', label: 'This app', Section: AppSection },
 ];
 
 function SettingsPage({ store, snap }: PageProps) {

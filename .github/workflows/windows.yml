@@ -1,6 +1,8 @@
 name: windows
 
-# The runner on Windows (docs/windows-port-plan.md). The files in
+# The Windows port (docs/windows-port-plan.md): the runner's unit tests on
+# Windows, and the desktop app's typecheck, tests, version check and build.
+# Called by release.yml before anything is published. The files in
 # runner/test/windows-known-failing.txt are reported, not enforced; the list
 # shrinks as the port goes.
 
@@ -8,6 +10,7 @@ on:
   push:
     branches: [main, 'claude/**', 'windows/**']
   pull_request:
+  workflow_call:
 
 jobs:
   runner:
@@ -16,7 +19,7 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -29,3 +32,29 @@ jobs:
       - name: Unit tests still known to fail
         run: node scripts/test-windows.mjs --known
         continue-on-error: true
+
+  desktop:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      # The UI imports the runner's protocol types, so the runner's packages
+      # have to be there for the typecheck to see them.
+      - run: npm ci
+        working-directory: runner
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # One version number, repeated in four files: they have to agree.
+      - run: node scripts/version.mjs --check
+      - name: The shell compiles
+        working-directory: desktop/src-tauri
+        run: cargo check --locked

@@ -13,3 +13,7 @@ __pycache__/
 # iOS app (ios/)
 ios/ThreadbearKit/.build/
 ios/**/xcuserdata/
+
+# Windows packages (installer/): staged files, downloads and finished installers
+/build/
+/dist/

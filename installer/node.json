@@ -1,0 +1,8 @@
+{
+  "version": "24.22.2",
+  "note": "The Node that ships inside the Windows app. 24 is what the runner is tested on (engines >=24) and the Windows CI job uses. Checksums are from https://nodejs.org/dist/v24.22.2/SHASUMS256.txt. To move to another Node: change the version, replace both hashes from that release's SHASUMS256.txt, and run installer/fetch-node.ps1 for each architecture.",
+  "sha256": {
+    "x64": "ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2",
+    "arm64": "f47968c213105077f64c6510f007632c0ca2574802a0b5067c327c49abe1c468"
+  }
+}

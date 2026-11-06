@@ -1,0 +1,223 @@
+name: Release
+
+# Publishes Threadbear for Windows: a GitHub release for the tag, with the
+# setup exe, MSI and portable zip for x64 and arm64, a SHA-256 for each, and a
+# CHECKSUMS.txt. Semantic versioning: the tag is v<version>, and <version> is
+# the one in desktop/package.json (installer/release.sh checks that before it
+# tags). A tag with a hyphen (v0.2.0-rc1) is a pre-release.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on version tags like v0.1.0, v1.2.3-rc1, etc.
+  # Dry run: builds, signs and validates every release asset exactly as a tag
+  # would, and publishes nothing - no release, no attachments. Run it before
+  # tagging, from the commit you mean to tag:
+  #   gh workflow run release.yml --ref main -f version=v0.1.0
+  # The assets are left as workflow artifacts to download and try. (GitHub only
+  # offers workflow_dispatch for a workflow whose default-branch copy declares
+  # it, so this exists once this file is on main.)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to rehearse, as its tag would be spelled (e.g. v0.1.0); must match desktop/package.json"
+        type: string
+        required: true
+
+# Creating the release and uploading assets needs write access; the default
+# GITHUB_TOKEN is read-only
+permissions:
+  contents: write
+  id-token: write   # Passed through to installers.yml for Azure code signing
+
+jobs:
+  # Run the Windows CI first to ensure quality
+  ci-validation:
+    uses: ./.github/workflows/windows.yml
+    secrets: inherit
+
+  # The version, and whether this run publishes (a tag push) or rehearses (a
+  # manual dry run). Every publishing job below is gated on `publish`. Either
+  # way the version has to be the one the app was built with.
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+    - uses: actions/checkout@v7
+
+    - id: v
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        if [ "$GITHUB_EVENT_NAME" = push ]; then
+          version=${GITHUB_REF#refs/tags/}
+          publish=true
+        else
+          version=$INPUT_VERSION
+          publish=false
+          echo "::notice::Dry run for $version: nothing will be published"
+        fi
+        case $version in
+        v[0-9]*.[0-9]*.[0-9]*) ;;
+        *) echo "ERROR: version must look like v0.1.0, not '$version'"; exit 1 ;;
+        esac
+        node desktop/scripts/version.mjs --check
+        built=$(node desktop/scripts/version.mjs --print)
+        if [ "v$built" != "$version" ]; then
+          echo "ERROR: $version was asked for, but desktop/package.json says $built"
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [ci-validation, meta]
+    if: needs.meta.outputs.publish == 'true'
+    outputs:
+      version: ${{ needs.meta.outputs.version }}
+    steps:
+    - uses: actions/checkout@v7
+
+    # The notes lead with this version's "### ✨ Highlights" from
+    # desktop/CHANGELOG.md. Generated before the release exists, so a missing
+    # entry or highlights section stops the run while nothing is published yet.
+    - name: Write the release notes
+      run: |
+        sh installer/release-notes.sh "${{ needs.meta.outputs.version }}" \
+          "${{ github.repository }}" "${{ github.sha }}" \
+          "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+          > release-notes.md
+        cat release-notes.md
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v3
+      with:
+        tag_name: ${{ github.ref }}
+        name: Threadbear ${{ needs.meta.outputs.version }}
+        body_path: release-notes.md
+        draft: false
+        prerelease: ${{ contains(needs.meta.outputs.version, '-') }}
+
+  # Every published binary comes from installers.yml: one build per
+  # architecture, one (optional) signature, one checksum set. In a dry run
+  # release_tag is empty, so the deliverables stay artifacts.
+  build-installers:
+    needs: [ci-validation, meta, create-release]
+    if: ${{ !cancelled() && !failure() }}
+    uses: ./.github/workflows/installers.yml
+    with:
+      release_tag: ${{ needs.meta.outputs.publish == 'true' && needs.meta.outputs.version || '' }}
+    secrets: inherit
+    permissions:
+      contents: write
+      id-token: write
+
+  # Nothing releasable can execute on this runner, so validation asserts the
+  # complete expected asset set is there, with plausible sizes, checksums that
+  # verify, the right architecture in each portable zip, and every installer
+  # the app's update check can ask for (installer/validate-release-assets.sh).
+  # A release checks what was actually published; a dry run checks the
+  # artifacts that would have been.
+  validate-release:
+    runs-on: ubuntu-latest
+    needs: [meta, build-installers]
+    if: ${{ !cancelled() && !failure() }}
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Download the published release
+      if: needs.meta.outputs.publish == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: gh release download "${{ needs.meta.outputs.version }}" --repo "${{ github.repository }}" --dir assets
+
+    - name: Download the dry run's deliverables
+      if: needs.meta.outputs.publish != 'true'
+      uses: actions/download-artifact@v8
+      with:
+        pattern: threadbear-installers-*
+        merge-multiple: true
+        path: assets
+
+    - name: Validate release assets
+      run: |
+        ls -la assets
+        sh installer/validate-release-assets.sh assets "${{ needs.meta.outputs.version }}"
+
+  create-checksums:
+    runs-on: ubuntu-latest
+    needs: [create-release, build-installers, validate-release]
+    if: ${{ !cancelled() && !failure() && needs.create-release.result == 'success' }}
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Download release assets to create master checksum
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Get all release assets
+        release_id=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ needs.create-release.outputs.version }}" \
+          | jq -r '.id')
+
+        echo "Release ID: $release_id"
+
+        # Download all .sha256 files
+        curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets" \
+          | jq -r '.[] | select(.name | endswith(".sha256")) | .browser_download_url' \
+          | while read url; do
+            echo "Downloading checksum: $url"
+            curl -L -s "$url" >> temp_checksums.txt
+          done
+
+    - name: Create master CHECKSUMS.txt
+      run: |
+        echo "# Threadbear Release Checksums - ${{ needs.create-release.outputs.version }}" > CHECKSUMS.txt
+        echo "# Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> CHECKSUMS.txt
+        echo "# Release: https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.version }}" >> CHECKSUMS.txt
+        echo "# Commit: ${{ github.sha }}" >> CHECKSUMS.txt
+        echo "" >> CHECKSUMS.txt
+
+        # Add all checksums
+        if [ -f temp_checksums.txt ]; then
+          cat temp_checksums.txt >> CHECKSUMS.txt
+        fi
+
+        echo "" >> CHECKSUMS.txt
+        echo "# Verification Instructions:" >> CHECKSUMS.txt
+        echo "# Linux/macOS: sha256sum -c CHECKSUMS.txt" >> CHECKSUMS.txt
+        echo "# Windows PowerShell: Get-FileHash -Algorithm SHA256 <filename>" >> CHECKSUMS.txt
+        echo "# Windows Command Prompt: certutil -hashfile <filename> SHA256" >> CHECKSUMS.txt
+
+        echo "Master checksums file created:"
+        cat CHECKSUMS.txt
+
+    - name: Upload master checksums
+      uses: softprops/action-gh-release@v3
+      with:
+        tag_name: ${{ needs.create-release.outputs.version }}
+        files: CHECKSUMS.txt
+
+  update-release-notes:
+    runs-on: ubuntu-latest
+    needs: [create-release, build-installers, validate-release, create-checksums]
+    if: ${{ !cancelled() && !failure() && needs.create-release.result == 'success' }}
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Write the release notes
+      run: |
+        sh installer/release-notes.sh "${{ needs.create-release.outputs.version }}" \
+          "${{ github.repository }}" "${{ github.sha }}" \
+          "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+          > release-notes.md
+
+    - name: Update release with final info
+      uses: softprops/action-gh-release@v3
+      with:
+        tag_name: ${{ needs.create-release.outputs.version }}
+        body_path: release-notes.md

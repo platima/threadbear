@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { PAGES } from './registry.ts';
+import { useAvailableUpdate } from './update-state.ts';
 
 type Theme = 'auto' | 'dark' | 'light';
 const THEME_KEY = 'threadbear.theme';
@@ -20,6 +21,7 @@ apply(readTheme());
 // The strip down the left edge: Threads, then each page.
 export function Rail({ route, go, conn, help }: { route: string; go: (route: string) => void; conn: string; help: () => void }) {
   const [theme, setTheme] = useState<Theme>(readTheme);
+  const update = useAvailableUpdate();
   const cycle = () => {
     const next: Theme = theme === 'auto' ? 'dark' : theme === 'dark' ? 'light' : 'auto';
     setTheme(next);
@@ -39,6 +41,11 @@ export function Rail({ route, go, conn, help }: { route: string; go: (route: str
         </button>
       ))}
       <span className="grow" />
+      {update && (
+        <a className="ghost railUpdate" href={update.page} title={`Version ${update.version} is out. Open its page in your browser.`} aria-label={`Version ${update.version} is out`}>
+          ⬆
+        </a>
+      )}
       <button className="ghost" title={`Appearance: ${theme}. Click to change.`} aria-label="Appearance" onClick={cycle}>
         {theme === 'dark' ? '☾' : theme === 'light' ? '☀' : '◐'}
       </button>

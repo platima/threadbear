@@ -8,6 +8,8 @@ import { Rail } from './Rail.tsx';
 import { Shortcuts } from './Shortcuts.tsx';
 import { TOUR_KEY, Tour } from './Tour.tsx';
 import { PAGES } from './registry.ts';
+import { isNative } from '../core/native.ts';
+import { runUpdateCheck } from './update-state.ts';
 
 export function useSnap(store: AppStore) {
   return useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -27,6 +29,11 @@ export function App({ store }: { store: AppStore }) {
   const [width, setWidth] = useState(() => clampWidth(readWidth(saved()), window.innerWidth));
   const [help, setHelp] = useState(false);
   const [tour, setTour] = useState(false);
+  // The installed app asks once a day whether a newer release is out
+  // (core/updates.ts); a page in an ordinary browser tab never does.
+  useEffect(() => {
+    if (isNative()) void runUpdateCheck();
+  }, []);
   // Once, on a window that has never had a thread, after the runner has answered.
   const tourChecked = useRef(false);
   useEffect(() => {
