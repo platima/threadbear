@@ -157,3 +157,36 @@ Hetzner cloud server with 8 GB. Do this as an ordinary user with sudo, not root.
 What's left out on Linux: everything that needs a Mac, such as the iOS
 simulator, Xcode, BrowserBear, ComputerCub and noticing dialogs on the screen.
 Threads that need those belong on the Mac.
+
+## 7. A runner on Windows (optional)
+
+The runner runs on Windows 11 from a checkout, and the desktop app in
+`desktop/` or the website is the way in. It is newer than the Mac and Linux
+setups, there is no Mac app, and it runs Claude Code only (no Codex).
+docs/windows-port-plan.md says what is done and what isn't.
+
+1. **Tools:** Node 24 (nvm-windows works), Git for Windows (patch commands and
+   project checks run in its bash), and Claude Code with its native installer.
+   Then **Ask** them to run `claude auth login` in a terminal and sign in:
+   a runner started by a task has no other login to use. A git identity, as on
+   any machine that commits.
+2. **The code:** clone their fork anywhere, then `npm ci` in `runner/` and in
+   `desktop/`.
+3. **Install:** `node runner/scripts/install-windows.mjs --dry-run`, show
+   them what it prints, and run it without `--dry-run` once they agree. It
+   registers a Task Scheduler task, "Threadbear Runner", that starts at logon
+   (this user, no admin rights), writes `tb.cmd` to
+   `%LOCALAPPDATA%\Threadbear\bin` and adds that folder to their PATH.
+   `--status` and `--uninstall` do what they say. docs/on-your-mac.md lists
+   everything it leaves.
+4. **The window:** in `desktop/`, `npm run build`, then
+   `node bridge/bridge.ts` and open `http://127.0.0.1:5185/`. The bridge is a
+   loopback server that passes the page's connection to the runner and does the
+   token handshake itself. A packaged app is not built yet.
+5. **Updates:** the runner doesn't follow `main` on Windows. After a `git pull`,
+   restart it from the Runners page, or `schtasks /End /TN "Threadbear Runner"`
+   then `schtasks /Run /TN "Threadbear Runner"`.
+
+What's left out on Windows: everything that needs a Mac (the iOS simulator,
+Xcode, BrowserBear, ComputerCub, dialogs on the screen), Codex, runner
+releases and handovers, and the idle check the Mac uses to hold back restarts.

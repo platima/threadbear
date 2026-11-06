@@ -238,3 +238,40 @@ priority, it passes a sample of tool output and pictures to Apple's on-device
 model, and Apple's on-device text recognition for a picture. Nothing leaves the
 Mac and it changes nothing that uploads. It keeps counts, and the thread and
 sequence number of what it flagged, in `<data>/secret-check.json`. Never the text.
+
+## On Windows
+
+A Windows runner (INSTALL.md, section 7) does the same things as the Mac one,
+with these differences. All of it is in `runner/src/platform.ts`,
+`win32-hide.ts`, `proc.ts`, `system-tools.ts` and `runner/scripts/` unless
+said otherwise.
+
+- **Installed by `runner/scripts/install-windows.mjs`:** a Task Scheduler task,
+  "Threadbear Runner", for the current user at logon (no admin rights,
+  hidden, restarted if it fails), which runs
+  `conhost.exe --headless node scripts/windows-run.mjs`; that script keeps the
+  runner running from the checkout. It also writes `tb.cmd` to
+  `%LOCALAPPDATA%\Threadbear\bin` and adds the folder to the user's PATH
+  (through PowerShell, `[Environment]::SetEnvironmentVariable`). `--uninstall`
+  removes the task, the file and the PATH entry.
+- **Where things are:** the data folder is `%APPDATA%\Threadbear` (the Mac's
+  layout inside it), the runner's log is
+  `%LOCALAPPDATA%\Threadbear\Logs\threadbear-runner.log`, and the supervisor's
+  is `runner-supervisor.log` beside it. NTFS gives these the profile's own
+  permissions, so the 0600 and 0700 modes are not set.
+- **Programs it runs:** `claude.exe` (from `~\.local\bin`), `git`, Git for
+  Windows' `bash.exe` for patch commands and checks (only from the places Git
+  installs to, or `CLAUDE_CODE_GIT_BASH_PATH`), `taskkill /T /F` on a process
+  it started and still has recorded (only when its recorded start time matches,
+  so a reused number is never stopped), `powershell.exe` to read a process's
+  start time, and `rundll32.exe url.dll,FileProtocolHandler` to open a web
+  page. Every child is started with its console window hidden.
+- **The desktop bridge** (`desktop/bridge/bridge.ts`, when you run it) listens
+  on `127.0.0.1:5185` only, serves the built page and passes its WebSocket to
+  the runner, reading `secrets\runner-token` itself so the page never holds the
+  token. It refuses a WebSocket from any origin but its own. Pictures pasted
+  into the composer are saved briefly under `%TEMP%\threadbear-uploads` and
+  imported by the runner.
+- **Not on Windows:** Codex, runner releases and handovers (there is no
+  `current` link or `launch.mjs` supervision), `lsof` and `ps` checks, the idle
+  check, the screen-dialog and secret checks, BrowserBear and ComputerCub.

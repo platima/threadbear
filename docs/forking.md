@@ -86,6 +86,7 @@ gone from your fork, not just quiet.
 | Codex | `runner/src/adapters/codex/`, `runner/src/updates/codex.ts` | No Codex login, and `cliUpdates: { codex: "off" }` | Woven in, but keep `'codex'` decodable as a provider. |
 | BrowserBear link hand-off | `app/Sources/Threadbear/BrowserBear.swift`, called from `PaneModel.swift` | Inert unless BrowserBear (Mike's own tool) is running | Self-contained: one file, one call. |
 | The Browser panel | `app/Sources/Threadbear/Views/AgentBrowserPanel.swift`, and `BrowserBearPipe.swift`, with cases in `PanelsView.swift`, `WindowDock.swift`, `PanelRequests.swift` and `Automation.swift` | Inert without BrowserBear; existing profiles use its private socket, separate agent Chrome retains its CDP path | Self-contained. |
+| Windows runner and desktop app | `runner/src/platform.ts`, `win32-hide.ts`, the Windows branches in `proc.ts` and `system-tools.ts`, `runner/scripts/install-windows.mjs`, `windows-run.mjs`, `test-windows.mjs`; `desktop/`; `.github/workflows/windows.yml` | Inert on a Mac: nothing runs unless the Windows installer is | Self-contained apart from the branches in `proc.ts` and `system-tools.ts`. Delete `desktop/` and the scripts to take the app out. |
 
 ### Core, no switch
 
