@@ -266,10 +266,17 @@ said otherwise.
   so a reused number is never stopped), `powershell.exe` to read a process's
   start time, and `rundll32.exe url.dll,FileProtocolHandler` to open a web
   page. Every child is started with its console window hidden.
-- **The desktop bridge** (`desktop/bridge/bridge.ts`, when you run it) listens
-  on `127.0.0.1:5185` only, serves the built page and passes its WebSocket to
+- **The desktop app** (`desktop/src-tauri/`, a Tauri shell) opens a window and
+  a tray icon (closing the window keeps it in the tray; Quit in the tray menu
+  ends it), keeps one copy running, and remembers the window's place. It starts
+  `node desktop/bridge/bridge.ts` on a free loopback port and stops it on
+  quitting. The page it shows may pick a folder, show a toast and open a link
+  in your browser, and nothing else (`capabilities/default.json`).
+- **The desktop bridge** (`desktop/bridge/bridge.ts`) listens on `127.0.0.1`
+  only (a free port when the shell starts it, else 5185), serves the built page and passes its WebSocket to
   the runner, reading `secrets\runner-token` itself so the page never holds the
-  token. It refuses a WebSocket from any origin but its own. Pictures pasted
+  token. Any program on the PC can reach a loopback port, so it refuses a WebSocket or
+  upload without the key made for that launch, and one from any origin but its own. Pictures pasted
   into the composer are saved briefly under `%TEMP%\threadbear-uploads` and
   imported by the runner.
 - **Not on Windows:** Codex, runner releases and handovers (there is no
