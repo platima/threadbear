@@ -39,7 +39,11 @@ test('a file another program has open without allowing renames is replaced once 
   const dir = tmpDir();
   const file = path.join(dir, 'trust.json');
   fs.writeFileSync(file, '{"v":1}\n');
-  const holder = await holdOpen(file, 700);
+  // The retries wait about 1.6 s in all (10, 25, 50, 100, 200, 400, 800 ms). The
+  // hold is a sixth of that: 700 ms left too little room once, when GitHub's
+  // runner was busy with the rest of the suite and the write gave up.
+  // 250 ms still makes the first four tries fail, so the retry is what is tested.
+  const holder = await holdOpen(file, 250);
   try {
     atomicWriteFileSync(file, '{"v":2}\n');
     assert.equal(fs.readFileSync(file, 'utf8'), '{"v":2}\n');
