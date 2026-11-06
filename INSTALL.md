@@ -179,10 +179,16 @@ docs/windows-port-plan.md says what is done and what isn't.
    `%LOCALAPPDATA%\Threadbear\bin` and adds that folder to their PATH.
    `--status` and `--uninstall` do what they say. docs/on-your-mac.md lists
    everything it leaves.
-4. **The window:** in `desktop/`, `npm run build`, then
-   `node bridge/bridge.ts` and open `http://127.0.0.1:5185/`. The bridge is a
-   loopback server that passes the page's connection to the runner and does the
-   token handshake itself. A packaged app is not built yet.
+4. **The window:** the app is a small Rust shell (Tauri) around a TypeScript
+   UI. It needs Rust (`rustup`, the MSVC toolchain) and the Visual Studio
+   C++ build tools (the "Desktop development with C++" workload) to build.
+   In `desktop/`: `npm ci`, then `npx tauri build --no-bundle`, and run
+   `src-tauri	argetelease	hreadbear-desktop.exe`. It starts `node
+   bridge/bridge.ts` (Node on the PATH), a loopback server that passes the
+   page's connection to the runner and does the token handshake, with a key for
+   that launch. Without the shell, `npm run build` and `node bridge/bridge.ts`
+   print an address with a `#key=` to open in a browser. There is no installer
+   yet.
 5. **Updates:** the runner doesn't follow `main` on Windows. After a `git pull`,
    restart it from the Runners page, or `schtasks /End /TN "Threadbear Runner"`
    then `schtasks /Run /TN "Threadbear Runner"`.
