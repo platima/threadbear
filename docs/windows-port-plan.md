@@ -337,3 +337,53 @@ tests, 19 seconds) are enforced; the 40 in `runner/test/windows-known-failing.tx
 are reported and come off the list as M1 fixes them.
 
 **Claude Code shell check:** folded into the first real turn in M1.
+
+### M1 results (runner on Windows)
+
+- The runner starts from source on Windows, listens on its port, spawns
+  `claude.exe` in a thread's folder and carries the CLI's reply back through the
+  protocol (tried with no login, which came back as a failed turn with the CLI's
+  own message). A turn on a real model has not been run: `claude auth status`
+  reads not logged in on this machine.
+- What was added: `runner/src/platform.ts` (the places Windows differs),
+  `win32-hide.ts` (no console windows for child processes), the Windows
+  branches in `proc.ts` (a process tree stopped with `taskkill /T /F`, only when
+  the recorded start time matches) and `system-tools.ts` (Git Bash for patch
+  actions and checks), `scripts/install-windows.mjs` and `windows-run.mjs` (a
+  logon task and its supervisor; dry-run and XML checked, not registered on this
+  machine), and a `tb.cmd` shim. Codex is left alone on Windows.
+- Not done, by choice: runner releases, handovers and following `main` (the
+  runner runs from the checkout), the Job Object helper (`taskkill /T` stands in,
+  so a tool command that outlives a crashed CLI isn't caught), the idle check,
+  and picture conversion through ImageMagick (untried).
+
+### M2 and M3 results (the desktop app)
+
+- `desktop/` is a TypeScript and React UI with a small Rust (Tauri 2) shell.
+  It reuses the runner's protocol types and the website's section and turn
+  logic. Pages: Projects, Schedules, Usage, Runners, Settings (with pools,
+  Claude updates and phone pairing). Thread side panes: Highlights, Actions
+  (patches and trust), Agents, Files. Thread features: asks and done cards
+  joined to the composer, design reviews, pictures (read through `files.read`;
+  pasted, dropped or chosen, through the bridge and `media.import`), edit a
+  message, model, effort and access menus, rename. Also a shortcuts list, an
+  appearance toggle and a first-run tour on the runner's sample threads.
+- Checked against the repo's mock runner and against the real runner on Windows
+  (its sample threads). The transcript, with 4,100 rows after loading every
+  page, opens in 45 to 58 ms and switches in about 30 ms, with no long tasks
+  while streaming or scrolling.
+- The shell (`desktop/src-tauri/`): a window, a tray icon that keeps the app
+  running when the window is closed, one copy at a time, the window's place
+  remembered, toasts, a folder picker and links in the browser. It starts the
+  Node bridge on a free loopback port and points the window at it, so the runner
+  handshake stays in TypeScript. The page may call only the folder picker,
+  notifications and opening a link (an unlisted plugin is refused). Release
+  build: 5.1 MB, 1 minute 40 seconds. Run once against a mock runner (window
+  loaded, connected, key wiped from the address); the tray, toasts and the
+  folder dialog were not clicked.
+- The bridge needs a key made for each launch on its WebSocket and uploads: any
+  program on the PC can reach a loopback port, and Origin is only a browser's
+  word. A connection with no key, a wrong one, or no Origin is refused.
+- Not done: an installer and code signing (M4), the Mac app's docking
+  (Mac-only), the per-ask picture boxes and draft autosave of design reviews,
+  and a run through a real model turn.
