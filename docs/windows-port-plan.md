@@ -540,8 +540,14 @@ test fails in that setup, `reviews.test.ts` "a shot can be a video or an HTML
 page", and only there: Node's `mkdtemp` on Windows refuses a folder whose path
 is over about 240 characters (it worked at 230 and failed at 240 when tried),
 and the alias's long form in a deep scratch folder was longer than that. It
-passes with the normal TEMP and a real data folder's paths are far shorter. The
-real proof of the 8.3 fix is the next run on GitHub.
+passes with the normal TEMP and a real data folder's paths are far shorter.
+
+On GitHub's `windows-latest` the first push failed 17 tests, as above. After
+the fixes the run was red on one test, the launcher hash test (an agent had
+un-skipped it because `shasum` exists in this machine's Git Bash; the runner
+image's has none, as the original skip said), and with that skipped again the
+run `af7dc302` passed: both jobs, 1,957 tests, 1,890 passed, none failed, 67
+skipped. That is the real proof of the 8.3 short-name fix.
 
 The installers were then run, not just compiled, and that found two faults the
 agent that wrote them could not have: the MSI's new "Windows 10 1809 or later"
@@ -607,7 +613,7 @@ control has a tooltip.
 
 | PR | What | Size | Stands alone | Status |
 |---|---|---|---|---|
-| 1. Runner: run on Windows | `runner/src` (25 files, mostly small branches behind `IS_WINDOWS`), the Task Scheduler install, the unit tests made to run on Windows, the `windows` CI job | First cut: 82 files, +1,151 -263 | Yes | **Out of date, and to be cut again before anything is sent.** The first cut is the local branch `pr/windows-runner` (`ea4b296`) on `d488512`, from before the review fixes. Upstream is now 48 commits on (`efc0c9e`) and a merge conflicts in `claude-trust.ts`, `patch-trust.ts`, `schedule-check.ts` and `claude-trust.test.ts`: upstream now JSON-quotes a path that has a backslash in the trust hash input, which the Windows hashing has to be reconciled with. The fork branch has the fixes and passes here (1,957 tests, none fail); the cut has to take the same fixes, be merged with upstream, and be run again on Windows. Not run on a Mac |
+| 1. Runner: run on Windows | `runner/src` (25 files, mostly small branches behind `IS_WINDOWS`), the Task Scheduler install, the unit tests made to run on Windows, the `windows` CI job | First cut: 82 files, +1,151 -263 | Yes | **Out of date, and to be cut again before anything is sent.** The first cut is the local branch `pr/windows-runner` (`ea4b296`) on `d488512`, from before the review fixes. Upstream is now 48 commits on (`efc0c9e`) and a merge conflicts in `claude-trust.ts`, `patch-trust.ts`, `schedule-check.ts` and `claude-trust.test.ts`: upstream now JSON-quotes a path that has a backslash in the trust hash input, which the Windows hashing has to be reconciled with. The fork branch has the fixes and passes here and on GitHub's Windows runner (1,957 tests, none fail); the cut has to take the same fixes, be merged with upstream, and be run again on Windows. Not run on a Mac |
 | 2. Desktop app for Windows | `desktop/`: the UI, the bridge, the Tauri shell (a window, tray, toasts) | 97 files, about 18.7k lines before the review (8.2k of it lockfiles), mostly UI | Needs 1 (the bridge imports `runner/src/platform.ts`) | Built and checked, except in a real window: nobody has clicked a link, dropped a picture or seen the setup-failure dialog. Raise it with Mike before a PR: it is a second UI for him to look after |
 | 3. Windows packages and releases | `installer/`, `installers.yml`, `release.yml`, the version script, the update check | 15 files, about 1.6k lines before the review | Needs 2 | Mostly belongs in the fork: the publisher, the two product GUIDs, the signing set-up and the update check's repository are the maintainer's own (docs/forking.md lists them). Offer it only if he wants Windows downloads from his repo |
 
