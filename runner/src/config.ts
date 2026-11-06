@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { atomicWriteFileSync } from './fsutil.ts';
-import { chmodSafe, claudeBinaryFor, dataDirFor, logFileFor, tokenStatsDirFor } from './platform.ts';
+import { chmodSafe, claudeBinaryFor, codexOnPath, dataDirFor, logFileFor, tokenStatsDirFor } from './platform.ts';
 import { RELEASE } from './release.ts';
 import { findGateway, gatewayBase } from './connectors.ts';
 import { findGatewayClient } from './notion-tasks.ts';
@@ -237,7 +237,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ? Number(env.THREADBEAR_IDLE_MS)
     : (json.idleMinutes ?? 30) * 60_000;
   const maxLive = Number(env.THREADBEAR_MAX_LIVE || json.maxLiveCLIs || DEFAULT_MAX_LIVE);
-  const codexPath = nonEmpty(env.THREADBEAR_CODEX_PATH) ?? nonEmpty(json.codexPath);
+  // On Windows there is no codex next to Node (npm's is a .cmd), so a native
+  // install's codex.exe on the PATH is the default; with none, Codex stays off.
+  const codexPath = nonEmpty(env.THREADBEAR_CODEX_PATH) ?? nonEmpty(json.codexPath) ?? (process.platform === 'win32' ? codexOnPath({ env }) : undefined);
   const models = providerMap(json.defaults?.models, nonEmpty);
   const efforts = providerMap(json.defaults?.efforts, (v) => (isEffortLevel(v) ? v : undefined));
   return {

@@ -75,6 +75,13 @@ export function readLinkDir(link: string): string {
   return fs.readlinkSync(link);
 }
 
+// A path with forward slashes whatever the platform, for text a person reads
+// (messages name files as ./tools/x.sh) and for words a shell takes. It
+// changes nothing on macOS and Linux, where path.sep is already /.
+export function slashes(p: string): string {
+  return path.sep === '/' ? p : p.split(path.sep).join('/');
+}
+
 // A path under the home folder as ~/rest, with forward slashes on every
 // platform: the form the librarian's prompts and replies use, which the
 // reading side expands from ~/ (a Windows path would come back as ~\rest,
@@ -82,4 +89,20 @@ export function readLinkDir(link: string): string {
 export function tildePath(p: string, home: string): string {
   if (p === home) return '~';
   return p.startsWith(home + path.sep) ? '~' + p.slice(home.length).split(path.sep).join('/') : p;
+}
+
+// The native Codex install puts codex.exe on the PATH (npm's copy is a
+// codex.cmd, which can't be started without a shell). Windows only: found
+// the way a shell would, first directory first, and undefined if it isn't
+// there, in which case the runner leaves Codex alone as before.
+export function codexOnPath(p: { env?: NodeJS.ProcessEnv; exists?: (file: string) => boolean } = {}): string | undefined {
+  const env = p.env ?? process.env;
+  const exists = p.exists ?? ((file: string) => fs.existsSync(file));
+  for (const entry of (env.PATH ?? env.Path ?? '').split(';')) {
+    const dir = entry.trim().replace(/^"|"$/g, '');
+    if (!dir) continue;
+    const file = path.win32.join(dir, 'codex.exe');
+    if (exists(file)) return file;
+  }
+  return undefined;
 }

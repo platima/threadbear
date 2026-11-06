@@ -5,6 +5,8 @@
 //   node scripts/install-windows.mjs --dry-run     say what it would do
 //   node scripts/install-windows.mjs               install and start it
 //   node scripts/install-windows.mjs --status      is the task there and running
+//   node scripts/install-windows.mjs --installed   exit 0 if the task is there, 1 if not
+//   node scripts/install-windows.mjs --stop        end the task if it is running (it stays registered)
 //   node scripts/install-windows.mjs --uninstall   end and remove the task and `tb`
 //
 // It leaves: the task "Threadbear Runner" (this user, no admin rights), and
@@ -71,12 +73,24 @@ function taskExists() {
   }
 }
 
+// This user's PATH as the registry holds it, %VARIABLES% unexpanded.
+// [Environment]::GetEnvironmentVariable would expand them, and writing that
+// back with SetEnvironmentVariable would store the expanded text as a plain
+// string: it would quietly rewrite everything else on the person's PATH. The
+// key is 'Environment' except in the test that points it at a throwaway one.
+const ENV_KEY = process.env.THREADBEAR_TEST_ENV_KEY || 'Environment';
 function userPath() {
-  return ps("[Environment]::GetEnvironmentVariable('Path','User')");
+  return ps(`$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${ENV_KEY}'); if ($k) { $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') }`);
 }
 function setUserPath(value) {
   const escaped = value.replace(/'/g, "''");
-  ps(`[Environment]::SetEnvironmentVariable('Path','${escaped}','User')`);
+  // Written as an expandable string, as Windows' own PATH is. Changing a
+  // variable through .NET is what tells running programs to re-read it, so a
+  // throwaway one is set and removed afterwards.
+  ps(
+    `$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${ENV_KEY}'); $k.SetValue('Path', '${escaped}', 'ExpandString'); ` +
+      `if ('${ENV_KEY}' -eq 'Environment') { [Environment]::SetEnvironmentVariable('THREADBEAR_PATH_CHANGED','1','User'); [Environment]::SetEnvironmentVariable('THREADBEAR_PATH_CHANGED',$null,'User') }`,
+  );
 }
 
 function onPath(dir) {
@@ -93,8 +107,26 @@ if (args.has('--status')) {
   process.exit(0);
 }
 
+// Exit 0 if the task is there, 1 if not: for the desktop app's first run.
+if (args.has('--installed')) process.exit(taskExists() ? 0 : 1);
+
+// End the task if it is running, so an installer can replace the files it
+// holds open. Leaves the task registered, so the next logon starts it again.
+if (args.has('--stop')) {
+  console.log(`End the task "${TASK}" if it is running`);
+  if (dry) process.exit(0);
+  if (taskExists()) {
+    try {
+      schtasks('/End', '/TN', TASK);
+    } catch {
+      // not running
+    }
+  }
+  process.exit(0);
+}
+
 if (args.has('--uninstall')) {
-  const todo = [`End and delete the task "${TASK}"`, `Delete ${path.join(binDir, 'tb.cmd')} and take ${binDir} off this user's PATH`];
+  const todo =[`End and delete the task "${TASK}"`, `Delete ${path.join(binDir, 'tb.cmd')} and take ${binDir} off this user's PATH`];
   console.log(todo.join('\n'));
   if (dry) process.exit(0);
   if (taskExists()) {
@@ -106,8 +138,10 @@ if (args.has('--uninstall')) {
     schtasks('/Delete', '/TN', TASK, '/F');
   }
   fs.rmSync(path.join(binDir, 'tb.cmd'), { force: true });
-  const kept = userPath().split(';').filter((p) => p && p.replace(/\\$/, '').toLowerCase() !== binDir.toLowerCase());
-  setUserPath(kept.join(';'));
+  const before = userPath();
+  const kept = before.split(';').filter((p) => p && p.replace(/\\$/, '').toLowerCase() !== binDir.toLowerCase());
+  // Touch the PATH only if our folder is on it.
+  if (kept.join(';') !== before.split(';').filter(Boolean).join(';')) setUserPath(kept.join(';'));
   console.log('Removed. The data folder is untouched.');
   process.exit(0);
 }
