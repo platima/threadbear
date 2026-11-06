@@ -149,3 +149,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .sheet table { border-collapse: collapse; width: 100%; }
 .sheet td { padding: 4px 0; } .sheet td:first-child { padding-right: 24px; color: var(--dim); white-space: nowrap; }
 kbd { font: 12px var(--mono); background: var(--bg-raised); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+
+.tour { position: fixed; right: 20px; top: 76px; width: 340px; background: var(--bg); border: 1px solid var(--accent); border-radius: 12px; padding: 14px 16px; z-index: 40; box-shadow: 0 8px 30px #0006; }
+.tour h3 { margin: 2px 0 6px; font-size: 15px; }
+.tour p { margin: 0 0 10px; color: var(--dim); }
+.tour .btns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

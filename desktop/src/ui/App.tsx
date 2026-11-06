@@ -6,6 +6,7 @@ import { ThreadView } from './ThreadView.tsx';
 import { Composer } from './Composer.tsx';
 import { Rail } from './Rail.tsx';
 import { Shortcuts } from './Shortcuts.tsx';
+import { TOUR_KEY, Tour } from './Tour.tsx';
 import { PAGES } from './registry.ts';
 
 export function useSnap(store: AppStore) {
@@ -25,6 +26,20 @@ export function App({ store }: { store: AppStore }) {
   const snap = useSnap(store);
   const [width, setWidth] = useState(() => clampWidth(readWidth(saved()), window.innerWidth));
   const [help, setHelp] = useState(false);
+  const [tour, setTour] = useState(false);
+  // Once, on a window that has never had a thread, after the runner has answered.
+  const tourChecked = useRef(false);
+  useEffect(() => {
+    if (tourChecked.current || snap.conn !== 'open' || !snap.hello) return;
+    tourChecked.current = true;
+    let done = false;
+    try {
+      done = localStorage.getItem(TOUR_KEY) === '1';
+    } catch {
+      done = true;
+    }
+    if (!done && snap.threads.size === 0) setTour(true);
+  }, [snap.conn, snap.hello, snap.threads.size]);
   const [route, setRoute] = useState(() => location.hash.replace(/^#\/?/, '').split('/')[0] || 'threads');
   const go = (r: string) => {
     setRoute(r);
@@ -85,7 +100,8 @@ export function App({ store }: { store: AppStore }) {
       <Rail route={page ? route : 'threads'} go={go} conn={snap.conn} help={() => setHelp(true)} />
       {page ? page.Sidebar ? <aside className="side"><page.Sidebar {...pageProps} /></aside> : <div /> : <Sidebar store={store} snap={snap} />}
       <div className="grip" onPointerDown={drag} />
-      {help && <Shortcuts onClose={() => setHelp(false)} />}
+      {help && <Shortcuts onClose={() => setHelp(false)} onTour={() => { setHelp(false); setTour(true); }} />}
+      {tour && <Tour store={store} snap={snap} close={() => setTour(false)} />}
       <main className="main">
         {offline && (
           <div className={snap.conn === 'closed' ? 'banner bad' : 'banner'}>

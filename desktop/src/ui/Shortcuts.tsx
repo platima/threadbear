@@ -2,7 +2,7 @@ import { PAGES } from './registry.ts';
 
 const mod = navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl';
 
-export function Shortcuts({ onClose }: { onClose: () => void }) {
+export function Shortcuts({ onClose, onTour }: { onClose: () => void; onTour: () => void }) {
   const rows: [string, string][] = [
     [`${mod}+N`, 'New thread'],
     [`${mod}+K`, 'Search threads'],
@@ -29,6 +29,11 @@ export function Shortcuts({ onClose }: { onClose: () => void }) {
             ))}
           </tbody>
         </table>
+        <p style={{ margin: '12px 0 0' }}>
+          <button title="Add three sample threads and walk through the window" onClick={onTour}>
+            Take the tour
+          </button>
+        </p>
       </div>
     </div>
   );
