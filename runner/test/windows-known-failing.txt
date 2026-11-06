@@ -1,0 +1,43 @@
+# Unit test files that fail on Windows today (first measured 6 Nov 2026: 1,312 of
+# 1,539 tests passed). scripts/test-windows.mjs runs everything else as a hard
+# check and these as a report. Take a file off this list when it passes there.
+accounts-usage.test.ts
+adapter.test.ts
+claude-trust.test.ts
+codex-adapter.test.ts
+codex-appserver.test.ts
+codex-normalize.test.ts
+contracts.test.ts
+convex-keys.test.ts
+deploy-backend-runner-key.test.ts
+diff-media-accounts.test.ts
+frozen-cli.test.ts
+handover.test.ts
+highlights.test.ts
+mac-screen.test.ts
+main.test.ts
+models-pool.test.ts
+normalize.test.ts
+pair.test.ts
+patch-trust.test.ts
+patches.test.ts
+proc.test.ts
+project-icons.test.ts
+projects.test.ts
+release.test.ts
+restart.test.ts
+rpc.test.ts
+runner-keys.test.ts
+runner.test.ts
+script-trust.test.ts
+secret-check.test.ts
+secrets.test.ts
+share-images.test.ts
+store.test.ts
+sync.test.ts
+system-tools.test.ts
+tb-dev.test.ts
+threadbear-tools.test.ts
+update.test.ts
+updates.test.ts
+worktrees.test.ts

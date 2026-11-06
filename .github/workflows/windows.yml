@@ -1,0 +1,31 @@
+name: windows
+
+# The runner on Windows (docs/windows-port-plan.md). The files in
+# runner/test/windows-known-failing.txt are reported, not enforced; the list
+# shrinks as the port goes.
+
+on:
+  push:
+    branches: [main, 'claude/**', 'windows/**']
+  pull_request:
+
+jobs:
+  runner:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: runner/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Unit tests that should pass
+        run: node scripts/test-windows.mjs
+      - name: Unit tests still known to fail
+        run: node scripts/test-windows.mjs --known
+        continue-on-error: true
