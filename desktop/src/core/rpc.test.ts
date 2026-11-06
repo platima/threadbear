@@ -44,10 +44,12 @@ describe('reconnecting while the runner is down', () => {
       await bridge.shutdown();
     }
     const gaps = attempts.slice(1).map((t, i) => t - attempts[i]!);
-    // 40, 80, 160, 320, 320 and more, not 40 every time.
+    // 40, 80, 160, 320, 320 and more, not 40 every time. Each gap also holds the
+    // time the failed connection took, which a busy CI machine stretches (the
+    // first was 176 ms there), so the early gaps are not compared with each
+    // other: the fourth and fifth only have to be well past the 40 ms start.
     assert.ok(gaps[3]! >= 250, `the fourth wait was ${gaps[3]} ms: ${gaps}`);
     assert.ok(gaps[4]! >= 250, `the fifth wait was ${gaps[4]} ms: ${gaps}`);
-    assert.ok(gaps[3]! > gaps[0]! * 2, `the waits did not grow: ${gaps}`);
     assert.ok(!states.includes('open'), `it flashed open: ${states}`);
     assert.ok([...reasons].some((r) => /isn't answering/.test(r)), `the reason was lost: ${[...reasons]}`);
   });
