@@ -4,6 +4,7 @@ import { spawn, execFile, execFileSync } from 'node:child_process';
 import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
 import type { Logger } from './log.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
+import { IS_WINDOWS } from './platform.ts';
 
 // A process group, with its leader's start time so a recycled pid is never
 // mistaken for it. lstart is '' when the leader had already exited when the
@@ -91,7 +92,9 @@ export class ProcessRegistry {
 
   // Notes the process groups of every live CLI's descendants.
   async scan(): Promise<void> {
-    if (this.scanning || this.entries.size === 0) return;
+    // Windows has no process groups to note (a Job Object helper is the
+    // planned way to catch a crashed CLI's tool commands).
+    if (IS_WINDOWS || this.scanning || this.entries.size === 0) return;
     this.scanning = true;
     try {
       const table = await psTable();
@@ -181,6 +184,7 @@ async function waitGone(pgids: number[], ms: number): Promise<void> {
 }
 
 export function killGroup(pgid: number, signal: NodeJS.Signals): boolean {
+  if (IS_WINDOWS) return killTreeWindows(pgid);
   try {
     process.kill(-pgid, signal);
     return true;
@@ -191,7 +195,19 @@ export function killGroup(pgid: number, signal: NodeJS.Signals): boolean {
 
 export function groupAlive(pgid: number): boolean {
   try {
-    process.kill(-pgid, 0);
+    process.kill(IS_WINDOWS ? pgid : -pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Windows ends a process and everything it started in one go. There's no
+// gentler signal for a console program: SIGTERM is a hard kill there too.
+// Only a pid the runner started and still has recorded reaches this.
+function killTreeWindows(pid: number): boolean {
+  try {
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     return true;
   } catch {
     return false;
@@ -202,6 +218,9 @@ export function groupAlive(pgid: number): boolean {
 function sameGroup(g: Group, commandHint?: string): boolean {
   if (!g || typeof g.pgid !== 'number' || g.pgid <= 1 || !groupAlive(g.pgid)) return false;
   const leader = processInfo(g.pgid);
+  // A pid is reused on Windows, and nothing holds it as a group does on a
+  // Mac: unless the start time recorded matches, it isn't ours to stop.
+  if (IS_WINDOWS) return Boolean(leader && g.lstart && leader.lstart === g.lstart);
   if (!leader) return true; // leader gone; the group's members are the original ones
   if (leader.pgid !== g.pgid) return false;
   if (g.lstart) return leader.lstart === g.lstart;
@@ -212,11 +231,34 @@ function sameGroup(g: Group, commandHint?: string): boolean {
 const C_LOCALE = { ...process.env, LC_ALL: 'C' };
 
 export function processInfo(pid: number): { pgid: number; lstart: string; command: string } | null {
+  if (IS_WINDOWS) return processInfoWindows(pid);
   try {
     const out = execFileSync('/bin/ps', ['-o', 'pgid=,lstart=,command=', '-p', String(pid)], { encoding: 'utf8', env: C_LOCALE }).trim();
     // lstart is five fields in the C locale: "Mon Oct 26 15:04:05 2026".
     const m = /^(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*)$/.exec(out);
     return m ? { pgid: Number(m[1]), lstart: m[2].replace(/\s+/g, ' '), command: m[3] } : null;
+  } catch {
+    return null;
+  }
+}
+
+// The start time (as a 100 ns count since 1601, which is exact and has no
+// time zone) and program of a process, from PowerShell. A quarter of a second
+// or so, paid once for each CLI the runner starts.
+function processInfoWindows(pid: number): { pgid: number; lstart: string; command: string } | null {
+  try {
+    const out = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$p = Get-Process -Id ${Math.trunc(pid)} -ErrorAction Stop; "$($p.StartTime.ToFileTimeUtc()) $($p.ProcessName)"`,
+      ],
+      { encoding: 'utf8', windowsHide: true, timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+    const m = /^(\d+) (.*)$/.exec(out);
+    return m ? { pgid: pid, lstart: m[1], command: m[2] } : null;
   } catch {
     return null;
   }
@@ -249,7 +291,10 @@ export function groupSpawner(
       cwd: opts.cwd,
       env: opts.env as NodeJS.ProcessEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
-      detached: true,
+      // Its own process group where there are groups; on Windows a detached
+      // process gets a console window, and nothing needs the separation.
+      detached: !IS_WINDOWS,
+      windowsHide: true,
     });
     const pid = child.pid;
     if (pid) registry.add(pid, opts.command);
@@ -271,7 +316,7 @@ export function groupSpawner(
         if (!pid || child.exitCode !== null) return;
         killGroup(pid, 'SIGTERM');
         setTimeout(() => {
-          if (groupAlive(pid)) killGroup(pid, 'SIGKILL');
+          if (child.exitCode === null && groupAlive(pid)) killGroup(pid, 'SIGKILL');
         }, 3000).unref();
       },
       { once: true },
@@ -279,8 +324,9 @@ export function groupSpawner(
     child.once('exit', (code, signal) => {
       log.info('CLI exited', { threadId, pid, code, signal });
       if (!pid) return;
-      // Stop anything the CLI left running in its group.
-      killGroup(pid, 'SIGTERM');
+      // Stop anything the CLI left running in its group. Not on Windows: with
+      // the CLI gone its pid may already be someone else's.
+      if (!IS_WINDOWS) killGroup(pid, 'SIGTERM');
       // A CLI that ended normally has stopped its own tool commands. One
       // that crashed or was killed hasn't, and they'd run on for ever.
       if (code !== 0) {

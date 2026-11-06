@@ -9,6 +9,7 @@
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { plainShell } from './system-tools.ts';
 import type { WorktreePatch } from './patches.ts';
 
 // What a thread's record keeps about its worktree.
@@ -387,7 +388,7 @@ export function overwrittenFiles(text: string): string[] {
 
 // Runs the check through a shell, keeping the end of its output (that's
 // where a test runner says what failed).
-function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c']): Promise<{ ok: boolean; code?: number; text: string; durationMs: number }> {
+function runCheck(command: string, cwd: string, shell = plainShell()): Promise<{ ok: boolean; code?: number; text: string; durationMs: number }> {
   const started = Date.now();
   const [bin, ...args] = shell;
   const keep = 256 * 1024;

@@ -1,6 +1,7 @@
 // Runner entry point: `node src/main.ts`. launchd runs this (see
 // scripts/install-runner.sh); tests run it with THREADBEAR_HOME and
 // THREADBEAR_PORT pointing at temp places.
+import './win32-hide.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION } from './config.ts';
@@ -26,7 +27,7 @@ import { hidIdleMs, isAtMac } from './presence.ts';
 import { ThreadStore } from './store.ts';
 import { AccountRegistry } from './accounts.ts';
 import { ClaudeAdapter } from './adapters/claude/adapter.ts';
-import { ProcessRegistry } from './proc.ts';
+import { ProcessRegistry, killGroup } from './proc.ts';
 import { Runner } from './runner.ts';
 import { CodexAdapter } from './adapters/codex/adapter.ts';
 import { resolveCodexBinary } from './adapters/codex/appserver.ts';
@@ -730,13 +731,7 @@ async function main(): Promise<void> {
   // Last resort if the process exits some other way: kill the CLI groups
   // synchronously so they never outlive the runner.
   process.on('exit', () => {
-    for (const pid of registry.pids()) {
-      try {
-        process.kill(-pid, 'SIGKILL');
-      } catch {
-        // gone
-      }
-    }
+    for (const pid of registry.pids()) killGroup(pid, 'SIGKILL');
   });
 }
 

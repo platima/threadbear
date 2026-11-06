@@ -24,6 +24,28 @@ function probe(p: Probe): Required<Probe> {
   return { platform: p.platform ?? process.platform, executable: p.executable ?? isExecutable, env: p.env ?? process.env };
 }
 
+// Git for Windows' bash, the one shell on Windows that runs the commands
+// written for sh (patch actions, project checks). Claude Code looks for it
+// too and takes CLAUDE_CODE_GIT_BASH_PATH. Only the places Git installs to,
+// never a search of PATH or a drive (a bash.exe in System32 is the WSL
+// launcher, which is no use here). Without it, cmd.exe is what's left.
+export function gitBash(p: Probe = {}): string {
+  const q = probe(p);
+  const env = q.env;
+  const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA && path.win32.join(env.LOCALAPPDATA, 'Programs')].filter((r): r is string => Boolean(r));
+  const candidates = [env.CLAUDE_CODE_GIT_BASH_PATH, ...roots.flatMap((r) => [path.win32.join(r, 'Git', 'bin', 'bash.exe'), path.win32.join(r, 'Git', 'usr', 'bin', 'bash.exe')])].filter((c): c is string => Boolean(c));
+  for (const f of candidates) if (q.executable(f)) return f;
+  return 'cmd.exe';
+}
+
+// A shell for a one-off command (a project's check, a connectors headers
+// helper): sh -c where there is an sh, Git Bash on Windows.
+export function plainShell(p: Probe = {}): string[] {
+  const q = probe(p);
+  if (q.platform === 'win32') return [gitBash(q), '-c'];
+  return ['/bin/sh', '-c'];
+}
+
 // The login shell command actions and patch panels run in, so PATH, nvm
 // and the like apply as in a terminal. zsh on a Mac (its default since
 // Catalina). On Linux, the user's own $SHELL if it's a POSIX-style one
@@ -31,6 +53,7 @@ function probe(p: Probe): Required<Probe> {
 // bash, else sh: zsh isn't something a Linux runner can count on.
 export function loginShell(p: Probe = {}): string[] {
   const q = probe(p);
+  if (q.platform === 'win32') return [gitBash(q), '-lc'];
   if (q.platform === 'darwin') return ['/bin/zsh', '-lc'];
   const own = q.env.SHELL;
   const posix = own && path.isAbsolute(own) && ['bash', 'zsh', 'sh', 'dash', 'ksh'].includes(path.basename(own));

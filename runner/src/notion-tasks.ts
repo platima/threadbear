@@ -15,6 +15,7 @@ import path from 'node:path';
 import type { Logger } from './log.ts';
 import type { ProjectTask, ProjectTasks, TaskColumn } from './protocol.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
+import { plainShell } from './system-tools.ts';
 
 // How often a board is read when nobody's asking. Opening the project page
 // asks again once it's older than FRESH_MS.
@@ -81,7 +82,8 @@ function signInLine(text: string): string | undefined {
 export function helperHeaders(command: string): () => Promise<Record<string, string>> {
   return () =>
     new Promise((resolve, reject) => {
-      execFile('/bin/sh', ['-c', command], { timeout: 10_000 }, (err, stdout) => {
+      const [sh, ...shArgs] = plainShell();
+      execFile(sh, [...shArgs, command], { timeout: 10_000 }, (err, stdout) => {
         if (err) return reject(new Error('the connectors headers helper failed'));
         try {
           const h = JSON.parse(stdout) as Record<string, unknown>;

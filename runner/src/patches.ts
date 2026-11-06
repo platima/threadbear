@@ -53,6 +53,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
 import { loginShell } from './system-tools.ts';
+import { killGroup } from './proc.ts';
+import { IS_WINDOWS } from './platform.ts';
 import type { Action, Hook, ImageRef, Panel, PanelItem, PatchInfo } from './protocol.ts';
 import { LIMITS } from './protocol.ts';
 import { imageRefFor } from './media.ts';
@@ -1124,7 +1126,7 @@ export function runCommand(
     };
     let child;
     try {
-      child = spawn(bin, [...args, command], { cwd: opts.cwd, env: opts.env as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      child = spawn(bin, [...args, command], { cwd: opts.cwd, env: (IS_WINDOWS ? { ...opts.env, CHERE_INVOKING: '1' } : opts.env) as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'], detached: !IS_WINDOWS });
     } catch (e) {
       resolve({ ok: false, text: String((e as Error).message ?? e), truncated: false, durationMs: Date.now() - started });
       return;
@@ -1134,11 +1136,7 @@ export function runCommand(
     const timer = setTimeout(() => {
       timedOut = true;
       // The whole process group: a shell's children too.
-      try {
-        process.kill(-child.pid!, 'SIGTERM');
-      } catch {
-        child.kill('SIGTERM');
-      }
+      if (!killGroup(child.pid!, 'SIGTERM')) child.kill('SIGTERM');
     }, timeoutMs);
     child.stdout.on('data', take);
     child.stderr.on('data', take);

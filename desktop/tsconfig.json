@@ -9,8 +9,8 @@
     "noEmit": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "isolatedModules": true
   },
-  "include": ["src", "spikes", "vite.config.ts"]
+  "include": ["src", "spikes", "bridge", "vite.config.ts", "../runner/src/protocol.ts", "../runner/src/platform.ts", "../web/src/sections.ts", "../web/src/turns.ts", "../web/src/format.ts"]
 }
