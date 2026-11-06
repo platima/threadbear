@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { mdComponents } from '../thread/mdComponents.tsx';
 import type { PageDef, PageProps } from '../registry.ts';
 import type { AppStore } from '../../core/store.ts';
 import type { Project, ProjectLink, ProjectTask, ProjectTasks, ThreadSummary } from '../../core/types.ts';
@@ -308,7 +309,7 @@ function TextBlock({ title, value, empty, tip, rows, onSave }: { title: string; 
         </div>
       ) : value.trim() ? (
         <div className="md pj-view">
-          <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}</a> }}>
+          <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>
             {value}
           </Markdown>
         </div>

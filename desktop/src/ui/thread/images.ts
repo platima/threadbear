@@ -48,8 +48,12 @@ function load(store: AppStore, ref: ImageRef, e: Entry): Promise<void> {
   e.loading = store
     .readFile(ref.path)
     .then(async (r) => {
-      // The blob is made from a data URL: the browser decodes the base64 itself.
-      const blob = await (await fetch(`data:${ref.mediaType || r.mediaType};base64,${r.data}`)).blob();
+      // Decoded here rather than by fetching a data: URL, which the page's
+      // content security policy (connect-src, bridge/bridge.ts) does not allow.
+      const raw = atob(r.data);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      const blob = new Blob([bytes], { type: ref.mediaType || r.mediaType });
       e.url = URL.createObjectURL(blob);
       e.bytes = blob.size;
       e.error = undefined;

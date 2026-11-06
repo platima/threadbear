@@ -154,3 +154,13 @@ kbd { font: 12px var(--mono); background: var(--bg-raised); border: 1px solid va
 .tour h3 { margin: 2px 0 6px; font-size: 15px; }
 .tour p { margin: 0 0 10px; color: var(--dim); }
 .tour .btns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* A link the shell couldn't open: the address, to copy (core/native.ts). */
+.linkNotice { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; max-width: min(720px, calc(100vw - 40px)); background: var(--bg); border: 1px solid var(--warn); border-radius: 10px; padding: 8px 12px; z-index: 60; box-shadow: 0 8px 30px #0006; font-size: 13px; }
+.linkNotice input { flex: 1; min-width: 200px; font-family: var(--mono); }
+
+/* A small spinner for a button that is waiting on the runner. */
+.spin { display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px; border: 2px solid var(--dim); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.acts .spin { margin: 0; }
+.md-img { color: var(--dim); font-style: italic; border: 1px dashed var(--line); border-radius: 4px; padding: 0 5px; }

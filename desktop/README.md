@@ -17,7 +17,16 @@ the reasons are in `docs/windows-port-plan.md`.
   copies, not here.
 - `bridge/bridge.ts`: a loopback server that serves the built UI and passes
   its WebSocket on to the runner, doing the token handshake itself so the page
-  never holds the token. The Tauri shell (to come) does the same job in Rust.
+  never holds the token. It also sets the page's content security policy
+  (nothing is loaded from outside the bridge except the update check's call to
+  api.github.com, so a picture in an agent's Markdown is never fetched; the
+  page draws its description instead). The settings it reads from the
+  environment are listed at the top of the file.
+- `src-tauri/`: the Tauri shell. It starts the bridge, opens the window on it,
+  keeps a tray icon, shows toasts, picks folders and opens links in the browser
+  (what the page may ask of it is in `capabilities/default.json`). Start-up
+  problems (no Node, a bridge that does not come up) are shown in a window
+  rather than ending silently.
 
 ## Pages and panes
 
@@ -48,6 +57,24 @@ schedules; it won't have every method, so a page must show a plain error and
 carry on when the runner says `-32601`.
 
 Type checks: `npx tsc --noEmit -p .`
+
+Tests: `npm test` runs the logic tests in `src/` and the bridge tests in
+`bridge/`, which start the real bridge on free ports with a throwaway data
+folder and a stand-in runner. Nothing touches the real runner or its folder.
+
+## The window's address
+
+The window keeps its saved state (theme, sidebar width, the update check's off
+switch, the tour being done) under the address it is served from, so the shell
+gives the bridge the same port every launch: one in 50000 to 59999 taken from the
+user name, or `THREADBEAR_DESKTOP_PORT` (`0` for any free port, which also means
+nothing is kept between runs and the daily check never runs). If that port is busy the bridge uses another for
+that run, the saved state is not there for it, and the daily update check waits
+for the next start instead of overruling a choice it cannot see.
+
+To use the vite dev server (`npm run dev`, port 5183) with a bridge started by
+hand, start the bridge with `THREADBEAR_BRIDGE_DEV=1`; otherwise that origin is
+not trusted.
 
 ## Style
 

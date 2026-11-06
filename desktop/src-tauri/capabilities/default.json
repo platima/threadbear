@@ -1,13 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The window's own page, served by the local bridge on loopback. It may pick a folder, show a notification and open a link in the browser, and nothing else.",
+  "description": "The window's own page, served by the local bridge on loopback. It may pick a folder, show a notification and open a web or mail link in the browser, and nothing else.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [
     "core:default",
     "dialog:allow-open",
     "notification:default",
-    "opener:allow-open-url"
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }, { "url": "mailto:*" }]
+    }
   ]
 }

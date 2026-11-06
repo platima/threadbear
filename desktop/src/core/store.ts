@@ -3,6 +3,7 @@
 // useSyncExternalStore. Every change makes a new snapshot object.
 
 import { RpcClient, RpcError, bridgeKey, type ConnState } from './rpc.ts';
+import { APP_VERSION } from './version.ts';
 import { notifyTransition } from './native.ts';
 import { TranscriptModel, type Streaming } from './model.ts';
 import type { Account, AnyEvent, ApprovalDecision, AskAnswer, DesignReview, EffortLevel, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, ReviewDraft, ThreadSummary } from './types.ts';
@@ -27,6 +28,7 @@ export type Snapshot = {
   selected?: string;
   loading: boolean;
   version: number; // the open thread's transcript
+  loadingEarlier: boolean; // older messages are on their way
   notices: Notice[];
 };
 
@@ -34,12 +36,23 @@ export class AppStore {
   readonly model = new TranscriptModel();
   private events: PersistedEvent[] = [];
   private listeners = new Set<() => void>();
-  private snap: Snapshot = { conn: 'closed', accounts: [], pools: [], threads: new Map(), archivedLoaded: false, loading: false, version: 0, notices: [] };
+  private snap: Snapshot = { conn: 'closed', accounts: [], pools: [], threads: new Map(), archivedLoaded: false, loading: false, version: 0, loadingEarlier: false, notices: [] };
   private subscribed?: string;
   private firstSeq = 0;
+  private earlierToken = 0;
   hasEarlier = false;
 
-  constructor(readonly rpc: RpcClient) {
+  readonly rpc: RpcClient;
+
+  constructor(rpc: RpcClient) {
+    this.rpc = rpc;
+    // The connection counts as open once the runner has answered hello (see
+    // RpcClient), so the banner and the retry delay follow the runner, not just
+    // the bridge's socket.
+    rpc.handshake = async (call) => {
+      const hello = await call<HelloResult>('hello', { client: 'threadbear-desktop', version: APP_VERSION });
+      this.set({ hello, accounts: hello.accounts, pools: hello.pools ?? [] });
+    };
     rpc.onState((s, why) => {
       this.set({ conn: s, connWhy: why });
       if (s === 'open') void this.onOpen();
@@ -56,7 +69,14 @@ export class AppStore {
     });
     rpc.on('accounts.updated', (p: { accounts: Account[] }) => this.set({ accounts: p.accounts }));
     rpc.on('pools.updated', (p: { pools: Pool[] }) => this.set({ pools: p.pools }));
-    rpc.on('runner.notice', (p: Notice) => this.set({ notices: [...this.snap.notices.slice(-4), p] }));
+    rpc.on('runner.notice', (p: Notice) => this.notify(p.level, p.message));
+  }
+
+  // A line in the banner. The same one twice in a row is shown once.
+  notify(level: Notice['level'], message: string): void {
+    const last = this.snap.notices.at(-1);
+    if (last && last.level === level && last.message === message) return;
+    this.set({ notices: [...this.snap.notices.slice(-4), { level, message }] });
   }
 
   subscribe = (l: () => void): (() => void) => {
@@ -82,8 +102,6 @@ export class AppStore {
 
   private async onOpen(): Promise<void> {
     try {
-      const hello = await this.rpc.request<HelloResult>('hello', { client: 'threadbear-desktop', version: '0.0.0' });
-      this.set({ hello, accounts: hello.accounts, pools: hello.pools ?? [] });
       const { threads } = await this.rpc.request<{ threads: ThreadSummary[] }>('threads.list', { include: ['inbox', 'snoozed'] });
       const map = new Map<string, ThreadSummary>();
       for (const t of threads) map.set(t.id, t);
@@ -92,7 +110,8 @@ export class AppStore {
       this.set({ threads: map });
       if (this.snap.selected) await this.open(this.snap.selected, true);
     } catch (e) {
-      this.set({ notices: [...this.snap.notices.slice(-4), { level: 'error', message: String((e as Error).message) }] });
+      // The connection closing under this is already said by the banner.
+      if (this.snap.conn === 'open') this.notify('error', errorText(e));
     }
   }
 
@@ -120,7 +139,8 @@ export class AppStore {
     this.events = [];
     this.model.reset();
     this.subscribed = undefined;
-    this.set({ selected: threadId, loading: true });
+    this.earlierToken++;
+    this.set({ selected: threadId, loading: true, loadingEarlier: false });
     try {
       const page = await this.rpc.request<{ events: PersistedEvent[]; firstSeq: number; lastSeq: number; inProgress: Streaming[] }>('threads.events', { threadId });
       if (this.snap.selected !== threadId) return;
@@ -138,7 +158,10 @@ export class AppStore {
       const t = this.snap.threads.get(threadId);
       if (t && t.lastSeq > t.lastSeenSeq) void this.rpc.request('threads.markSeen', { threadId, seq: t.lastSeq }).catch(() => {});
     } catch (e) {
-      if (this.snap.selected === threadId) this.set({ loading: false, notices: [...this.snap.notices.slice(-4), { level: 'error', message: String((e as Error).message) }] });
+      if (this.snap.selected === threadId) {
+        this.set({ loading: false });
+        this.notify('error', errorText(e));
+      }
     }
   }
 
@@ -149,7 +172,8 @@ export class AppStore {
     this.subscribed = undefined;
     this.events = [];
     this.model.reset();
-    this.set({ selected: undefined, loading: false });
+    this.earlierToken++;
+    this.set({ selected: undefined, loading: false, loadingEarlier: false });
   }
 
   private applyLive(e: AnyEvent, quiet = false): void {
@@ -162,16 +186,30 @@ export class AppStore {
     if (!quiet) this.bump();
   }
 
+  // Older messages, a page at a time. One request at a time: a second click
+  // while one is out would fetch the same page again and double its rows. The
+  // reply being written right now and the pending reviews are kept as they are.
   async loadEarlier(): Promise<void> {
     const threadId = this.snap.selected;
-    if (!threadId || !this.hasEarlier) return;
-    const page = await this.rpc.request<{ events: PersistedEvent[]; firstSeq: number }>('threads.events', { threadId, beforeSeq: this.firstSeq });
-    if (this.snap.selected !== threadId) return;
-    this.events = [...page.events, ...this.events];
-    this.firstSeq = page.firstSeq;
-    this.hasEarlier = page.events.length > 0 && page.firstSeq > 1;
-    this.model.build(this.events);
-    this.bump();
+    if (!threadId || !this.hasEarlier || this.snap.loadingEarlier) return;
+    const token = ++this.earlierToken;
+    this.set({ loadingEarlier: true });
+    try {
+      const page = await this.rpc.request<{ events: PersistedEvent[]; firstSeq: number }>('threads.events', { threadId, beforeSeq: this.firstSeq });
+      if (token !== this.earlierToken || this.snap.selected !== threadId) return;
+      const older = page.events.filter((e) => e.seq < this.firstSeq);
+      this.events = [...older, ...this.events];
+      this.firstSeq = page.firstSeq;
+      this.hasEarlier = older.length > 0 && page.firstSeq > 1;
+      const streaming = [...this.model.streaming.values()].map((s) => ({ ...s }));
+      const reviews = [...this.model.reviews.values()];
+      this.model.build(this.events, streaming);
+      for (const r of reviews) this.model.mergeReview(r);
+    } catch (e) {
+      if (token === this.earlierToken) this.notify('error', errorText(e));
+    } finally {
+      if (token === this.earlierToken) this.set({ loadingEarlier: false });
+    }
   }
 
   // ---- actions ------------------------------------------------------------

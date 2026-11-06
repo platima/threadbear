@@ -21,7 +21,23 @@ export class RpcError extends Error {
   }
 }
 
-type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
+type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; timer?: ReturnType<typeof setTimeout> };
+
+// What the page does as soon as the carrier is up, before anything else may
+// use it: say hello. A connection counts as open (and the retry delay starts
+// over) only once this has gone through, since the bridge accepts the page's
+// socket before it knows whether the runner is there at all.
+export type Handshake = (call: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>) => Promise<void>;
+
+export type RpcOptions = {
+  /** The wait before the first retry, doubling up to maxRetryMs. */
+  retryMs?: number;
+  maxRetryMs?: number;
+  /** How long a request may wait for its answer before it fails. */
+  requestMs?: number;
+  /** How long the handshake may take. */
+  handshakeMs?: number;
+};
 
 export class RpcClient {
   private transport?: Transport;
@@ -29,12 +45,27 @@ export class RpcClient {
   private pending = new Map<number, Pending>();
   private handlers = new Map<string, Set<(params: any) => void>>();
   private stateListeners = new Set<(s: ConnState, why?: string) => void>();
-  private retry = 500;
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = false;
+  private failure?: string;
+  private readonly firstRetry: number;
+  private readonly maxRetry: number;
+  private readonly requestMs: number;
+  private readonly handshakeMs: number;
+  private retry: number;
+  handshake?: Handshake;
   state: ConnState = 'closed';
 
-  constructor(private connect: () => Transport) {}
+  private readonly connect: () => Transport;
+
+  constructor(connect: () => Transport, opts: RpcOptions = {}) {
+    this.connect = connect;
+    this.firstRetry = opts.retryMs ?? 500;
+    this.maxRetry = opts.maxRetryMs ?? 5000;
+    this.requestMs = opts.requestMs ?? 90_000;
+    this.handshakeMs = opts.handshakeMs ?? 15_000;
+    this.retry = this.firstRetry;
+  }
 
   start(): void {
     this.stopped = false;
@@ -57,21 +88,54 @@ export class RpcClient {
     const t = this.connect();
     this.transport = t;
     t.onopen = () => {
-      this.retry = 500;
-      this.setState('open');
+      const shake = this.handshake;
+      if (!shake) {
+        this.opened();
+        return;
+      }
+      const call = <T = unknown>(method: string, params: Record<string, unknown> = {}) => this.send<T>(t, method, params);
+      const give = setTimeout(() => this.refuse(t, "The runner didn't answer."), this.handshakeMs);
+      shake(call).then(
+        () => {
+          clearTimeout(give);
+          if (this.transport === t) this.opened();
+        },
+        (e: unknown) => {
+          clearTimeout(give);
+          this.refuse(t, (e as Error)?.message || 'The runner turned the connection down.');
+        },
+      );
     };
     t.onmessage = (text) => this.receive(text);
     t.onclose = (why) => {
       if (this.transport !== t) return;
       this.transport = undefined;
-      for (const p of this.pending.values()) p.reject(new RpcError(-1, 'The connection to the runner closed.'));
+      const reason = this.failure ?? why;
+      this.failure = undefined;
+      for (const p of this.pending.values()) {
+        clearTimeout(p.timer);
+        p.reject(new RpcError(-1, 'The connection to the runner closed.'));
+      }
       this.pending.clear();
-      this.setState('closed', why);
+      this.setState('closed', reason);
       if (!this.stopped) {
         this.timer = setTimeout(() => this.open(), this.retry);
-        this.retry = Math.min(this.retry * 2, 5000);
+        this.retry = Math.min(this.retry * 2, this.maxRetry);
       }
     };
+  }
+
+  private opened(): void {
+    this.retry = this.firstRetry;
+    this.setState('open');
+  }
+
+  // The handshake failed: end this connection, and let the close be the one
+  // way back to trying again (with the delay growing), saying why.
+  private refuse(t: Transport, why: string): void {
+    if (this.transport !== t) return;
+    this.failure ??= why;
+    t.close();
   }
 
   private receive(text: string): void {
@@ -84,6 +148,7 @@ export class RpcClient {
     if (m.id !== undefined && !m.method) {
       const p = this.pending.get(m.id);
       if (!p) return;
+      clearTimeout(p.timer);
       this.pending.delete(m.id);
       if (m.error) p.reject(new RpcError(m.error.code, m.error.message));
       else p.resolve(m.result);
@@ -94,10 +159,26 @@ export class RpcClient {
 
   request<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     if (this.state !== 'open' || !this.transport) return Promise.reject(new RpcError(-1, 'Not connected to the runner.'));
+    return this.send<T>(this.transport, method, params);
+  }
+
+  // A request that fails after a while rather than waiting for ever on a
+  // runner that has stopped answering (a button waiting on it would never come back).
+  private send<T>(t: Transport, method: string, params: Record<string, unknown>): Promise<T> {
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.transport!.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new RpcError(-2, 'The runner took too long to answer.'));
+      }, this.requestMs);
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
+      try {
+        t.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+      } catch (e) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(new RpcError(-1, (e as Error)?.message || 'The connection to the runner closed.'));
+      }
     });
   }
 

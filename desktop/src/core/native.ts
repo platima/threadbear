@@ -45,14 +45,57 @@ export function notifyTransition(before: ThreadSummary, after: ThreadSummary): v
   else if (busy(before) && (after.status === 'error' || after.status === 'stopped')) void toast(`${title} stopped`, preview);
 }
 
+// A link the shell could not open: say so, with the address in a box the
+// person can copy it from. Drawn by hand rather than by React so it works
+// wherever the failure happens (a link in a Markdown message, the rail).
+function showLinkNotice(href: string): void {
+  document.getElementById('linkNotice')?.remove();
+  const box = document.createElement('div');
+  box.id = 'linkNotice';
+  box.className = 'linkNotice';
+  box.setAttribute('role', 'alert');
+  const text = document.createElement('span');
+  text.textContent = "Couldn't open that link. You can copy the address:";
+  const address = document.createElement('input');
+  address.readOnly = true;
+  address.value = href;
+  address.title = 'The address. Select it and copy it into your browser.';
+  address.setAttribute('aria-label', 'Link address');
+  const close = document.createElement('button');
+  close.textContent = 'Close';
+  close.title = 'Close this notice';
+  close.addEventListener('click', () => box.remove());
+  box.append(text, address, close);
+  document.body.append(box);
+  address.focus();
+  address.select();
+  setTimeout(() => box.remove(), 30_000);
+}
+
+// Opens an address in the default browser, through the shell. When that fails
+// (the shell turned it down, or there is no browser) the person is shown the
+// address instead of nothing happening. Gives back whether it opened.
+// `call` and `failed` are the shell's channel and the notice; the tests pass their own.
+export async function openExternal(href: string, using: { call?: Invoke | null; failed?: (href: string, why: string) => void } = {}): Promise<boolean> {
+  const call = using.call === undefined ? invoke() : using.call;
+  if (!call) return false;
+  try {
+    await call('plugin:opener|open_url', { url: href });
+    return true;
+  } catch (e) {
+    (using.failed ?? showLinkNotice)(href, typeof e === 'string' ? e : ((e as Error)?.message ?? 'unknown'));
+    return false;
+  }
+}
+
 // In the shell a link must open in the browser, not inside the app's window.
 export function openLinksOutside(): void {
   if (!isNative()) return;
   document.addEventListener('click', (e) => {
     const a = (e.target as Element | null)?.closest?.('a[href]');
     const href = a?.getAttribute('href');
-    if (!a || !href || !/^https?:\/\//i.test(href) || href.startsWith(location.origin)) return;
+    if (!a || !href || !/^(https?:\/\/|mailto:)/i.test(href) || href.startsWith(location.origin)) return;
     e.preventDefault();
-    void invoke()?.('plugin:opener|open_url', { url: href });
+    void openExternal(href);
   });
 }

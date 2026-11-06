@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { AppStore, Snapshot } from '../core/store.ts';
+import { errorText, type AppStore, type Snapshot } from '../core/store.ts';
 import { toRow, type SummaryRow } from '../core/adapt.ts';
 import { INITIAL_FOLDED, SECTIONS, archiveShown, archived as sortArchived, build, hibernating, isSnoozed, neighbour, readFolded, readOrder, shows, NO_FILTER, placesOf, ARCHIVE_FIRST, ARCHIVE_STEP, type InboxOrder, type SectionKey } from '../../../web/src/sections.ts';
 import { ago, plain } from '../../../web/src/format.ts';
@@ -69,7 +69,7 @@ export function Sidebar({ store, snap }: { store: AppStore; snap: Snapshot }) {
   return (
     <aside className="side" onKeyDown={onKey}>
       <div className="side-top">
-        <input placeholder="Search" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input placeholder="Search" title="Search the threads in the list. Ctrl+K comes here." aria-label="Search threads" value={query} onChange={(e) => setQuery(e.target.value)} />
         <button title="New thread (Ctrl+N)" onClick={() => store.deselect()}>
           New
         </button>
@@ -81,7 +81,7 @@ export function Sidebar({ store, snap }: { store: AppStore; snap: Snapshot }) {
           const open = !folded.has(key) || (narrowing && rows.length > 0);
           return (
             <section key={key}>
-              <div className="section-head" onClick={() => toggle(key)}>
+              <div className="section-head" title={open ? `Hide the ${TITLES[key].toLowerCase()} threads` : `Show the ${TITLES[key].toLowerCase()} threads`} onClick={() => toggle(key)}>
                 <span>{open ? '▾' : '▸'}</span>
                 <span>{TITLES[key]}</span>
                 <span className="count">{key === 'archived' && !snap.archivedLoaded ? '' : lists[key].length || ''}</span>
@@ -89,7 +89,7 @@ export function Sidebar({ store, snap }: { store: AppStore; snap: Snapshot }) {
               {open && rows.map((r) => <ThreadRowView key={r.threadId} row={r} selected={snap.selected === r.threadId} store={store} />)}
               {open && key === 'archived' && archive.more > 0 && (
                 <div className="loadmore">
-                  <button className="ghost" onClick={() => setArchiveLimit(archiveLimit + ARCHIVE_STEP)}>
+                  <button className="ghost" title="Show more archived threads" onClick={() => setArchiveLimit(archiveLimit + ARCHIVE_STEP)}>
                     {archive.more} more
                   </button>
                 </div>
@@ -105,6 +105,23 @@ export function Sidebar({ store, snap }: { store: AppStore; snap: Snapshot }) {
 
 function ThreadRowView({ row, selected, store }: { row: SummaryRow; selected: boolean; store: AppStore }) {
   const s = row.summary;
+  // One change at a time: the buttons wait, with a spinner, until the runner has
+  // answered, and a refusal is said in the banner.
+  const [pending, setPending] = useState<'star' | 'archive'>();
+  const change = async (which: 'star' | 'archive') => {
+    if (pending) return;
+    // What the thread is now, not what this row was drawn with.
+    const now = store.getSnapshot().threads.get(row.threadId) ?? s;
+    const patch = which === 'star' ? { starred: !now.starredAt } : now.archivedAt ? { archived: false } : { archived: true, archivedBy: 'mike' };
+    setPending(which);
+    try {
+      await store.update(row.threadId, patch);
+    } catch (e) {
+      store.notify('error', errorText(e));
+    } finally {
+      setPending(undefined);
+    }
+  };
   const broken = s.status === 'error' || s.status === 'stopped';
   const dot = s.status === 'running' || s.status === 'starting' ? 'running' : s.status === 'waiting' || s.needsYou ? 'needs' : broken ? 'broken' : row.unread ? 'unread' : '';
   return (
@@ -118,11 +135,11 @@ function ThreadRowView({ row, selected, store }: { row: SummaryRow; selected: bo
         <div className="tsub">{plain(row.preview) || placesOf(row)[0]}</div>
       </div>
       <div className="acts" onClick={(e) => e.stopPropagation()}>
-        <button title={s.starredAt ? 'Unstar' : 'Star'} onClick={() => void store.update(row.threadId, { starred: !s.starredAt })}>
-          {s.starredAt ? '★' : '☆'}
+        <button title={pending === 'star' ? 'Waiting for the runner' : s.starredAt ? 'Unstar' : 'Star'} disabled={!!pending} aria-busy={pending === 'star'} onClick={() => void change('star')}>
+          {pending === 'star' ? <span className="spin" aria-hidden="true" /> : s.starredAt ? '★' : '☆'}
         </button>
-        <button title={s.archivedAt ? 'Bring back' : 'Archive'} onClick={() => void store.update(row.threadId, s.archivedAt ? { archived: false } : { archived: true, archivedBy: 'mike' })}>
-          {s.archivedAt ? '↩' : '▣'}
+        <button title={pending === 'archive' ? 'Waiting for the runner' : s.archivedAt ? 'Bring back' : 'Archive'} disabled={!!pending} aria-busy={pending === 'archive'} onClick={() => void change('archive')}>
+          {pending === 'archive' ? <span className="spin" aria-hidden="true" /> : s.archivedAt ? '↩\uFE0E' : '▣'}
         </button>
       </div>
     </div>

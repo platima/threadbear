@@ -22,10 +22,31 @@ export type Available = { version: string; page: string; download?: string };
 
 type Release = { tag_name?: string; html_url?: string; prerelease?: boolean; draft?: boolean; assets?: { name?: string; browser_download_url?: string }[] };
 
+// A semantic version, whole: 1.2.3, optionally with -pre.release and +build,
+// and a leading v. Anything else ("1.2.3garbage", "1.2") is not a version.
 const parse = (v: string) => {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(v.trim());
-  return m ? { n: [Number(m[1]), Number(m[2]), Number(m[3])] as const, pre: m[4] } : undefined;
+  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(v.trim());
+  return m ? { n: [Number(m[1]), Number(m[2]), Number(m[3])] as const, pre: m[4] ? m[4].split('.') : [] } : undefined;
 };
+
+// Pre-release parts as semver.org rules them (section 11): numbers by value,
+// and below words; words by their letters; a shorter run is older.
+function comparePre(a: string[], b: string[]): number {
+  if (!a.length || !b.length) return a.length === b.length ? 0 : a.length ? -1 : 1; // a release is newer than its pre-releases
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const xn = /^\d+$/.test(x);
+    const yn = /^\d+$/.test(y);
+    if (xn && yn) {
+      if (Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1;
+    } else if (xn !== yn) return xn ? -1 : 1;
+    else if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
 
 // Semantic versions: numbers first, and a pre-release is older than its release.
 export function isNewer(candidate: string, current: string): boolean {
@@ -33,43 +54,74 @@ export function isNewer(candidate: string, current: string): boolean {
   const b = parse(current);
   if (!a || !b) return false;
   for (let i = 0; i < 3; i++) if (a.n[i] !== b.n[i]) return a.n[i]! > b.n[i]!;
-  if (a.pre === b.pre) return false;
-  if (!a.pre) return true;
-  if (!b.pre) return false;
-  return a.pre > b.pre;
+  return comparePre(a.pre, b.pre) > 0;
+}
+
+// An address from GitHub's answer that this app will show or open: https, on
+// github.com itself (no other host, no sign-in part, no port), under this
+// repository's releases. The answer is data from the network, and the rail and
+// Settings turn it into links, so anything else is dropped.
+export function releaseUrl(raw: unknown, repo: string = REPO): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== 'https:' || u.hostname !== 'github.com' || u.username || u.password || u.port) return undefined;
+  if (!u.pathname.toLowerCase().startsWith(`/${repo.toLowerCase()}/releases/`)) return undefined;
+  return u.href;
 }
 
 export function pick(release: Release, current: string, arch: Arch): Available | undefined {
   const tag = release.tag_name ?? '';
-  if (release.draft || release.prerelease || !isNewer(tag, current) || !release.html_url) return undefined;
+  if (release.draft || release.prerelease || !isNewer(tag, current)) return undefined;
+  const page = releaseUrl(release.html_url);
+  if (!page) return undefined;
   const wanted = SUFFIX[arch].toLowerCase();
   const asset = release.assets?.find((a) => (a.name ?? '').toLowerCase().endsWith(wanted));
-  return { version: tag.replace(/^v/, ''), page: release.html_url, ...(asset?.browser_download_url ? { download: asset.browser_download_url } : {}) };
+  const download = releaseUrl(asset?.browser_download_url);
+  return { version: tag.replace(/^v/, ''), page, ...(download ? { download } : {}) };
 }
 
 type Storage = { getItem(k: string): string | null; setItem(k: string, v: string): void };
 const KEY = 'threadbear.update';
 const OFF_KEY = 'threadbear.updateCheck';
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
+// Whether the daily check may run by itself. On until someone turns it off,
+// but a setting that can't be read at all counts as off: the person may have
+// turned it off, and the check is the one thing here that contacts a server.
 export const updateCheckOn = (store: Storage): boolean => {
   try {
     return store.getItem(OFF_KEY) !== 'off';
   } catch {
-    return true;
+    return false;
   }
 };
-export function setUpdateCheck(store: Storage, on: boolean): void {
+// Gives back whether the choice stuck (storage can be blocked or full).
+export function setUpdateCheck(store: Storage, on: boolean): boolean {
   try {
     store.setItem(OFF_KEY, on ? 'on' : 'off');
+    return store.getItem(OFF_KEY) === (on ? 'on' : 'off');
   } catch {
-    // not kept
+    return false;
   }
 }
 
+// How long to leave it after a check: a day, and after failures an hour,
+// two, four and so on up to a day, so a PC that can't reach GitHub does not try
+// on every start.
+const waitAfter = (fails: number): number => (fails > 0 ? Math.min(DAY_MS, HOUR_MS * 2 ** (fails - 1)) : DAY_MS);
+
+type Kept = { at: number; found?: Available; fails?: number };
+
 // The newer release, if there is one. Asks GitHub when it last asked more than
 // a day ago (or `force`), else answers from the last answer. Any failure is
-// "no update": a check that can't reach GitHub should never be a message.
+// "no update": a check that can't reach GitHub should never be a message. A
+// failed try is remembered too, and the next one waits longer.
 export async function checkForUpdate(opts: {
   current: string;
   arch: Arch;
@@ -80,19 +132,28 @@ export async function checkForUpdate(opts: {
 }): Promise<Available | undefined> {
   const now = opts.now ?? Date.now();
   if (!opts.force && !updateCheckOn(opts.store)) return undefined;
+  let kept: Kept | null = null;
   try {
-    const kept = JSON.parse(opts.store.getItem(KEY) ?? 'null') as { at: number; found?: Available } | null;
-    if (!opts.force && kept && now - kept.at < DAY_MS) return kept.found && isNewer(kept.found.version, opts.current) ? kept.found : undefined;
+    kept = JSON.parse(opts.store.getItem(KEY) ?? 'null') as Kept | null;
+    if (kept && (typeof kept.at !== 'number' || (kept.found && !releaseUrl(kept.found.page)))) kept = null;
   } catch {
-    // unreadable: ask again
+    kept = null; // unreadable: ask again
   }
+  const stillNewer = (f?: Available) => (f && isNewer(f.version, opts.current) ? f : undefined);
+  if (!opts.force && kept && now - kept.at < waitAfter(kept.fails ?? 0)) return stillNewer(kept.found);
   let found: Available | undefined;
   try {
     const res = await opts.fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
-    if (!res.ok) return undefined;
+    if (!res.ok) throw new Error('not ok');
     found = pick((await res.json()) as Release, opts.current, opts.arch);
   } catch {
-    return undefined;
+    try {
+      const next: Kept = { at: now, fails: (kept?.fails ?? 0) + 1, ...(kept?.found ? { found: kept.found } : {}) };
+      opts.store.setItem(KEY, JSON.stringify(next));
+    } catch {
+      // not kept
+    }
+    return stillNewer(kept?.found);
   }
   try {
     opts.store.setItem(KEY, JSON.stringify({ at: now, ...(found ? { found } : {}) }));

@@ -15,6 +15,8 @@ type Draft = { text: string; atts: Att[] };
 
 const MAX_PICTURE = 20 * 1024 * 1024;
 let attSeq = 0;
+// Which draft a send belongs to: a thread's id, or this for the new thread page.
+const NEW_THREAD = 'new thread page';
 
 export function Composer({ store, snap, busy = false }: { store: AppStore; snap: Snapshot; busy?: boolean }) {
   const [text, setText] = useState('');
@@ -24,7 +26,10 @@ export function Composer({ store, snap, busy = false }: { store: AppStore; snap:
   const [model, setModel] = useState<string>();
   const [effort, setEffort] = useState<EffortLevel>();
   const [mode, setMode] = useState<PermissionMode>('ask');
-  const [sending, setSending] = useState(false);
+  // The drafts being sent just now. A send belongs to the thread it started
+  // in: moving to another thread meanwhile neither locks that one nor lets the
+  // answer to the first change it.
+  const [sendingKeys, setSendingKeys] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string>();
   const [dragging, setDragging] = useState(false);
   const [answered, setAnswered] = useState<string>();
@@ -35,6 +40,7 @@ export function Composer({ store, snap, busy = false }: { store: AppStore; snap:
   const t = existing ? snap.threads.get(existing) : undefined;
   const defaults = snap.hello?.defaults;
   const online = snap.conn === 'open';
+  const sending = sendingKeys.has(existing ?? NEW_THREAD);
 
   // Each thread keeps its own draft, words and pictures, until it is sent.
   const drafts = useRef(new Map<string | undefined, Draft>());
@@ -157,23 +163,39 @@ export function Composer({ store, snap, busy = false }: { store: AppStore; snap:
     if (!canSend) return;
     const ready = atts.flatMap((a) => (a.ref ? [a.ref] : []));
     const body = picked.length ? answerMessage(t!.asks!.length, picked, typed) : typed;
-    setSending(true);
+    const key = existing ?? NEW_THREAD;
+    const sentFrom = asksKey;
+    const mine = atts;
+    const setBusy = (on: boolean) =>
+      setSendingKeys((keys) => {
+        const next = new Set(keys);
+        if (on) next.add(key);
+        else next.delete(key);
+        return next;
+      });
+    // Still looking at the thread it was sent from? (A new thread is opened by
+    // the send itself, so for that one the page has already moved on.)
+    const here = () => was.current === existing;
+    setBusy(true);
     setError(undefined);
     try {
       if (existing) await store.send(existing, body, ready, picked.map(({ action, answer }) => ({ action, answer })));
       else await store.create(body, { cwd: cwd.trim() || defaults?.cwd, accountId: accountId || undefined, model, effort, permissionMode: mode, images: ready });
-      for (const a of atts) URL.revokeObjectURL(a.preview);
-      setText('');
-      setAtts([]);
+      for (const a of mine) URL.revokeObjectURL(a.preview);
       drafts.current.delete(existing);
-      if (picked.length) {
-        setAnswered(asksKey);
-        asksApi.clear();
+      if (here()) {
+        setText('');
+        setAtts([]);
+        if (picked.length) {
+          setAnswered(sentFrom);
+          asksApi.clear();
+        }
       }
     } catch (e) {
-      setError(errorText(e));
+      if (here()) setError(errorText(e));
+      else store.notify('error', errorText(e));
     } finally {
-      setSending(false);
+      setBusy(false);
     }
   };
 

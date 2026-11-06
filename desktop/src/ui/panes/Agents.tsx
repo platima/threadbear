@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { mdComponents } from '../thread/mdComponents.tsx';
 import type { PaneDef, PaneProps } from '../registry.ts';
 import type { AppStore } from '../../core/store.ts';
 import type { BackgroundTask, PersistedEvent, Subagent, ThreadSummary } from '../../core/types.ts';
@@ -179,7 +180,7 @@ function Events({ events }: { events: PersistedEvent[] }) {
           case 'assistant.text':
             return (
               <div key={e.seq} className="md ag-text">
-                <Markdown remarkPlugins={plugins} components={{ a: (p) => <a {...p} target="_blank" rel="noopener noreferrer" /> }}>
+                <Markdown remarkPlugins={plugins} components={mdComponents}>
                   {e.text}
                 </Markdown>
               </div>

@@ -4,10 +4,11 @@
 // dist-<id>, and the bridge to the mock runner. Prints the page's address
 // when it's ready and runs until stopped (it stops its own children).
 //
-//   node scripts/dev-stack.mjs --id a            ports 18811 and 5191
+//   node scripts/dev-stack.mjs --id a            ports 18820 and 5200
 //   node scripts/dev-stack.mjs --id b --real HOME PORT   bridge to a real or dev runner instead
 //
-// --id is a letter or number; each id gets its own ports (18810+n, 5190+n).
+// --id is a letter or number, read in base 36 as n (a is 10, b is 11, 0 to 9
+// are themselves); each id gets its own ports (18810+n, 5190+n).
 
 import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';

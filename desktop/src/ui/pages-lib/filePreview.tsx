@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { mdComponents } from '../thread/mdComponents.tsx';
 import type { AppStore } from '../../core/store.ts';
 import { baseName } from './pathStyle.ts';
 import { errorText, formatSize, saveCopy, useRunnerFile, type LoadedFile } from './runnerFiles.ts';
@@ -24,7 +25,7 @@ export function Chev({ open }: { open: boolean }) {
 function Rendered({ text }: { text: string }) {
   return (
     <div className="md fp-md">
-      <Markdown remarkPlugins={plugins} components={{ a: (p) => <a {...p} target="_blank" rel="noopener noreferrer" /> }}>
+      <Markdown remarkPlugins={plugins} components={mdComponents}>
         {text}
       </Markdown>
     </div>

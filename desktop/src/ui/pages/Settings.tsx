@@ -44,5 +44,5 @@ function SettingsPage({ store, snap }: PageProps) {
   );
 }
 
-const page: PageDef = { id: 'settings', title: 'Settings', icon: '⚙', order: 100, Main: SettingsPage };
+const page: PageDef = { id: 'settings', title: 'Settings', icon: '⚙\uFE0E', order: 100, Main: SettingsPage };
 export default page;

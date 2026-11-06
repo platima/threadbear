@@ -42,12 +42,12 @@ export function Rail({ route, go, conn, help }: { route: string; go: (route: str
       ))}
       <span className="grow" />
       {update && (
-        <a className="ghost railUpdate" href={update.page} title={`Version ${update.version} is out. Open its page in your browser.`} aria-label={`Version ${update.version} is out`}>
-          ⬆
+        <a className="ghost railUpdate" href={update.page} target="_blank" rel="noopener noreferrer" title={`Version ${update.version} is out. Open its page in your browser.`} aria-label={`Version ${update.version} is out`}>
+          {'⬆\uFE0E'}
         </a>
       )}
       <button className="ghost" title={`Appearance: ${theme}. Click to change.`} aria-label="Appearance" onClick={cycle}>
-        {theme === 'dark' ? '☾' : theme === 'light' ? '☀' : '◐'}
+        {theme === 'dark' ? '☾' : theme === 'light' ? '☀\uFE0E' : '◐'}
       </button>
       <button className="ghost" title="Keyboard shortcuts" aria-label="Keyboard shortcuts" onClick={help}>
         ?

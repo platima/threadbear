@@ -87,7 +87,10 @@ export function Transcript({ store, snap }: { store: AppStore; snap: Snapshot })
             <div key={vi.key} data-index={vi.index} ref={v.measureElement} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}>
               {e.earlier ? (
                 <div className="loadmore">
-                  <button onClick={() => void store.loadEarlier()}>Load earlier messages</button>
+                  <button disabled={snap.loadingEarlier} title={snap.loadingEarlier ? 'Loading earlier messages' : 'Load the messages before these'} onClick={() => void store.loadEarlier()}>
+                    {snap.loadingEarlier && <span className="spin" aria-hidden="true" />}
+                    {snap.loadingEarlier ? 'Loading...' : 'Load earlier messages'}
+                  </button>
                 </div>
               ) : e.stream ? (
                 <div className="row stream">{e.stream.reasoning ? <div className="note">{e.stream.text}</div> : <Md text={e.stream.text} />}</div>
