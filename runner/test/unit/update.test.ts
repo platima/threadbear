@@ -10,7 +10,7 @@ import { nullLogger } from '../../src/log.ts';
 import { cloneArgs, CHECK_INTERVAL_MS, FIRST_CHECK_MS, SOON_MS, RunnerUpdater, launcherDiffers, launchAgentBehind, launcherSourcesHash, appOfExecutable, updateDir, watchMainRef, decideUpdate, failedAlready, releaseTreeAt, syncClone, updateFilePath, type UpdateDeps } from '../../src/update.ts';
 import type { ReleaseJson } from '../../src/release.ts';
 import { patiently } from '../helpers/patience.ts';
-import { IS_WINDOWS, SHELL, shPath } from '../helpers/platform.ts';
+import { IS_WINDOWS, SHELL, shPath, skipOnWindows } from '../helpers/platform.ts';
 import { linkDir } from '../../src/platform.ts';
 
 const running = { id: 'r1', tree: 'a+b+c+d' };
@@ -418,7 +418,7 @@ test('launcherDiffers: only when both files are there and differ', () => {
   assert.equal(launcherDiffers(a, b), true);
 });
 
-test('launcherSourcesHash matches what build-launcher.sh records', () => {
+test('launcherSourcesHash matches what build-launcher.sh records', skipOnWindows("build-launcher.sh builds the Mac launcher app and hashes with shasum, which Git Bash has on some installs (this machine's) and not on others (GitHub's runner image)"), () => {
   const launcher = path.join(import.meta.dirname, '..', '..', 'launcher');
   // On Windows the product's own bash (Git Bash): a bare "bash" may be WSL's.
   const r = spawnSync(IS_WINDOWS ? SHELL[0] : 'bash', [shPath(path.join(launcher, 'build-launcher.sh')), '--hash'], { encoding: 'utf8' });
