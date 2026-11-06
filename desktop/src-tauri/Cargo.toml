@@ -1,0 +1,27 @@
+[package]
+name = "threadbear-desktop"
+version = "0.1.0"
+description = "Threadbear for Windows: a window, a tray icon and notifications around the desktop UI"
+edition = "2021"
+
+[lib]
+name = "threadbear_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

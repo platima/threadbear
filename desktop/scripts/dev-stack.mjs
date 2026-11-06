@@ -9,6 +9,7 @@
 //
 // --id is a letter or number; each id gets its own ports (18810+n, 5190+n).
 
+import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -25,6 +26,7 @@ const runnerPort = 18810 + n;
 const bridgePort = 5190 + n;
 const work = fs.mkdtempSync(path.join(os.tmpdir(), `tb-desktop-${id}-`));
 const kids = [];
+const key = crypto.randomBytes(18).toString('base64url');
 
 const run = (cmd, args, options = {}) => {
   const child = spawn(cmd, args, { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, ...options });
@@ -46,9 +48,9 @@ if (real) {
 const dist = path.join(desktop, `dist-${id}`);
 execFileSync(process.execPath, [path.join(desktop, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', '--outDir', dist], { cwd: desktop, stdio: 'ignore', windowsHide: true });
 run(process.execPath, [path.join(desktop, 'bridge', 'bridge.ts')], {
-  env: { ...process.env, THREADBEAR_HOME: home, THREADBEAR_PORT: String(port), THREADBEAR_BRIDGE_PORT: String(bridgePort), THREADBEAR_DIST: dist },
+  env: { ...process.env, THREADBEAR_BRIDGE_KEY: key, THREADBEAR_HOME: home, THREADBEAR_PORT: String(port), THREADBEAR_BRIDGE_PORT: String(bridgePort), THREADBEAR_DIST: dist },
 });
-setTimeout(() => console.log(`READY http://127.0.0.1:${bridgePort}/  (runner ${port}, data ${home})`), 1500);
+setTimeout(() => console.log(`READY http://127.0.0.1:${bridgePort}/#key=${key}  (runner ${port}, data ${home})`), 1500);
 
 const stop = () => {
   for (const k of kids) k.kill();

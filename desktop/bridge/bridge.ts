@@ -7,8 +7,12 @@
 //   node bridge/bridge.ts                 serves dist/ on 127.0.0.1:5185
 //   THREADBEAR_HOME=... THREADBEAR_PORT=... node bridge/bridge.ts
 //
-// Loopback only. A web page on any other origin must not be able to open
-// the pipe to the runner, so the upgrade checks Origin and Host.
+// Loopback only, and with a key. A web page on any other origin must not be
+// able to open the pipe to the runner, so the upgrade checks Origin and Host;
+// and since any program on this PC can reach a loopback port (and Origin is
+// only a browser's word), every WebSocket and upload also needs this launch's
+// key, which is in the address printed at start (after the #) or passed in by
+// the app that started the bridge (THREADBEAR_BRIDGE_KEY).
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -21,7 +25,15 @@ import { dataDirFor } from '../../runner/src/platform.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.resolve(process.env.THREADBEAR_DIST || path.join(here, '..', 'dist'));
-const BRIDGE_PORT = Number(process.env.THREADBEAR_BRIDGE_PORT || 5185);
+// 0 asks the system for a free port.
+let BRIDGE_PORT = Number(process.env.THREADBEAR_BRIDGE_PORT ?? 5185);
+const KEY = process.env.THREADBEAR_BRIDGE_KEY || crypto.randomBytes(24).toString('base64url');
+function keyOk(given: string | string[] | null | undefined): boolean {
+  if (typeof given !== 'string') return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(KEY);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 const home = path.resolve(process.env.THREADBEAR_HOME || process.env.THREADBEAR_DATA_DIR || dataDirFor());
 
 function runnerPort(): number {
@@ -40,7 +52,7 @@ const hmac = (token: string, text: string) => crypto.createHmac('sha256', token)
 
 // The origins this page may be served from: the bridge itself, and the vite
 // dev server beside it.
-const ALLOWED_PORTS = new Set([BRIDGE_PORT, 5183]);
+const ALLOWED_PORTS = new Set([5183]);
 const ALLOWED_HOSTS = new Set(['127.0.0.1', 'localhost']);
 function allowed(origin: string | undefined, host: string | undefined): boolean {
   try {
@@ -100,7 +112,7 @@ function upload(req: http.IncomingMessage, res: http.ServerResponse, pathname: s
   const del = /^\/upload\/([0-9a-f]{32})$/.exec(pathname);
   if (pathname !== '/upload' && !del) return false;
   const reply = (code: number, body = '', type = 'text/plain; charset=utf-8') => res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', connection: 'close' }).end(body);
-  if (!allowed(req.headers.origin, req.headers.host)) {
+  if (!allowed(req.headers.origin, req.headers.host) || !keyOk(req.headers['x-threadbear-key'])) {
     reply(403, 'not allowed');
     return true;
   }
@@ -182,7 +194,8 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
 
 server.on('upgrade', (req, socket, head) => {
-  if (new URL(req.url ?? '/', 'http://x').pathname !== '/bridge' || !allowed(req.headers.origin, req.headers.host)) {
+  const u = new URL(req.url ?? '/', 'http://x');
+  if (u.pathname !== '/bridge' || !allowed(req.headers.origin, req.headers.host) || !keyOk(u.searchParams.get('k'))) {
     socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
     socket.destroy();
     return;
@@ -254,5 +267,10 @@ function pipe(ui: WebSocket): void {
 }
 
 server.listen(BRIDGE_PORT, '127.0.0.1', () => {
-  console.log(`threadbear desktop bridge on http://127.0.0.1:${BRIDGE_PORT} -> runner port ${runnerPort()}, data ${home} (${os.platform()})`);
+  BRIDGE_PORT = (server.address() as { port: number }).port;
+  ALLOWED_PORTS.add(BRIDGE_PORT);
+  console.log(`threadbear desktop bridge -> runner port ${runnerPort()}, data ${home} (${os.platform()})`);
+  // The address to open: the key is after the #, which a browser never sends
+  // to a server. The page keeps it and wipes it from the address bar.
+  console.log(`READY http://127.0.0.1:${BRIDGE_PORT}/#key=${KEY}`);
 });

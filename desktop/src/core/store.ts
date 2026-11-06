@@ -2,7 +2,8 @@
 // transcript. A plain store with subscribe/getSnapshot, read in React with
 // useSyncExternalStore. Every change makes a new snapshot object.
 
-import { RpcClient, RpcError, type ConnState } from './rpc.ts';
+import { RpcClient, RpcError, bridgeKey, type ConnState } from './rpc.ts';
+import { notifyTransition } from './native.ts';
 import { TranscriptModel, type Streaming } from './model.ts';
 import type { Account, AnyEvent, ApprovalDecision, AskAnswer, DesignReview, EffortLevel, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, ReviewDraft, ThreadSummary } from './types.ts';
 
@@ -97,8 +98,10 @@ export class AppStore {
 
   private upsert(t: ThreadSummary): void {
     const threads = new Map(this.snap.threads);
+    const before = threads.get(t.id);
     threads.set(t.id, t);
     this.set({ threads });
+    if (before) notifyTransition(before, t);
   }
 
   async loadArchived(): Promise<void> {
@@ -252,7 +255,8 @@ export class AppStore {
   // temp file the runner can reach (POST /upload), the runner imports it
   // (media.import) and the temp file is removed again.
   async importImage(file: Blob): Promise<ImageRef> {
-    const up = await fetch('upload', { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
+    const key = bridgeKey();
+    const up = await fetch('upload', { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream', 'x-threadbear-key': key }, body: file });
     if (up.status === 404) throw new Error("This build can't take pictures yet.");
     if (!up.ok) throw new Error((await up.text().catch(() => '')) || `The picture wasn't accepted (${up.status}).`);
     const { id, path } = (await up.json()) as { id: string; path: string };
@@ -260,7 +264,7 @@ export class AppStore {
       const { image } = await this.rpc.request<{ image: ImageRef }>('media.import', { path });
       return image;
     } finally {
-      void fetch(`upload/${id}`, { method: 'DELETE' }).catch(() => {});
+      void fetch(`upload/${id}`, { method: 'DELETE', headers: { 'x-threadbear-key': key } }).catch(() => {});
     }
   }
 

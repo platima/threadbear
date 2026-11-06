@@ -115,7 +115,23 @@ export class RpcClient {
 }
 
 // In a browser: the bridge's WebSocket, on the page's own origin.
-export function bridgeTransport(url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/bridge`): Transport {
+// The key this launch's bridge wants comes in the address's #key=..., is kept
+// for this tab and wiped from the address bar.
+const KEY_STORE = 'threadbear.bridgeKey';
+export function bridgeKey(): string {
+  const m = /(?:^|[#&])key=([\w-]+)/.exec(location.hash);
+  try {
+    if (m) {
+      sessionStorage.setItem(KEY_STORE, m[1]!);
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+    return sessionStorage.getItem(KEY_STORE) ?? m?.[1] ?? '';
+  } catch {
+    return m?.[1] ?? '';
+  }
+}
+
+export function bridgeTransport(url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/bridge?k=${encodeURIComponent(bridgeKey())}`): Transport {
   const ws = new WebSocket(url);
   const t: Transport = {
     send: (text) => ws.send(text),

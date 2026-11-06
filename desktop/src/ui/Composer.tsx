@@ -6,6 +6,7 @@ import { ReviewCard } from './thread/ReviewCard.tsx';
 import { EffortMenu, ModeMenu, ModelMenu } from './thread/Controls.tsx';
 import { answerMessage, dropMarker, insertMarker } from './thread/text.ts';
 import './thread/thread.css';
+import { isNative, pickFolder } from '../core/native.ts';
 
 // A picture on its way into the next message. Its number is its place in the
 // list, which is what the [Picture N] marker in the text means.
@@ -277,6 +278,14 @@ export function Composer({ store, snap, busy = false }: { store: AppStore; snap:
           {!existing && (
             <>
               <input title="The folder it works in" placeholder={defaults?.cwd ?? 'Folder'} value={cwd} onChange={(e) => setCwd(e.target.value)} style={{ flex: 1, minWidth: 160 }} />
+              {isNative() && (
+                <button
+                  title="Choose the folder in a window"
+                  onClick={() => void pickFolder(cwd.trim() || defaults?.cwd).then((p) => p && setCwd(p))}
+                >
+                  Browse
+                </button>
+              )}
               <select
                 title="Which login it uses"
                 value={accountId}
