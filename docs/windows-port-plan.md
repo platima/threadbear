@@ -352,6 +352,13 @@ are reported and come off the list as M1 fixes them.
   actions and checks), `scripts/install-windows.mjs` and `windows-run.mjs` (a
   logon task and its supervisor; dry-run and XML checked, not registered on this
   machine), and a `tb.cmd` shim. Codex is left alone on Windows.
+- Unit tests: all 97 files run on Windows, 1,539 tests, 1,383 pass, none fail,
+  156 skip with a reason (Codex, the Mac-only features, process groups, lsof
+  handovers, the symlinked `current` release); the known-failing list is empty.
+  The tests found real bugs, fixed in the runner: git paths in native form,
+  drive paths in reply Markdown, `~/rest` always with forward slashes, a `:`
+  joined PATH in `restart.ts`, and a CRLF update clone. Checked on Windows
+  only: macOS and Linux changes were read, not run.
 - Not done, by choice: runner releases, handovers and following `main` (the
   runner runs from the checkout), the Job Object helper (`taskkill /T` stands in,
   so a tool command that outlives a crashed CLI isn't caught), the idle check,
