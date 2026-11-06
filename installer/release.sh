@@ -5,8 +5,12 @@
 #
 # Checks the version, the changelog entry and the checks, then creates the tag
 # and pushes it. GitHub Actions (release.yml) does the rest: it builds, signs,
-# validates and publishes. To rehearse first, with nothing published:
-#   gh workflow run release.yml --ref main -f version=v0.1.0
+# validates and publishes. The same checks run again there, so a tag pushed by
+# hand does not get past them either. To rehearse first, with nothing
+# published and no signing, from the branch you mean to tag:
+#   gh workflow run release.yml --ref <branch> -f version=v0.1.0
+# (add -f sign=true to sign the rehearsal too). GitHub only offers the
+# rehearsal once release.yml is on the repository's default branch.
 #
 # Tag one release at a time and wait for its run to finish before the next:
 # several tags pushed together make several runs fight over the same runners.
@@ -31,11 +35,13 @@ fi
 
 VERSION=$1
 
-# Semantic version, with an optional pre-release (v0.2.0-rc1). Build metadata
-# (+build) is left out: it is not allowed in a Windows Installer version.
-if ! [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
-    print_error "Invalid semantic version format: $VERSION"
-    echo "Expected format: v1.2.3 or v1.2.3-rc1"
+# Strict semantic version, with an optional pre-release (v0.2.0-rc.1). Build
+# metadata (+build) is left out: it is not allowed in a Windows Installer
+# version. desktop/scripts/version.mjs holds the one pattern, so this, the
+# release workflow and the packaging script cannot disagree about it.
+if [[ $VERSION != v* ]] || ! node desktop/scripts/version.mjs --valid "${VERSION#v}"; then
+    print_error "Invalid semantic version: $VERSION"
+    echo "Expected format: v1.2.3 or v1.2.3-rc.1"
     exit 1
 fi
 
@@ -61,6 +67,10 @@ if git rev-parse "$VERSION" >/dev/null 2>&1; then
     print_error "Tag $VERSION already exists"
     exit 1
 fi
+if [ -n "$(git ls-remote --tags origin "refs/tags/$VERSION")" ]; then
+    print_error "Tag $VERSION already exists on origin. A published tag is never moved: pick the next version."
+    exit 1
+fi
 
 print_status "Checking the version numbers..."
 node desktop/scripts/version.mjs --check || {
@@ -73,16 +83,17 @@ if [ "v$BUILT" != "$VERSION" ]; then
     exit 1
 fi
 
+# release-notes.sh --check says what is wrong. A pre-release (v0.2.0-rc.1) is
+# checked against its version's entry (## [0.2.0]), which may still say
+# Unreleased; a final release's heading must carry its date. The release
+# workflow runs the same check, for tags that skip this script.
 print_status "Checking desktop/CHANGELOG.md has highlights for $VERSION..."
-sh installer/release-notes.sh "$VERSION" >/dev/null || {
-    print_error "Add a '## [${VERSION#v}]' entry with a '### ✨ Highlights' list to desktop/CHANGELOG.md"
+BASE=${VERSION#v}
+BASE=${BASE%%-*}
+sh installer/release-notes.sh --check "$VERSION" || {
+    print_error "Fix desktop/CHANGELOG.md: a '## [$BASE]' entry with a '### ✨ Highlights' list, and a date in its heading for a final release"
     exit 1
 }
-
-if grep -q "^## \[${VERSION#v}\].*Unreleased" desktop/CHANGELOG.md; then
-    print_error "desktop/CHANGELOG.md still says Unreleased for ${VERSION#v}. Put the release date in its heading."
-    exit 1
-fi
 
 print_status "Running the checks..."
 (cd runner && npm run typecheck) || { print_error "The runner's typecheck failed"; exit 1; }
@@ -90,9 +101,18 @@ print_status "Running the checks..."
 
 print_status "Creating and pushing tag..."
 git tag -a "$VERSION" -m "Threadbear for Windows $VERSION"
-git push origin "$VERSION"
+# If the push fails, take the local tag back out: a stray tag makes the next
+# attempt say "already exists" for a release that was never made.
+if ! git push origin "$VERSION"; then
+    git tag -d "$VERSION" >/dev/null
+    print_error "Could not push $VERSION to origin, so the local tag is removed again. Nothing was released."
+    exit 1
+fi
 
 print_status "Tag $VERSION created and pushed."
-print_status "GitHub Actions will now build and publish the release."
+print_status "GitHub Actions will now build the release, check it, and publish it only once every file is there."
 print_status "Check the progress at: https://github.com/$(git config --get remote.origin.url | sed -E 's#.*github.com[:/]##; s#\.git$##')/actions"
-print_status "The release will have the setup exe, MSI and portable zip for x64 and arm64, with SHA-256 files."
+print_status "The release will have the setup exe, MSI and portable zip for x64 and arm64, a SHA-256 file for each, and CHECKSUMS.txt."
+case $VERSION in
+*-*) print_status "It is a pre-release: GitHub will mark it so, and the app's update check will not offer it." ;;
+esac

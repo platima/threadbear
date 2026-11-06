@@ -2,10 +2,29 @@ name: Installers
 
 # Builds the Windows deliverables on hosted Windows runners: the Inno Setup EXE,
 # the WiX MSI and the portable zip, once for x64 and once for arm64 (Windows on
-# Arm). Each architecture builds on its own runner at the same time. Runs
-# standalone via workflow_dispatch for testing - a dry run that publishes
-# nothing - or is called from release.yml with a release tag to attach the
-# files.
+# Arm). It only ever produces workflow artifacts. It never touches a GitHub
+# release: release.yml downloads the artifacts of every architecture, checks the
+# whole set, and only then creates and publishes the release, so a failed
+# architecture can never leave a half-published release behind.
+#
+# Three jobs per architecture, split so that nothing which runs a dependency's
+# install script can reach the signing identity:
+#
+#   stage          unprivileged (contents: read, no environment, no OIDC token).
+#                  Installs the UI's packages, compiles the shell, and has
+#                  installer/stage.ps1 assemble the unsigned tree: npm ci, cargo
+#                  build scripts and the runner's production packages all run
+#                  here and only here. Uploads the tree as an artifact.
+#   package        unprivileged too. Builds the three packages from that tree,
+#                  unsigned. Used by pull requests, branch builds and dry runs.
+#   package-signed the only job with the signing identity (the "release"
+#                  environment and an OIDC token). Downloads the staged tree
+#                  and runs installer/build-installers.ps1 -FromStage on it: no
+#                  npm, no cargo. Used by tag releases, and by a manual run
+#                  that asks for sign.
+#
+# A pull request or a push to main that touches the packaging builds the x64
+# packages unsigned, so a broken installer is caught before a release does.
 #
 # The shell (desktop/src-tauri) is compiled natively for x64 and cross-compiled
 # for arm64 (the runner has the MSVC arm64 tools). The runner's packages are
@@ -13,12 +32,11 @@ name: Installers
 # checksum-verified download (installer/node.json), so an arm64 package is
 # built entirely on x64.
 #
-# Code signing (Azure Artifact Signing, formerly Trusted Signing) switches on
-# when ALL six repository variables below are set, and is skipped entirely
-# otherwise - so a release still ships, unsigned, until the Azure side exists.
-# Nothing secret is stored: the runner authenticates to Azure with a federated
-# (OIDC) credential on the app registration, bound to the "release" GitHub
-# environment, and the certificates are issued per signature.
+# Code signing (Azure Artifact Signing, formerly Trusted Signing) happens only
+# when the caller asks for it (sign: true) AND all six repository variables
+# below are set. Nothing secret is stored: the runner authenticates to Azure
+# with a federated (OIDC) credential on the app registration, bound to the
+# "release" GitHub environment, and the certificates are issued per signature.
 #
 #   AZURE_TRUSTED_SIGNING_ENDPOINT   e.g. https://eus.codesigning.azure.net
 #   AZURE_TRUSTED_SIGNING_ACCOUNT    the Artifact Signing account name
@@ -27,12 +45,28 @@ name: Installers
 #                                    the app registration granted
 #                                    "Artifact Signing Certificate Profile Signer"
 #
-# One optional variable, THREADBEAR_PUBLISHER, is the name on the installers and
-# in Add/Remove Programs (default: Platima). It should match the certificate
-# profile's subject name.
+# They must be repository (or organisation) VARIABLES: not secrets, and not
+# variables on the "release" environment, which the planning job cannot see.
+# Some but not all six, on a run that asked for signing, fails the run, rather
+# than quietly shipping unsigned. With none of them set the packages are
+# unsigned and the run says so, unless the repository variable REQUIRE_SIGNING
+# is "true", which makes an unsigned release an error.
+#
+# Optional: THREADBEAR_PUBLISHER, the name on the installers and in Add/Remove
+# Programs (default: Platima). It should match the certificate profile's
+# subject name.
+#
+# Restrict the "release" environment (Settings > Environments > release >
+# Deployment branches and tags) to the main branch and the tag pattern v*, so
+# that nothing else, however it gets here, can sign.
 
 on:
   workflow_dispatch:
+    inputs:
+      sign:
+        description: "Sign the packages with the Azure identity (needs the release environment and the AZURE_* variables)"
+        type: boolean
+        default: false
   push:
     # main only: work-in-progress branches would otherwise build installers on
     # every push that touches these folders. Tag pushes build via release.yml;
@@ -40,40 +74,148 @@ on:
     branches: [main]
     paths:
       - "installer/**"
-      - "desktop/**"
+      - "desktop/src-tauri/**"
+      - "desktop/bridge/**"
+      - "desktop/package.json"
+      - "desktop/package-lock.json"
+      - "runner/package.json"
+      - "runner/package-lock.json"
       - ".github/workflows/installers.yml"
+      - ".github/workflows/release.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "installer/**"
+      - "desktop/src-tauri/**"
+      - "desktop/bridge/**"
+      - "desktop/package.json"
+      - "desktop/package-lock.json"
+      - "runner/package.json"
+      - "runner/package-lock.json"
+      - ".github/workflows/installers.yml"
+      - ".github/workflows/release.yml"
   workflow_call:
     inputs:
-      release_tag:
-        description: "Release tag to upload the packages to (empty = artifacts only)"
-        type: string
+      sign:
+        description: "Sign the packages with the Azure identity"
+        type: boolean
         required: false
-        default: ""
+        default: false
+    outputs:
+      signed:
+        description: "true when the packages were signed, false when they were not"
+        value: ${{ jobs.plan.outputs.sign }}
 
 permissions:
-  contents: write
-  id-token: write   # OIDC token for azure/login; harmless when signing is off
+  contents: read
+
+# Release builds queue behind an earlier run of the same ref instead of
+# cancelling it; only an updated pull request cancels its own older run. The
+# group name is its own (release.yml has another), because a group shared by a
+# caller and a called workflow deadlocks.
+concurrency:
+  group: installers-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build-installers:
+  # What this run does, decided once and early: the version, which
+  # architectures, and whether it signs (failing at once, before an hour of
+  # building, if signing was asked for and is not set up properly).
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      archs: ${{ steps.plan.outputs.archs }}
+      sign: ${{ steps.plan.outputs.sign }}
+      reason: ${{ steps.plan.outputs.reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: plan
+        env:
+          WANT_SIGN: ${{ inputs.sign && 'true' || 'false' }}
+          EVENT: ${{ github.event_name }}
+          REQUIRE_SIGNING: ${{ vars.REQUIRE_SIGNING }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -eu
+          node desktop/scripts/version.mjs --check
+          version=$(node desktop/scripts/version.mjs --print)
+
+          # A pull request checks the x64 packages; everything else builds both
+          if [ "$EVENT" = pull_request ]; then archs='["x64"]'; else archs='["x64","arm64"]'; fi
+
+          missing=""
+          for name in AZURE_TRUSTED_SIGNING_ENDPOINT AZURE_TRUSTED_SIGNING_ACCOUNT AZURE_TRUSTED_SIGNING_PROFILE AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+            value=$(printenv "$name" | tr -d '[:space:]' || true)
+            [ -n "$value" ] || missing="$missing $name"
+          done
+          n_missing=$(echo $missing | wc -w)
+          help="Set all six as repository VARIABLES (Settings > Secrets and variables > Actions > Variables): not secrets, and not variables on the release environment."
+
+          # Half set up is only a warning on a run that does not sign; on one that
+          # does, it is the error below
+          if [ "$n_missing" -gt 0 ] && [ "$n_missing" -lt 6 ] && [ "$WANT_SIGN" != true ]; then
+            echo "::warning::Signing is half set up. Not set:$missing. $help"
+          fi
+
+          if [ "$WANT_SIGN" != true ]; then
+            sign=false
+            reason="signing was not asked for in this run ($EVENT)"
+          elif [ "$n_missing" -eq 0 ]; then
+            sign=true
+            reason="signed with Azure Artifact Signing"
+          elif [ "$n_missing" -lt 6 ]; then
+            echo "::error::This run signs, but these variables are not set:$missing. $help"
+            exit 1
+          elif [ "$REQUIRE_SIGNING" = true ]; then
+            echo "::error::REQUIRE_SIGNING is true, but none of the six AZURE_* variables is set, so this release would be unsigned. $help"
+            exit 1
+          else
+            sign=false
+            reason="none of the AZURE_* repository variables is set"
+            echo "::warning::These packages will be UNSIGNED: $reason. Set REQUIRE_SIGNING to true to make that an error."
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "archs=$archs" >> "$GITHUB_OUTPUT"
+          echo "sign=$sign" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Installers"
+            echo
+            echo "Version $version, architectures $archs, signing: $sign ($reason)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  stage:
+    name: stage (${{ matrix.arch }})
+    needs: plan
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read   # and nothing else: this job runs dependencies' install and build scripts
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64, arm64]
-    runs-on: windows-latest
-    # The app registration's federated credential is bound to this GitHub
-    # environment (subject repo:<owner>/<repo>:environment:release), which is
-    # matched on every ref - a Tag credential would have to name each tag
-    environment: release
-    env:
-      SIGNING: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && vars.AZURE_TRUSTED_SIGNING_ACCOUNT != '' && vars.AZURE_TRUSTED_SIGNING_PROFILE != '' && vars.AZURE_CLIENT_ID != '' && vars.AZURE_TENANT_ID != '' && vars.AZURE_SUBSCRIPTION_ID != '' }}
-      THREADBEAR_PUBLISHER: ${{ vars.THREADBEAR_PUBLISHER }}
+        arch: ${{ fromJSON(needs.plan.outputs.archs) }}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 24
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24   # what the Windows app ships (installer/node.json)
 
       - name: Add the arm64 Rust target
         if: matrix.arch == 'arm64'
@@ -85,12 +227,14 @@ jobs:
         working-directory: desktop
         run: |
           npm ci
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
           npm run build
+          if ($LASTEXITCODE -ne 0) { throw "the UI build failed" }
 
       - name: Build the shell (Threadbear.exe)
         shell: pwsh
         working-directory: desktop
-        # --no-bundle: the installers below are made by installer/, not Tauri's
+        # --no-bundle: the installers are made by installer/, not Tauri's
         # bundler. The windows workflow has already checked Cargo.lock (cargo
         # check --locked).
         run: |
@@ -98,63 +242,196 @@ jobs:
           npx tauri build --no-bundle @target
           if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
 
+      # The unsigned tree every package is made from (shell, Node, the runner
+      # and its production packages, the bridge, the UI, the guide). This is
+      # also where the runner's npm packages and the pinned Node are fetched.
+      - name: Stage the files to package
+        shell: pwsh
+        run: pwsh -NoProfile -File installer/build-installers.ps1 -Arch ${{ matrix.arch }} -StageOnly
+
+      - name: Upload the staged tree
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          overwrite: true   # a re-run of the same run replaces the earlier attempt's artifact
+          name: threadbear-stage-${{ matrix.arch }}
+          path: build/stage-${{ matrix.arch }}
+          if-no-files-found: error
+          include-hidden-files: true   # node_modules has dot-files; the tree must arrive as it was
+          retention-days: 1
+
+  # Unsigned packages: pull requests, branch builds, and release dry runs that
+  # do not ask for signing. No environment, no OIDC token.
+  package:
+    name: package (${{ matrix.arch }})
+    needs: [plan, stage]
+    if: needs.plan.outputs.sign != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.plan.outputs.archs) }}
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      THREADBEAR_PUBLISHER: ${{ vars.THREADBEAR_PUBLISHER }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: threadbear-stage-${{ matrix.arch }}
+          path: build/stage-${{ matrix.arch }}
+
       - name: Install WiX
         shell: pwsh
         # Pinned: the .wxs is authored/tested against WiX v6 (v7 has breaking changes)
         run: dotnet tool install --global wix --version 6.0.2
 
-      - name: Install Inno Setup
-        shell: pwsh
-        run: choco install innosetup --no-progress -y
-
-      - name: Verify packaging tools
+      # windows-latest ships Inno Setup 6, so nothing is installed here: a
+      # package fetched at build time would be unpinned code in the build.
+      - name: Check the packaging tools
         shell: pwsh
         run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
+                  Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "Inno Setup 6 (ISCC.exe) is not on this runner image. windows-latest normally has it; if it has been dropped, add a pinned, checksum-verified install step here." }
+          "Inno Setup $((Get-Item $iscc).VersionInfo.ProductVersion): $iscc"
           wix --version
           if ($LASTEXITCODE -ne 0) { throw "wix not on PATH" }
 
-      - name: Signing status
+      - name: Say that code signing is off
+        shell: pwsh
+        env:
+          REASON: ${{ needs.plan.outputs.reason }}
+        run: '"Code signing: OFF ($env:REASON)"'
+
+      - name: Build the packages from the staged files
         shell: pwsh
         run: |
-          if ($env:SIGNING -eq 'true') { "Code signing: ON (Azure Artifact Signing)" }
-          else { "Code signing: OFF - set the AZURE_* repository variables to enable it" }
+          $packArgs = @("-Arch", "${{ matrix.arch }}", "-FromStage", "build/stage-${{ matrix.arch }}", "-Version", $env:VERSION)
+          if ($env:THREADBEAR_PUBLISHER) { $packArgs += @("-Publisher", $env:THREADBEAR_PUBLISHER) }
+          pwsh -NoProfile -File installer/build-installers.ps1 @packArgs
+          if ($LASTEXITCODE -ne 0) { throw "build-installers.ps1 failed" }
 
-      - name: Sign in to Azure (OIDC, no stored secret)
-        if: env.SIGNING == 'true'
-        uses: azure/login@v2
+      - name: Check every deliverable is there
+        shell: pwsh
+        run: |
+          $missing = @()
+          foreach ($kind in "setup-win-${{ matrix.arch }}.exe", "msi-win-${{ matrix.arch }}.msi", "portable-win-${{ matrix.arch }}.zip") {
+            foreach ($ext in "", ".sha256") {
+              $name = "threadbear-v$env:VERSION-$kind$ext"
+              if (-not (Test-Path (Join-Path dist $name))) { $missing += $name }
+            }
+          }
+          Get-ChildItem dist | Format-Table Name, Length
+          if ($missing) { throw "Missing: $($missing -join ', ')" }
+
+      - name: Upload the packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          overwrite: true   # a re-run of the same run replaces the earlier attempt's artifact
+          name: threadbear-installers-${{ matrix.arch }}
+          path: |
+            dist/*.exe
+            dist/*.msi
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
+
+  # Signed packages: the only job that holds the signing identity. It runs the
+  # repository's own scripts on the staged tree and downloads nothing but the
+  # pinned signing client, so no dependency install script ever runs while the
+  # identity is reachable.
+  package-signed:
+    name: package, signed (${{ matrix.arch }})
+    needs: [plan, stage]
+    if: needs.plan.outputs.sign == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # The app registration's federated credential is bound to this GitHub
+    # environment (subject repo:<owner>/<repo>:environment:release), which is
+    # matched on every ref, whereas a Tag credential would have to name each tag.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token azure/login exchanges for an Azure session
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.plan.outputs.archs) }}
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      THREADBEAR_PUBLISHER: ${{ vars.THREADBEAR_PUBLISHER }}
+      # The signing client, pinned to one version and its SHA-512 (from the
+      # package's NuGet catalog entry). To move to another: change both, from
+      # https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/index.json
+      # and that version's catalog entry (packageHash, base64, converted to hex).
+      SIGNING_CLIENT_VERSION: 1.0.146
+      SIGNING_CLIENT_SHA512: fc6d211bf543212ea9b16db76f9b7557f3912209f43d500eb468fdc3e8643e602e238a5e9a97f0956e741361ad1ec727cfdfb9433de16c2e2671bede8f6627d4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: threadbear-stage-${{ matrix.arch }}
+          path: build/stage-${{ matrix.arch }}
+
+      # Tools come before the Azure login, so nothing is installed while a
+      # session exists.
+      - name: Install WiX
+        shell: pwsh
+        # Pinned: the .wxs is authored/tested against WiX v6 (v7 has breaking changes)
+        run: dotnet tool install --global wix --version 6.0.2
+
+      - name: Check the packaging tools
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
+                  Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "Inno Setup 6 (ISCC.exe) is not on this runner image. windows-latest normally has it; if it has been dropped, add a pinned, checksum-verified install step here." }
+          "Inno Setup $((Get-Item $iscc).VersionInfo.ProductVersion): $iscc"
+          wix --version
+          if ($LASTEXITCODE -ne 0) { throw "wix not on PATH" }
 
       - name: Prepare the signing command
-        if: env.SIGNING == 'true'
         shell: pwsh
         env:
           ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
           PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
         # One command that signs one file, for build-installers.ps1 -SignCmd:
-        # the Windows SDK's signtool with Microsoft's Trusted Signing dlib. The
+        # the Windows SDK's signtool with Microsoft's Artifact Signing dlib. The
         # dlib authenticates through DefaultAzureCredential, which azure/login
-        # above satisfies. The directory must contain no spaces: Inno Setup
+        # below satisfies. The directory must contain no spaces: Inno Setup
         # receives the same command for its uninstaller.
         run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
           $dir = Join-Path $env:RUNNER_TEMP "threadbearsign"
           New-Item -ItemType Directory -Force $dir | Out-Null
 
           # The service was renamed from Trusted Signing to Artifact Signing in
-          # 2026; the package followed, the DLL inside it did not
-          $zip = Join-Path $dir "client.zip"
-          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ArtifactSigning.Client" -OutFile $zip
+          # 2026; the package followed, the DLL inside it did not. Exactly one
+          # version, and its hash is checked before anything is unpacked.
+          $v = $env:SIGNING_CLIENT_VERSION
+          $zip = Join-Path $dir "client.zip"   # Expand-Archive only takes .zip
+          Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/$v/microsoft.artifactsigning.client.$v.nupkg" -OutFile $zip
+          $got = (Get-FileHash $zip -Algorithm SHA512).Hash
+          if ($got -ne $env:SIGNING_CLIENT_SHA512) { throw "Microsoft.ArtifactSigning.Client $v has SHA-512 $got, not the pinned $env:SIGNING_CLIENT_SHA512. Refusing to use it." }
+          "Artifact Signing client $v: SHA-512 matches the pinned value"
           Expand-Archive $zip (Join-Path $dir "client") -Force
           $dlib = Get-ChildItem (Join-Path $dir "client") -Recurse -Filter Azure.CodeSigning.Dlib.dll |
                   Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
           if (-not $dlib) { throw "Azure.CodeSigning.Dlib.dll (x64) not found in the Artifact Signing client package" }
-          $nuspec = Get-ChildItem (Join-Path $dir "client") -Filter *.nuspec | Select-Object -First 1
-          if ($nuspec) { "Artifact Signing client: " + ([xml](Get-Content $nuspec.FullName)).package.metadata.version }
+          $dlibSig = Get-AuthenticodeSignature $dlib.FullName
+          "dlib: $($dlib.FullName) (Authenticode $($dlibSig.Status), $($dlibSig.SignerCertificate.Subject))"
 
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
                       Where-Object { $_.FullName -match '\\x64\\' } |
@@ -176,9 +453,20 @@ jobs:
           ) | Set-Content $cmd -Encoding ascii
           "THREADBEAR_SIGN_CMD=$cmd" >> $env:GITHUB_ENV
 
-      - name: Build the packages
+      - name: Sign in to Azure (OIDC, no stored secret)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and sign the packages from the staged files
         shell: pwsh
-        run: pwsh -NoProfile -File installer/build-installers.ps1 -Arch ${{ matrix.arch }} -SignCmd "$env:THREADBEAR_SIGN_CMD"
+        run: |
+          $packArgs = @("-Arch", "${{ matrix.arch }}", "-FromStage", "build/stage-${{ matrix.arch }}", "-SignCmd", $env:THREADBEAR_SIGN_CMD, "-Version", $env:VERSION)
+          if ($env:THREADBEAR_PUBLISHER) { $packArgs += @("-Publisher", $env:THREADBEAR_PUBLISHER) }
+          pwsh -NoProfile -File installer/build-installers.ps1 @packArgs
+          if ($LASTEXITCODE -ne 0) { throw "build-installers.ps1 failed" }
 
       - name: Check every deliverable is there
         shell: pwsh
@@ -186,14 +474,14 @@ jobs:
           $missing = @()
           foreach ($kind in "setup-win-${{ matrix.arch }}.exe", "msi-win-${{ matrix.arch }}.msi", "portable-win-${{ matrix.arch }}.zip") {
             foreach ($ext in "", ".sha256") {
-              if (-not (Get-ChildItem dist -Filter "threadbear-v*-$kind$ext" -ErrorAction SilentlyContinue)) { $missing += "threadbear-v*-$kind$ext" }
+              $name = "threadbear-v$env:VERSION-$kind$ext"
+              if (-not (Test-Path (Join-Path dist $name))) { $missing += $name }
             }
           }
           Get-ChildItem dist | Format-Table Name, Length
           if ($missing) { throw "Missing: $($missing -join ', ')" }
 
       - name: Verify signatures
-        if: env.SIGNING == 'true'
         shell: pwsh
         run: |
           # The setup exe and MSI, and the Threadbear.exe inside the portable zip
@@ -208,23 +496,15 @@ jobs:
           }
           if ($failed) { throw "A deliverable is not validly signed" }
 
-      - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v7
+      - name: Upload the packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          overwrite: true   # a re-run of the same run replaces the earlier attempt's artifact
           name: threadbear-installers-${{ matrix.arch }}
           path: |
             dist/*.exe
             dist/*.msi
             dist/*.zip
             dist/*.sha256
-
-      - name: Upload to release
-        if: inputs.release_tag != ''
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ inputs.release_tag }}
-          files: |
-            dist/*.exe
-            dist/*.msi
-            dist/*.zip
-            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -4,220 +4,345 @@ name: Release
 # setup exe, MSI and portable zip for x64 and arm64, a SHA-256 for each, and a
 # CHECKSUMS.txt. Semantic versioning: the tag is v<version>, and <version> is
 # the one in desktop/package.json (installer/release.sh checks that before it
-# tags). A tag with a hyphen (v0.2.0-rc1) is a pre-release.
+# tags, and this workflow checks it again, for tags pushed by hand). A tag with
+# a hyphen (v0.2.0-rc.1) is a pre-release: GitHub marks it so, and releases/latest
+# (what the app's update check reads) never points at it.
+#
+# Nothing is public until every file exists and has been checked:
+#
+#   1. meta             the version, and the changelog entry for it
+#   2. ci-validation    the Windows tests (windows.yml)
+#   3. build-installers every architecture builds its packages into workflow
+#                       artifacts (installers.yml). Nothing touches a release.
+#   4. publish          after ALL of that succeeded: checks the whole set,
+#                       writes CHECKSUMS.txt from the final bytes, creates the
+#                       release as a DRAFT with every file, checks what GitHub
+#                       holds against the files, and only then makes it public.
+#
+# So one architecture failing leaves no release at all, rather than a public
+# one with half its files. A re-run of a tag whose release is already public
+# stops, and never replaces its files. (Creating the draft first and publishing
+# last is also the order GitHub's "immutable releases" setting needs, since an
+# immutable release cannot be changed once it is public.)
+#
+# Dry run: builds and validates every release asset exactly as a tag would, and
+# publishes nothing. No release, no attachments, no signing unless asked.
+# Run it before tagging, from the branch with the commit you mean to tag:
+#   gh workflow run release.yml --ref <branch> -f version=v0.1.0
+#   gh workflow run release.yml --ref <branch> -f version=v0.1.0 -f sign=true
+# The assets are left as workflow artifacts to download and try. GitHub only
+# offers workflow_dispatch for a workflow whose copy on the repository's
+# default branch declares it, so a dry run needs this file on that branch.
 
 on:
   push:
     tags:
-      - 'v*.*.*'  # Triggers on version tags like v0.1.0, v1.2.3-rc1, etc.
-  # Dry run: builds, signs and validates every release asset exactly as a tag
-  # would, and publishes nothing - no release, no attachments. Run it before
-  # tagging, from the commit you mean to tag:
-  #   gh workflow run release.yml --ref main -f version=v0.1.0
-  # The assets are left as workflow artifacts to download and try. (GitHub only
-  # offers workflow_dispatch for a workflow whose default-branch copy declares
-  # it, so this exists once this file is on main.)
+      - 'v*.*.*'  # Triggers on version tags like v0.1.0, v1.2.3-rc.1, etc.
   workflow_dispatch:
     inputs:
       version:
         description: "Version to rehearse, as its tag would be spelled (e.g. v0.1.0); must match desktop/package.json"
         type: string
         required: true
+      sign:
+        description: "Sign the rehearsal too (needs the release environment and the AZURE_* variables). Tags always sign when they can."
+        type: boolean
+        default: false
 
-# Creating the release and uploading assets needs write access; the default
-# GITHUB_TOKEN is read-only
+# Read-only unless a job says otherwise. Only publish writes (to create the
+# release), and only the signing job in installers.yml gets an OIDC token.
 permissions:
-  contents: write
-  id-token: write   # Passed through to installers.yml for Azure code signing
+  contents: read
+
+# One run per tag (or per dry-run version) at a time; a second waits for the
+# first instead of cancelling it. Tag one release at a time anyway: several
+# tags pushed together make several runs fight over the same runners.
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.version }}
+  cancel-in-progress: false
 
 jobs:
-  # Run the Windows CI first to ensure quality
+  # The Windows tests run first, and nothing is built if they fail.
   ci-validation:
     uses: ./.github/workflows/windows.yml
-    secrets: inherit
 
   # The version, and whether this run publishes (a tag push) or rehearses (a
-  # manual dry run). Every publishing job below is gated on `publish`. Either
-  # way the version has to be the one the app was built with.
+  # manual dry run). Either way the version has to be a valid one, the one the
+  # app was built with, and have a changelog entry: a tag pushed by hand skips
+  # installer/release.sh, so these checks run here as well.
   meta:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.v.outputs.version }}
       publish: ${{ steps.v.outputs.publish }}
+      sign: ${{ steps.v.outputs.sign }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     - id: v
       env:
         INPUT_VERSION: ${{ inputs.version }}
+        INPUT_SIGN: ${{ inputs.sign }}
       run: |
+        set -eu
         if [ "$GITHUB_EVENT_NAME" = push ]; then
           version=${GITHUB_REF#refs/tags/}
           publish=true
+          sign=true
         else
           version=$INPUT_VERSION
           publish=false
-          echo "::notice::Dry run for $version: nothing will be published"
+          sign=$INPUT_SIGN
         fi
         case $version in
-        v[0-9]*.[0-9]*.[0-9]*) ;;
-        *) echo "ERROR: version must look like v0.1.0, not '$version'"; exit 1 ;;
+        v*) ;;
+        *) echo "::error::The version must look like v0.1.0 or v0.2.0-rc.1, not '$version'"; exit 1 ;;
         esac
+        # Strict semantic versioning, from the one pattern the scripts share
+        node desktop/scripts/version.mjs --valid "${version#v}"
         node desktop/scripts/version.mjs --check
         built=$(node desktop/scripts/version.mjs --print)
         if [ "v$built" != "$version" ]; then
-          echo "ERROR: $version was asked for, but desktop/package.json says $built"
+          echo "::error::$version was asked for, but desktop/package.json says $built. Run: node desktop/scripts/version.mjs --set ${version#v}"
           exit 1
         fi
+        # The changelog entry with its Highlights, dated for a final release.
+        # Generated before the release exists, so a missing entry stops the
+        # run while nothing is published yet.
+        sh installer/release-notes.sh --check "$version"
+        prerelease=false
+        case $version in *-*) prerelease=true ;; esac
+        [ "$publish" = true ] || echo "::notice::Dry run for $version: nothing will be published"
         echo "version=$version" >> "$GITHUB_OUTPUT"
         echo "publish=$publish" >> "$GITHUB_OUTPUT"
-
-  create-release:
-    runs-on: ubuntu-latest
-    needs: [ci-validation, meta]
-    if: needs.meta.outputs.publish == 'true'
-    outputs:
-      version: ${{ needs.meta.outputs.version }}
-    steps:
-    - uses: actions/checkout@v7
-
-    # The notes lead with this version's "### ✨ Highlights" from
-    # desktop/CHANGELOG.md. Generated before the release exists, so a missing
-    # entry or highlights section stops the run while nothing is published yet.
-    - name: Write the release notes
-      run: |
-        sh installer/release-notes.sh "${{ needs.meta.outputs.version }}" \
-          "${{ github.repository }}" "${{ github.sha }}" \
-          "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-          > release-notes.md
-        cat release-notes.md
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v3
-      with:
-        tag_name: ${{ github.ref }}
-        name: Threadbear ${{ needs.meta.outputs.version }}
-        body_path: release-notes.md
-        draft: false
-        prerelease: ${{ contains(needs.meta.outputs.version, '-') }}
+        echo "sign=$sign" >> "$GITHUB_OUTPUT"
+        echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
   # Every published binary comes from installers.yml: one build per
-  # architecture, one (optional) signature, one checksum set. In a dry run
-  # release_tag is empty, so the deliverables stay artifacts.
+  # architecture, one (optional) signature, one checksum set. It only produces
+  # workflow artifacts. The grants are the most that workflow's jobs can have:
+  # its stage and package jobs ask for contents: read alone, and only the
+  # signing job asks for the OIDC token.
   build-installers:
-    needs: [ci-validation, meta, create-release]
-    if: ${{ !cancelled() && !failure() }}
+    needs: [ci-validation, meta]
     uses: ./.github/workflows/installers.yml
     with:
-      release_tag: ${{ needs.meta.outputs.publish == 'true' && needs.meta.outputs.version || '' }}
-    secrets: inherit
+      sign: ${{ needs.meta.outputs.sign == 'true' }}
     permissions:
-      contents: write
+      contents: read
       id-token: write
 
   # Nothing releasable can execute on this runner, so validation asserts the
   # complete expected asset set is there, with plausible sizes, checksums that
   # verify, the right architecture in each portable zip, and every installer
   # the app's update check can ask for (installer/validate-release-assets.sh).
-  # A release checks what was actually published; a dry run checks the
-  # artifacts that would have been.
-  validate-release:
+  # No `if: always()` here: it runs only if every job above succeeded, so a
+  # failed architecture, a red CI or a skipped job all stop it.
+  publish:
+    name: publish
+    needs: [meta, ci-validation, build-installers]
     runs-on: ubuntu-latest
-    needs: [meta, build-installers]
-    if: ${{ !cancelled() && !failure() }}
+    timeout-minutes: 30
+    permissions:
+      contents: write   # create, check and publish the release
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      PUBLISH: ${{ needs.meta.outputs.publish }}
+      PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+      SIGNED: ${{ needs.build-installers.outputs.signed }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
-    - name: Download the published release
-      if: needs.meta.outputs.publish == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: gh release download "${{ needs.meta.outputs.version }}" --repo "${{ github.repository }}" --dir assets
-
-    - name: Download the dry run's deliverables
-      if: needs.meta.outputs.publish != 'true'
-      uses: actions/download-artifact@v8
+    - name: Download the packages of every architecture
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         pattern: threadbear-installers-*
         merge-multiple: true
         path: assets
 
-    - name: Validate release assets
+    - name: Check the packages
       run: |
+        set -eu
         ls -la assets
-        sh installer/validate-release-assets.sh assets "${{ needs.meta.outputs.version }}"
+        sh installer/validate-release-assets.sh assets "$VERSION"
 
-  create-checksums:
-    runs-on: ubuntu-latest
-    needs: [create-release, build-installers, validate-release]
-    if: ${{ !cancelled() && !failure() && needs.create-release.result == 'success' }}
-    steps:
-    - uses: actions/checkout@v7
-
-    - name: Download release assets to create master checksum
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # CHECKSUMS.txt comes from the bytes about to be published, one line for
+    # each package: "<sha256>  <name>", LF line endings, nothing else, so that
+    # sha256sum -c reads it without a warning. The checks below fail the run
+    # if it is anything else.
+    - name: Write CHECKSUMS.txt
       run: |
-        # Get all release assets
-        release_id=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ needs.create-release.outputs.version }}" \
-          | jq -r '.id')
-
-        echo "Release ID: $release_id"
-
-        # Download all .sha256 files
-        curl -s -H "Authorization: token $GITHUB_TOKEN" \
-          "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets" \
-          | jq -r '.[] | select(.name | endswith(".sha256")) | .browser_download_url' \
-          | while read url; do
-            echo "Downloading checksum: $url"
-            curl -L -s "$url" >> temp_checksums.txt
+        set -eu
+        cd assets
+        rm -f CHECKSUMS.txt
+        for arch in x64 arm64; do
+          for kind in "setup-win-$arch.exe" "msi-win-$arch.msi" "portable-win-$arch.zip"; do
+            sha256sum --text "threadbear-$VERSION-$kind" >> CHECKSUMS.txt
           done
-
-    - name: Create master CHECKSUMS.txt
-      run: |
-        echo "# Threadbear Release Checksums - ${{ needs.create-release.outputs.version }}" > CHECKSUMS.txt
-        echo "# Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> CHECKSUMS.txt
-        echo "# Release: https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.version }}" >> CHECKSUMS.txt
-        echo "# Commit: ${{ github.sha }}" >> CHECKSUMS.txt
-        echo "" >> CHECKSUMS.txt
-
-        # Add all checksums
-        if [ -f temp_checksums.txt ]; then
-          cat temp_checksums.txt >> CHECKSUMS.txt
-        fi
-
-        echo "" >> CHECKSUMS.txt
-        echo "# Verification Instructions:" >> CHECKSUMS.txt
-        echo "# Linux/macOS: sha256sum -c CHECKSUMS.txt" >> CHECKSUMS.txt
-        echo "# Windows PowerShell: Get-FileHash -Algorithm SHA256 <filename>" >> CHECKSUMS.txt
-        echo "# Windows Command Prompt: certutil -hashfile <filename> SHA256" >> CHECKSUMS.txt
-
-        echo "Master checksums file created:"
+        done
         cat CHECKSUMS.txt
+        [ "$(wc -l < CHECKSUMS.txt | tr -d ' ')" -eq 6 ] || { echo "::error::CHECKSUMS.txt should have 6 lines"; exit 1; }
+        if grep -Evq '^[0-9a-f]{64}  [^ /\\]+$' CHECKSUMS.txt; then
+          echo "::error::CHECKSUMS.txt has a line that is not '<sha256>  <file name>'"; exit 1
+        fi
+        sha256sum --check --strict CHECKSUMS.txt
+        cd ..
+        sh installer/validate-release-assets.sh --checksums assets "$VERSION"
 
-    - name: Upload master checksums
-      uses: softprops/action-gh-release@v3
-      with:
-        tag_name: ${{ needs.create-release.outputs.version }}
-        files: CHECKSUMS.txt
-
-  update-release-notes:
-    runs-on: ubuntu-latest
-    needs: [create-release, build-installers, validate-release, create-checksums]
-    if: ${{ !cancelled() && !failure() && needs.create-release.result == 'success' }}
-    steps:
-    - uses: actions/checkout@v7
-
+    # Generated once, here, before anything is published. A release without
+    # highlights fails now, not after a public release exists.
     - name: Write the release notes
       run: |
-        sh installer/release-notes.sh "${{ needs.create-release.outputs.version }}" \
-          "${{ github.repository }}" "${{ github.sha }}" \
-          "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-          > release-notes.md
+        set -eu
+        run_url="https://github.com/$REPO/actions/runs/$GITHUB_RUN_ID"
+        if [ "$SIGNED" = true ]; then
+          sh installer/release-notes.sh "$VERSION" "$REPO" "$GITHUB_SHA" "$run_url" > release-notes.md
+        else
+          sh installer/release-notes.sh --unsigned "$VERSION" "$REPO" "$GITHUB_SHA" "$run_url" > release-notes.md
+          echo "::warning::$VERSION is UNSIGNED, and its release notes say so"
+        fi
+        cat release-notes.md
+        {
+          echo "### Release $VERSION"
+          echo
+          echo "Signed: $SIGNED. Pre-release: $PRERELEASE. Publishing: $PUBLISH."
+          echo
+          echo '| File | Bytes |'
+          echo '| --- | ---: |'
+          for f in assets/*; do printf '| %s | %s |\n' "$(basename "$f")" "$(wc -c < "$f" | tr -d ' ')"; done
+        } >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Update release with final info
-      uses: softprops/action-gh-release@v3
+    # The comparison used before and after the release goes public: the names,
+    # sizes and SHA-256 digests GitHub holds against the files checked above.
+    - name: Write the release comparison
+      run: |
+        cat > "$RUNNER_TEMP/compare-release.cjs" <<'JS'
+        // node compare-release.cjs <release.json> <assets folder> <draft: true|false> <prerelease: true|false>
+        const fs = require('node:fs');
+        const path = require('node:path');
+        const crypto = require('node:crypto');
+        const [, , jsonFile, dir, expectDraft, expectPre] = process.argv;
+        const rel = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+        let bad = 0;
+        const fail = (m) => { console.log(`::error::${m}`); bad = 1; };
+        if (String(rel.draft) !== expectDraft) fail(`the release has draft=${rel.draft}, expected ${expectDraft}`);
+        if (String(rel.prerelease) !== expectPre) fail(`the release has prerelease=${rel.prerelease}, expected ${expectPre}`);
+        const local = fs.readdirSync(dir).sort();
+        const remote = (rel.assets || []).map((a) => a.name).sort();
+        for (const n of local) if (!remote.includes(n)) fail(`${n} is not on the release`);
+        for (const n of remote) if (!local.includes(n)) fail(`${n} is on the release but not in the checked set`);
+        console.log(`${remote.length} files on the release, ${local.length} checked here`);
+        for (const a of rel.assets || []) {
+          const p = path.join(dir, a.name);
+          if (!fs.existsSync(p)) continue;
+          const buf = fs.readFileSync(p);
+          if (a.state !== 'uploaded') fail(`${a.name} is "${a.state}", not uploaded`);
+          if (a.size !== buf.length) fail(`${a.name} is ${a.size} bytes on GitHub and ${buf.length} here`);
+          const sha = crypto.createHash('sha256').update(buf).digest('hex');
+          if (a.digest && a.digest !== `sha256:${sha}`) fail(`${a.name} has digest ${a.digest} on GitHub and sha256:${sha} here`);
+          if (!a.digest) console.log(`note: GitHub gave no digest for ${a.name}, so only its size was compared`);
+        }
+        console.log(`immutable: ${rel.immutable ?? 'not reported'}`);
+        process.exit(bad);
+        JS
+
+    - name: Dry run, nothing is published
+      if: needs.meta.outputs.publish != 'true'
+      run: |
+        echo "Dry run for $VERSION: the packages are checked and CHECKSUMS.txt and the notes are written. No release is created."
+        echo "Dry run: nothing is published. The packages are in the installers artifacts." >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Keep a dry run's checksums and notes
+      if: needs.meta.outputs.publish != 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        tag_name: ${{ needs.create-release.outputs.version }}
-        body_path: release-notes.md
+        overwrite: true   # a re-run of the same run replaces the earlier attempt's artifact
+        name: threadbear-release-preview
+        path: |
+          release-notes.md
+          assets/CHECKSUMS.txt
+        retention-days: 7
+
+    # A re-run of a published tag never replaces what was published. A draft
+    # left by an earlier failed attempt at this tag is safe to replace: it was
+    # never public.
+    - name: Stop if this version is already published
+      if: needs.meta.outputs.publish == 'true'
+      run: |
+        set -eu
+        gh api --paginate "repos/$REPO/releases?per_page=100" \
+          --jq ".[] | select(.tag_name == \"$VERSION\") | [.id, .draft] | @tsv" > existing.tsv
+        published=$(awk -F'\t' '$2 == "false" { print $1 }' existing.tsv)
+        if [ -n "$published" ]; then
+          echo "::error::$VERSION already has a published release (id $published). Published files are never replaced. If it must be redone, delete the release and the tag yourself first, or release the next version."
+          exit 1
+        fi
+        for id in $(awk -F'\t' '$2 == "true" { print $1 }' existing.tsv); do
+          echo "Removing the draft $id that an earlier attempt at $VERSION left behind"
+          gh api --method DELETE "repos/$REPO/releases/$id"
+        done
+
+    # A draft is invisible to the public and to releases/latest. Every file is
+    # uploaded to it before anything else happens.
+    - name: Create the draft release with every file
+      if: needs.meta.outputs.publish == 'true'
+      run: |
+        set -eu
+        if [ "$PRERELEASE" = true ]; then
+          gh release create "$VERSION" --repo "$REPO" --draft --verify-tag --prerelease \
+            --title "Threadbear $VERSION" --notes-file release-notes.md assets/*
+        else
+          gh release create "$VERSION" --repo "$REPO" --draft --verify-tag \
+            --title "Threadbear $VERSION" --notes-file release-notes.md assets/*
+        fi
+
+    # The tag and the by-tag API do not return drafts, so the draft is read by
+    # its id.
+    - name: Check the draft against the files
+      id: draft
+      if: needs.meta.outputs.publish == 'true'
+      run: |
+        set -eu
+        gh api --paginate "repos/$REPO/releases?per_page=100" \
+          --jq ".[] | select(.tag_name == \"$VERSION\" and .draft == true) | .id" > draft-ids.txt
+        if [ "$(wc -l < draft-ids.txt | tr -d ' ')" -ne 1 ]; then
+          echo "::error::Expected exactly one draft release for $VERSION, found:"; cat draft-ids.txt; exit 1
+        fi
+        id=$(cat draft-ids.txt)
+        echo "id=$id" >> "$GITHUB_OUTPUT"
+        gh api "repos/$REPO/releases/$id" > draft.json
+        node "$RUNNER_TEMP/compare-release.cjs" draft.json assets true "$PRERELEASE"
+
+    - name: Publish the release
+      if: needs.meta.outputs.publish == 'true'
+      env:
+        RELEASE_ID: ${{ steps.draft.outputs.id }}
+      run: |
+        set -eu
+        gh api --method PATCH "repos/$REPO/releases/$RELEASE_ID" -F draft=false --jq '.html_url'
+
+    - name: Check the published release
+      if: needs.meta.outputs.publish == 'true'
+      env:
+        RELEASE_ID: ${{ steps.draft.outputs.id }}
+      run: |
+        set -eu
+        gh api "repos/$REPO/releases/$RELEASE_ID" > published.json
+        node "$RUNNER_TEMP/compare-release.cjs" published.json assets false "$PRERELEASE"
+        latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null || echo none)
+        echo "releases/latest is now: $latest"
+        if [ "$PRERELEASE" = true ] && [ "$latest" = "$VERSION" ]; then
+          echo "::error::The pre-release $VERSION is what releases/latest returns, so the app's update check would offer it"; exit 1
+        fi
+        if [ "$PRERELEASE" != true ] && [ "$latest" != "$VERSION" ]; then
+          echo "::warning::releases/latest is $latest, not $VERSION. A newer release exists, or GitHub has not caught up; the app's update check reads releases/latest."
+        fi
+        echo "Published: https://github.com/$REPO/releases/tag/$VERSION" >> "$GITHUB_STEP_SUMMARY"
