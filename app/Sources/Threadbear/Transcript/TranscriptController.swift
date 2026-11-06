@@ -50,6 +50,8 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     let tableView = TranscriptTableView()
     /// The open card, drawn at the top of the composer.
     weak var composerCard: ComposerCardHost?
+    /// The box drops on this transcript go to (ComposerDropView).
+    weak var composerHandle: ComposerHandle?
     private(set) weak var session: ThreadSession?
     private(set) var width: CGFloat = 0
     private var deferred = Set<String>()
@@ -290,6 +292,7 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
         case .background: return "background"
         case .gap: return "gap"
         case .changes: return "changes"
+        case .planCard: return "planCard"
         }
     }
 
@@ -310,6 +313,7 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
         case "background": cell = BackgroundRowCell(frame: .zero)
         case "gap": cell = GapRowCell(frame: .zero)
         case "changes": cell = ChangesRowCell(frame: .zero)
+        case "planCard": cell = PlanCardCell(frame: .zero)
         default: cell = QuestionRowCell(frame: .zero)
         }
         cell.identifier = id
@@ -460,6 +464,11 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
             session.setModelExpanded(rowId, !group.isExpanded)
             return
         }
+        // Opening another runner's tool asks for its output, which fills in the row
+        // as more events if that runner has full sync on.
+        if !session.expanded.contains(rowId), case .tool(let tool) = row.content, let seq = tool.result?.heldBackSeq {
+            session.app?.fetchHeldBody(threadId: session.threadId, seq: seq)
+        }
         DiffPreview.set(rowId, open: !session.expanded.contains(rowId), in: &session.expanded)
         refreshInPlace(index: index, row: row)
     }
@@ -483,7 +492,15 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
         if let id = WorkLinks.threadId(of: url)?.lowercased() {
             let app = AppModel.shared
             let matches = app.threads.keys.filter { $0 == id || $0.hasPrefix(id) }
-            if matches.count == 1 { app.openThread(matches[0]) } else { NSSound.beep() }
+            if matches.count == 1 { app.openThread(matches[0]); return }
+            // A beep alone left Mike clicking a link to a thread archived on bruce
+            // (another machine's archived threads aren't listed here) and
+            // wondering why nothing opened (6 Nov): say why.
+            AppLog.write("transcript", "thread link \(url.absoluteString): \(matches.count) matches")
+            NSSound.beep()
+            app.errorMessage = matches.isEmpty
+                ? "That thread isn't in your sidebar, so it can't open here. It was deleted, or it's archived on another machine, and those aren't listed on this Mac."
+                : "That link matches \(matches.count) threads, so none was opened."
             return
         }
         guard let quote = WorkLinks.quote(of: url), let index = session.displayIndex(of: rowId), let turn = row(at: index)?.turnId,
@@ -788,6 +805,29 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
         session?.respond(approvalId: approvalId, decision: decision, answers: answers, message: message)
     }
 
+    func isAnswering(_ approvalId: String) -> Bool { session?.answering.contains(approvalId) == true }
+
+    /// Lays out an approval or question card again as its answer goes
+    /// (ThreadSession.answering). Its height doesn't change.
+    func refreshCard(_ approvalId: String) {
+        for id in ["ap:" + approvalId, "q:" + approvalId] {
+            if let index = session?.displayIndex(of: id), let row = row(at: index) { refreshCell(at: index, row: row) }
+        }
+    }
+
+    func loadStartRequest(_ approvalId: String) {
+        session?.loadStartRequest(approvalId)
+    }
+
+    func approvePlan(itemId: String) {
+        session?.approvePlan(itemId: itemId)
+    }
+
+    func sendBackPlan() {
+        guard let session else { return }
+        session.app?.focusComposer(session.threadId)
+    }
+
     func questionDraft(_ approvalId: String) -> [Int: Set<String>] { questionDrafts[approvalId] ?? [:] }
 
     func setQuestionDraft(_ approvalId: String, _ draft: [Int: Set<String>]) { questionDrafts[approvalId] = draft }
@@ -864,8 +904,7 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     /// A button on the open asks card: `pick:<ask>:<n>` picks (or unpicks)
     /// an answer, which waits in the composer; `link:<ask>:<n>` opens one of
     /// the ask's links where links open (the pane or the browser). The done
-    /// card's `archive` opens the menu that asks how it went, then archives
-    /// the thread with that (`archive:<verdict>` picks without the menu), and `next:<n>`
+    /// card's `archive` archives the thread, as ⌘E does, and `next:<n>`
     /// ticks or unticks a suggested follow-up, which waits in the composer;
     /// `explain:<n>` (the "?" at its right) turns on asking the agent what
     /// it meant, which waits in the composer the same way.
@@ -876,17 +915,9 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
         if action == "archive" {
             // Already archived (end_turn's archive: true, or ⌘E): nothing to do,
             // and archiving again would move the selection off it.
-            guard !thread.isArchived else { return }
-            // Archive asks how it went before it goes, and there's no
-            // archiving from here without an answer (Mike, 5 Nov, from
-            // mockups): it's the mark that he put it away on purpose.
-            ArchiveVerdictMenu.show { [weak app] verdict in app?.archive(thread.id, verdict: verdict) }
-            return
-        }
-        if action.hasPrefix("archive:") {
-            // Scripted runs pick straight away: `archive:worked`.
-            guard !thread.isArchived, let verdict = ArchiveVerdict(rawValue: String(action.dropFirst(8))) else { return }
-            app.archive(thread.id, verdict: verdict)
+            // A plain button again: Mike dropped the Worked / Didn't work /
+            // Not needed menu it opened for a day (6 Nov).
+            if !thread.isArchived { app.archive(thread.id) }
             return
         }
         if action.hasPrefix("page:") {
@@ -980,7 +1011,7 @@ struct TranscriptView: NSViewRepresentable {
     }
 }
 
-final class TranscriptHost: NSView {
+final class TranscriptHost: ComposerDropView {
     private let controller: TranscriptController
     private let ghost: Bool
 
@@ -1001,11 +1032,20 @@ final class TranscriptHost: NSView {
                 layer?.contentsGravity = .resize
             }
         } else {
+            // Nothing inside the transcript registers for drags (its text is
+            // read-only), so a file over any of it ends up here.
+            registerForDraggedTypes(ComposerTextView.droppedTypes)
             claim()
         }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been used") }
+
+    /// The composer this transcript's drops go to, read at drag time as the
+    /// box can be made after this view.
+    override var handle: ComposerHandle? { controller.composerHandle }
+
+    override var marksDrop: Bool { true }
 
     /// Puts the scroll view in this container, unless this one isn't in a
     /// window yet and the scroll view is: then it stays put until this one is.

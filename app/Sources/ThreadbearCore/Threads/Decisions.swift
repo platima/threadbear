@@ -189,4 +189,25 @@ public enum Decisions {
     public static func isOpen(_ thread: ThreadSummary) -> Bool {
         thread.needs == "you" && thread.asksSeq != nil && !thread.asks.isEmpty && !thread.status.isBusy
     }
+
+    /// The summary with the card the transcript has open, for a summary
+    /// that comes without one: another runner's thread read through
+    /// Convex, whose sidebar row leaves the asks out (AppModel.withRelayCard).
+    /// The asks and their seq are the card's, so a pick on it matches.
+    /// No open card with asks (answered, a done card, none yet) leaves
+    /// none.
+    public static func withCard(_ thread: ThreadSummary, _ openCard: TranscriptRow?) -> ThreadSummary {
+        var out = thread
+        if case .asks(let card)? = openCard?.content, card.isOpen, !card.isDone, !card.asks.isEmpty {
+            out.needs = "you"
+            // Ticks live on the card, not its asks (asks.ticked).
+            out.asks = card.asks.enumerated().map { i, ask in var ask = ask; ask.ticked = card.ticked.contains(i); return ask }
+            out.asksSeq = card.seq
+        } else {
+            out.needs = nil
+            out.asks = []
+            out.asksSeq = nil
+        }
+        return out
+    }
 }

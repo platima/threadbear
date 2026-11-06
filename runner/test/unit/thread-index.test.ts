@@ -237,7 +237,10 @@ test('with API 29 a re-run reads only the rows that changed, and hears deletions
     takesSince: () => true,
   });
   index.start();
+  // The agent tools wait on this, until the rows have come.
+  assert.equal(index.heard(), false);
   for (let i = 0; i < 5; i++) await tick();
+  assert.equal(index.heard(), true);
   assert.deepEqual(b.live().sort(), ['sync:otherRunnersList', 'sync:threadIndexSince']);
   assert.equal(heard.at(-1)!.threads.length, 100);
   assert.equal(heard.at(-1)!.runners[0]!.name, 'bruce');
@@ -267,6 +270,35 @@ test('with API 29 a re-run reads only the rows that changed, and hears deletions
   index.stop();
 });
 
+test('the list counts as heard (for the agent tools) once the rows come, not just the runners', async () => {
+  const h = makeHarness();
+  let rowsAnswer: ((v: unknown) => void) | undefined;
+  const index = new ThreadIndex({
+    post: async () => null,
+    subscribe: (fn, _args, onUpdate) => {
+      if (fn === 'sync:otherRunnersList') queueMicrotask(() => onUpdate([{ runnerId: 'r-cloud', name: 'Cloud', lastSeenAt: Date.now() }]));
+      else rowsAnswer = onUpdate;
+      return () => undefined;
+    },
+    key: 'k',
+    runnerId: 'r-m5',
+    home: h.home,
+    host: h.runner,
+    publish: () => {},
+    clock: h.clock,
+    log: nullLogger,
+    takesSince: () => true,
+  });
+  index.start();
+  for (let i = 0; i < 5; i++) await tick();
+  assert.equal(index.list().runners.length, 1);
+  assert.equal(index.heard(), false, 'runners without their rows');
+  rowsAnswer!([{ runnerId: 'r-cloud', threadId: 'ba5bb5ec', title: 'Rust port', updatedMs: 1, cwd: '/', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: false, preview: '', createdAt: 'c', lastActivityAt: 'l' }]);
+  assert.equal(index.heard(), true);
+  assert.equal(index.list().threads[0]!.title, 'Rust port');
+  index.stop();
+});
+
 test('a runner key that may not read the other runners’ threads stops watching for good, and says so once', async () => {
   const h = makeHarness();
   const said: string[] = [];
@@ -292,6 +324,7 @@ test('a runner key that may not read the other runners’ threads stops watching
   index.start();
   await tick();
   assert.equal(subscriptions, 1);
+  assert.equal(index.heard(), true, 'a refusal is an answer: nothing to wait for');
   // The periodic check and an app asking again don't try once more.
   h.clock.advance(5 * 60_000);
   await tick();
@@ -301,4 +334,57 @@ test('a runner key that may not read the other runners’ threads stops watching
   assert.equal(said.filter((m) => m.startsWith('not watching')).length, 1);
   assert.equal(said.filter((m) => m.includes('subscription failed')).length, 0);
   index.stop();
+});
+
+test("a runner key's archived rows, which a backend before API 54 dropped, go again once", async () => {
+  const h = makeHarness();
+  const live = h.runner.create({ text: 'Still going', accountId: 'claude-3' }).thread;
+  const done = h.runner.create({ text: 'All done', accountId: 'claude-3' }).thread;
+  h.runner.update({ threadId: done.id, archived: true });
+  const make = (seed?: ReturnType<ThreadIndex['snapshot']>) => {
+    const writes: { rows: { threadId: string }[] }[] = [];
+    const index = new ThreadIndex({
+      post: async (_kind, fn, args) => {
+        if (fn === 'sync:setThreadIndex') writes.push(args as never);
+        return null;
+      },
+      key: 'tbr_k',
+      runnerId: 'r-bruce',
+      home: h.home,
+      host: h.runner,
+      clock: h.clock,
+      log: nullLogger,
+      appConnected: () => false,
+      ...(seed ? { seed: () => seed } : {}),
+    });
+    return { index, writes };
+  };
+  const flush = async () => {
+    h.clock.advance(1500);
+    await tick();
+  };
+  // A first run sends both, and remembers them as sent.
+  const first = make();
+  first.index.start();
+  await flush();
+  const seed = first.index.snapshot()!;
+  first.index.stop();
+  assert.equal(seed.archived, undefined);
+  // The next start has nothing to send, until the backend says 54: then
+  // only the archived one goes, heard before the index started.
+  const second = make(seed);
+  second.index.resendArchived();
+  second.index.start();
+  await flush();
+  assert.deepEqual(second.writes.flatMap((w) => w.rows.map((r) => r.threadId)), [done.id]);
+  assert.ok(!second.writes.some((w) => w.rows.some((r) => r.threadId === live.id)));
+  const after = second.index.snapshot()!;
+  second.index.stop();
+  assert.equal(after.archived, true);
+  // And never again.
+  const third = make(after);
+  third.index.start();
+  third.index.resendArchived();
+  await flush();
+  assert.deepEqual(third.writes.flatMap((w) => w.rows.map((r) => r.threadId)), []);
 });

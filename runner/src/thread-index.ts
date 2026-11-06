@@ -126,7 +126,7 @@ export class ThreadIndex {
     appConnected?: () => boolean;
     // What was sent before the runner last stopped (sync-cache.ts): a start
     // then writes only what changed, and doesn't read every row to prune.
-    seed?: () => { at: number; rows: Record<string, string>; removed?: string[] } | undefined;
+    seed?: () => { at: number; rows: Record<string, string>; removed?: string[]; archived?: boolean } | undefined;
     onSent?: () => void;
   };
   private running = false;
@@ -141,8 +141,15 @@ export class ThreadIndex {
   private unlisten?: () => void;
   private unsubscribe?: () => void;
   private remote: RemoteThreads = { runners: [], threads: [] };
+  // A backend before API 54 dropped a runner key's archived rows while this
+  // remembered them as sent: they go once more, then this says so (snapshot).
+  private archivedSent = false;
+  private archivedWanted = false;
   // The backend said this runner's key can't read other runners' threads.
   private refused = false;
+  // Whether the list has had the backend's answer since the watch started
+  // (or been refused), so the agent tools wait for it only until then.
+  private answered = false;
   private watchTimer?: TimerHandle;
   private appGoneAt?: number;
   // Watching only what changed (API 29): the other runners, their rows by
@@ -168,6 +175,7 @@ export class ThreadIndex {
     if (seed) {
       this.sent = new Map(Object.entries(seed.rows));
       this.fullAt = seed.at;
+      this.archivedSent = seed.archived === true;
       this.full = false;
       const here = new Set(this.deps.host.list(['inbox', 'snoozed', 'archived']).map((t) => t.id));
       for (const id of seed.removed ?? []) if (!here.has(id)) this.removed.add(id);
@@ -183,6 +191,10 @@ export class ThreadIndex {
       } else return;
       this.schedule();
     });
+    if (this.archivedWanted) {
+      this.archivedWanted = false;
+      this.resendArchived();
+    }
     this.schedule(0);
     this.appGoneAt = undefined;
     if (this.deps.appConnected) this.checkWatch();
@@ -211,6 +223,11 @@ export class ThreadIndex {
     return this.withTokens(this.remote);
   }
 
+  /** Whether the list has had an answer (or a refusal) to give, for a caller that can wait a moment for one. */
+  heard(): boolean {
+    return this.answered || !this.running || !this.deps.subscribe;
+  }
+
   /** What was last heard, without starting the watch or looking for token files (relay.ts asks on every request). */
   current(): RemoteThreads {
     return this.remote;
@@ -218,6 +235,8 @@ export class ThreadIndex {
 
   private watch(): void {
     if (this.unsubscribe || !this.deps.subscribe || this.refused) return;
+    // What was heard before may be old by now: the tools wait for this watch's answer.
+    this.answered = false;
     const failed = (e: Error) => this.watchFailed(e);
     this.watchingSince = this.deps.takesSince?.() ?? false;
     if (this.watchingSince) {
@@ -226,7 +245,12 @@ export class ThreadIndex {
       this.unsubscribe = this.deps.subscribe('sync:otherRunnersList', { key: this.deps.key, runnerId: this.deps.runnerId }, (v) => this.onRunners(v), failed);
       return;
     }
-    this.unsubscribe = this.deps.subscribe('sync:otherRunnersThreads', { key: this.deps.key, runnerId: this.deps.runnerId }, (v) => this.onRemote(v), failed);
+    this.unsubscribe = this.deps.subscribe('sync:otherRunnersThreads', { key: this.deps.key, runnerId: this.deps.runnerId }, (v) => {
+      // The whole list in one answer (before API 29). With API 29,
+      // onRunners and onRows say when it's in, as both come through onRemote.
+      this.answered = true;
+      this.onRemote(v);
+    }, failed);
   }
 
   // What was last heard stays, so an app connecting again sees the other
@@ -244,6 +268,7 @@ export class ThreadIndex {
 
   private onRunners(v: unknown): void {
     this.runnersHeard = Array.isArray(v) ? (v as RawRunner[]) : [];
+    if (!this.runnersHeard.length) this.answered = true;
     const ids = new Set(this.runnersHeard.map((r) => r.runnerId));
     for (const id of [...this.rows.keys()]) if (!ids.has(id)) this.rows.delete(id);
     for (const id of [...this.since.keys()]) if (!ids.has(id)) this.since.delete(id);
@@ -278,6 +303,8 @@ export class ThreadIndex {
   // once, and this runner's app lists only its own threads. Writing this
   // runner's own rows carries on.
   private watchFailed(e: Error): void {
+    // Nothing more coming to wait for: the tools use what was last heard.
+    this.answered = true;
     const refused = forbiddenText(e);
     if (!refused) {
       this.deps.log.warn('the other runners’ threads subscription failed', { error: String(e) });
@@ -289,6 +316,7 @@ export class ThreadIndex {
   }
 
   private onRows(v: unknown, asked: { runnerId: string; since?: number }[]): void {
+    this.answered = true;
     const got = Array.isArray(v) ? (v as SinceRow[]) : [];
     for (const a of asked) {
       const mine = got.filter((r) => r.runnerId === a.runnerId);
@@ -332,9 +360,9 @@ export class ThreadIndex {
   }
 
   /** For sync-cache.ts: undefined until a full write has finished. */
-  snapshot(): { at: number; rows: Record<string, string>; removed?: string[] } | undefined {
+  snapshot(): { at: number; rows: Record<string, string>; removed?: string[]; archived?: boolean } | undefined {
     if (this.full || !this.fullAt) return undefined;
-    return { at: this.fullAt, rows: Object.fromEntries(this.sent), ...(this.removed.size || this.removing.length ? { removed: [...new Set([...this.removed, ...this.removing])] } : {}) };
+    return { at: this.fullAt, rows: Object.fromEntries(this.sent), ...(this.archivedSent ? { archived: true } : {}), ...(this.removed.size || this.removing.length ? { removed: [...new Set([...this.removed, ...this.removing])] } : {}) };
   }
 
   /** The deployment doesn't know this runner: everything goes again. */
@@ -347,6 +375,26 @@ export class ThreadIndex {
   }
 
   /** The backend got new enough for what rows held back: they go again. */
+  /** Once a backend keeps a runner key's archived rows (API 54): those it dropped go again, once. */
+  resendArchived(): void {
+    if (this.archivedSent) return;
+    // Heard before the index has started (the heartbeat comes first): at start.
+    if (!this.running) {
+      this.archivedWanted = true;
+      return;
+    }
+    this.archivedSent = true;
+    let n = 0;
+    for (const t of this.deps.host.list(['archived'])) {
+      if (!t.archivedAt) continue;
+      this.sent.delete(t.id);
+      this.mark(t);
+      n++;
+    }
+    if (n) this.deps.log.info('thread index: sending archived threads again', { threads: n });
+    this.schedule();
+  }
+
   refresh(): void {
     if (!this.running) return;
     // Now able to watch only what changed: start the watch over that way.

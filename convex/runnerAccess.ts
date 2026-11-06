@@ -181,8 +181,13 @@ export const ACCESS: Record<string, Access> = {
   runnerStatsList: 'owner',
   setAccounts: 'own',
   upsertAccounts: 'own',
-  // Usage readings of logins its own runner has, from any Mac.
+  // The main Mac's key's usage readings of the logins the owner has said
+  // this runner shares (runnerLogins). Nobody gets a runner key's.
   sharedUsage: 'own',
+  // Which logins each runner key's runner shares with the main Mac: the
+  // owner's word, as a runner key's own accounts rows say whatever it likes.
+  setRunnerLogins: 'owner',
+  runnerLogins: 'owner',
   // Pools are every runner's (which logins and folders each pool has, the
   // main Mac's included): a runner key reads them to follow them, but
   // changing them is the main key's.
@@ -215,6 +220,17 @@ export const ACCESS: Record<string, Access> = {
   queueCommand: 'owner',
   commandState: 'owner',
   remoteAccounts: 'owner',
+  // Full sync (API 52): a runner writes its own threads' tool output, and only
+  // the main Mac's runner reads another runner's.
+  remoteBody: 'owner',
+  // Asking another runner (relay.ts): a runner key files and reads back its
+  // own requests; only the main Mac's runner reads any and answers them.
+  fileRequest: 'own',
+  runnerRequest: 'own',
+  decideRequest: 'owner',
+  closeRequest: 'own',
+  appendBodies: 'own',
+  addHeldPicture: 'own',
 };
 
 // A runner name as lists show it, for a runner key's heartbeat: folded to
@@ -269,6 +285,74 @@ export function cutBytes(s: string, max: number): string {
 // A runner key's schedule ids are what the runner makes (crypto.randomUUID),
 // so none can carry text a terminal would run when an audit lists it.
 export const SCHEDULE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// ---- shared usage readings (sync:sharedUsage, docs/protocol.md "Runner keys")
+
+// A login as two runners compare it: the same subscription wherever it's
+// signed in.
+export function loginKey(provider: string, email: string): string {
+  return `${provider}:${email.trim().toLowerCase()}`;
+}
+// What setRunnerLogins takes: a provider word and something that looks
+// like an email, so a listing can print it as it is.
+export const LOGIN_PROVIDER = /^[a-z][a-z0-9-]{0,19}$/;
+export const LOGIN_EMAIL = /^[^\s@\u0000-\u001f\u007f]{1,100}@[^\s@\u0000-\u001f\u007f]{1,150}$/;
+
+// How far ahead a window of each kind can reset from when it was read. A
+// runner key's reading of its own logins can't say one is out until 2099:
+// a reset later than this is brought back to it. Not to now, which would make every real
+// window look reset already (a week's resets days ahead). An hour of slack
+// for clocks that differ.
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+export const WINDOW_HORIZON_MS: Record<string, number> = { five_hour: 5 * HOUR, daily: DAY, weekly: 7 * DAY, weekly_model: 7 * DAY, monthly: 31 * DAY };
+const OTHER_HORIZON_MS = 31 * DAY;
+const SKEW_MS = HOUR;
+
+type UsageWindowDoc = { kind: string; title: string; remainingPercent: number; resetsAt?: string; detail?: string };
+export type UsageDoc = { windows: UsageWindowDoc[]; readAt: string; source: string; stale?: boolean; blocked?: boolean; notice?: string };
+
+/**
+ * A runner key's usage reading as it may stand: read no later than now
+ * (as fitThread does with lastActivityMs, since the newest reading wins
+ * on every Mac), each window's reset no further off than its kind allows,
+ * room 0 to 100. A reading with no time that parses says nothing and goes.
+ * These rows are that runner's own, for the phone to show its logins:
+ * sharedUsage gives them to nobody.
+ */
+export function fitUsage(u: UsageDoc, now: number): UsageDoc | undefined {
+  const read = Date.parse(u.readAt);
+  if (!Number.isFinite(read)) return undefined;
+  const windows: UsageWindowDoc[] = [];
+  for (const w of u.windows) {
+    if (!Number.isFinite(w.remainingPercent)) continue;
+    const out: UsageWindowDoc = { ...w, remainingPercent: Math.max(0, Math.min(100, w.remainingPercent)) };
+    if (w.resetsAt !== undefined) {
+      const at = Date.parse(w.resetsAt);
+      // Own keys only: a kind of "constructor" mustn't read Object's.
+      const latest = now + (Object.prototype.hasOwnProperty.call(WINDOW_HORIZON_MS, w.kind) ? WINDOW_HORIZON_MS[w.kind]! : OTHER_HORIZON_MS) + SKEW_MS;
+      if (!Number.isFinite(at)) delete out.resetsAt;
+      else if (at > latest) out.resetsAt = new Date(latest).toISOString();
+    }
+    windows.push(out);
+  }
+  return { ...u, windows, readAt: read > now ? new Date(now).toISOString() : u.readAt };
+}
+
+/**
+ * A reading no honest runner writes: read after now, or a window resetting
+ * further off than its kind allows (an hour's slack for clocks either way).
+ * sharedUsage leaves out such a reading even from the owner key's rows: a
+ * runner from before API 53 took a runner key's 2099 reading in as the
+ * newest and wrote it into its own row, where it would otherwise stay the
+ * newest for good (Codex's review of Gautam's F1 fix).
+ */
+export function impossibleUsage(u: UsageDoc, now: number): boolean {
+  const read = Date.parse(u.readAt);
+  if (!Number.isFinite(read) || read > now + SKEW_MS) return true;
+  const fitted = fitUsage(u, now);
+  return !fitted || fitted.windows.length !== u.windows.length || fitted.windows.some((w, i) => w.resetsAt !== u.windows[i]!.resetsAt);
+}
 
 /** The gate at the top of every function. One not in ACCESS is owner-only. */
 export function mayCall(c: Caller, fn: string): boolean {

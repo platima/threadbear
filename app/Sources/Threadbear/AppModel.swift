@@ -137,6 +137,13 @@ final class AppModel {
     /// Not for one an agent or the phone archives. `ArchivedToast` takes it
     /// down after a few seconds; the next archive replaces it.
     var archivedNote: ArchivedNote?
+    /// The note at the top of the thread panel when Next Inbox Thread
+    /// (⌥⌘↓) has nowhere to go: the open thread is the Inbox's last, or the
+    /// Inbox is empty. `InboxEndToast` takes it down after a few seconds.
+    var inboxEndNote: InboxEndNote?
+    /// Bumped when a thread is picked from somewhere other than the list
+    /// (Next Inbox Thread), so the list scrolls its row into view.
+    var revealSelectionRequests = 0
     /// Archives from the button, ⌘E or the done card that haven't gone to
     /// the runner yet (the row's still sliding). Undo takes one out of here,
     /// and then it never goes.
@@ -152,6 +159,23 @@ final class AppModel {
             // Setting threads in its own didSet doesn't run didSet again.
             for (id, thread) in threads where thread.runnerId == nil {
                 if let runnerId = oldValue[id]?.runnerId { threads[id]?.runnerId = runnerId }
+            }
+            // Nor does the sidebar's table say if another runner's thread is
+            // shared (thread-index.ts leaves it out), so a link made here
+            // (the relay's threads.share reply) stays until a reply says
+            // otherwise. Once made, a share never goes back to none: off
+            // keeps its slug.
+            for (id, thread) in threads where thread.share == nil && thread.runnerId != nil {
+                if let share = oldValue[id]?.share { threads[id]?.share = share }
+            }
+            // A thread read through Convex keeps the asks of the card it
+            // shows, whatever summary is stored over it (the table's row,
+            // a reply's): none of those carry them (withRelayCard).
+            if !directRemoteLink {
+                for (id, thread) in threads where thread.runnerId != nil && oldValue[id] != thread {
+                    let carded = withRelayCard(thread)
+                    if carded != thread { threads[id] = carded }
+                }
             }
             threadsVersion &+= 1
             refreshDockBadge()
@@ -204,6 +228,7 @@ final class AppModel {
     /// the page, so backing out of a project finds the same results.
     var projectSearchQuery = ""
     var errorMessage: String?
+    var continuingRefusals: Set<String> = []
     /// Bumped to put the cursor in a composer, by its draft key (a thread's
     /// id, or "new"): with threads open in several panels, only that one's.
     var focusRequests: [String: Int] = [:]
@@ -313,6 +338,8 @@ final class AppModel {
     var modelPickerRequest = 0
     /// The same for the account picker.
     var accountPickerRequest = 0
+    /// The same for the composer's context ring.
+    var contextMeterRequest = 0
     /// Every schedule, in the runner's order (soonest first, then the
     /// paused and finished ones). Replaced whole by `schedules.updated`.
     var schedules: [Schedule] = [] {
@@ -496,6 +523,14 @@ final class AppModel {
     }
     /// A thread's chosen pane section, as `PaneSection.id`.
     var panelChoice: [String: String] = [:]
+    /// Each thread's slash commands once `threads.commands` has answered
+    /// (SlashPalette.swift), for the composer's palette.
+    var slashCommands: [String: [SlashCommand]] = [:]
+    @ObservationIgnored var slashFetches: [String: Task<Void, Never>] = [:]
+    /// The commands picked from the palette lately, newest first.
+    var recentSlashCommands: [String] = UserDefaults.standard.stringArray(forKey: "recentSlashCommands") ?? [] {
+        didSet { UserDefaults.standard.set(recentSlashCommands, forKey: "recentSlashCommands") }
+    }
     /// Each thread's highlights once `threads.highlights` has answered
     /// (PaneModel.swift). Only threads Mike has opened this session.
     var highlights: [String: ThreadHighlights] = [:]
@@ -763,6 +798,14 @@ struct ArchivedNote: Equatable, Identifiable {
     let title: String
     /// It was the open thread, so Undo opens it again.
     let wasOpen: Bool
+}
+
+/// What `InboxEndToast` shows.
+struct InboxEndNote: Equatable, Identifiable {
+    let id = UUID()
+    /// The Inbox had nothing in it at all, rather than nothing after the
+    /// open thread.
+    let empty: Bool
 }
 
 /// What `ConnectionBanner` shows.

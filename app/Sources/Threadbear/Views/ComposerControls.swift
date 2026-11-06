@@ -159,6 +159,13 @@ struct ComposerControls: View {
                 settings.permissionMenu()
             }
             Spacer(minLength: zoomed(8))
+            // How full the context is, beside send: where you decide to
+            // carry on, /compact or start afresh.
+            if let thread, let meter = ContextMeter(thread) {
+                ContextRing(meter: meter, openRequest: app.contextMeterRequest) {
+                    NSHostingController(rootView: ContextPopover(threadId: thread.id).environment(app))
+                }
+            }
             SendButton(running: running, canSend: canSend, sending: sending, onSend: onSend, onStop: { app.interrupt() })
                 .layoutPriority(1)
                 // Right-click send for later, as Mail and Slack do. Not on
@@ -634,7 +641,7 @@ struct ThreadSettings {
         let menu = NSMenu()
         // Auto is Claude Code's; Codex has nothing like it, so it's only offered
         // for Claude (or if a thread is somehow on it already).
-        let modes: [PermissionMode] = provider == "claude" || permissionMode == .auto ? [.full, .auto, .ask] : [.full, .ask]
+        let modes: [PermissionMode] = provider == "claude" || permissionMode == .auto ? [.full, .auto, .ask, .plan] : [.full, .ask, .plan]
         for mode in modes {
             let item = ActionMenuItem(mode.composerTitle, symbol: mode.composerIcon, checked: permissionMode == mode) { setPermission(mode) }
             item.subtitle = mode.composerHelp
@@ -690,6 +697,7 @@ private extension PermissionMode {
         case .full: "Full access"
         case .ask: "Ask before edits"
         case .auto: "Auto"
+        case .plan: "Plan first"
         }
     }
 
@@ -698,6 +706,7 @@ private extension PermissionMode {
         case .full: "lock.open"
         case .ask: "lock"
         case .auto: "lock.shield"
+        case .plan: "list.bullet.clipboard"
         }
     }
 
@@ -706,6 +715,7 @@ private extension PermissionMode {
         case .full: "Edits files and runs commands without asking"
         case .ask: "Asks before editing files or running commands"
         case .auto: "A safety check approves or blocks each action, and asks only when unsure"
+        case .plan: "Reads and plans, and changes nothing until you approve its plan"
         }
     }
 }
@@ -797,6 +807,90 @@ private struct ComposerChip: View {
     }
 }
 
+/// A small ring for how full the thread's context is: grey, orange once
+/// it's nearly full (the one place it has colour, as that's when it
+/// matters). Clicking it opens ContextPopover.
+private struct ContextRing: View {
+    let meter: ContextMeter
+    var openRequest: Int = 0
+    let popover: () -> NSViewController
+    @State private var hovering = false
+    @State private var anchor = MenuAnchor()
+
+    var body: some View {
+        let side = zoomed(15)
+        let line = zoomed(2.5)
+        Button {
+            anchor.show { _ in popover() }
+        } label: {
+            ZStack {
+                Circle().stroke(Color.primary.opacity(0.22), lineWidth: line)
+                Circle()
+                    // A sliver even when nearly empty, so it reads as a meter.
+                    .trim(from: 0, to: max(0.03, meter.fraction))
+                    .stroke(meter.isNearlyFull ? Color.orange : Color.secondary, style: StrokeStyle(lineWidth: line, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: side, height: side)
+            .frame(width: zoomed(26), height: zoomed(26))
+            .background(Circle().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .background(MenuAnchorView(anchor: anchor))
+        .onHover { hovering = $0 }
+        .onChange(of: openRequest) { _, _ in anchor.show { _ in popover() } }
+        .tip(meter.tip)
+        .accessibilityLabel(meter.tip)
+    }
+}
+
+/// The ring's popover: the context in tokens, what happens when it fills,
+/// then the model and login the thread is really running on and what it
+/// has cost. Reads the thread live, so it moves while a turn runs.
+struct ContextPopover: View {
+    @Environment(AppModel.self) private var app
+    let threadId: String
+
+    var body: some View {
+        let thread = app.threads[threadId]
+        VStack(alignment: .leading, spacing: 6) {
+            if let thread, let meter = ContextMeter(thread) {
+                Text("Context").font(.system(size: 13, weight: .semibold))
+                ProgressView(value: meter.fraction)
+                    .progressViewStyle(.linear)
+                    .tint(meter.isNearlyFull ? .orange : .secondary)
+                HStack {
+                    Text(meter.amount)
+                    Spacer()
+                    Text("\(meter.percent)%").foregroundStyle(.secondary)
+                }
+                .font(.system(size: 12))
+                Text(ContextMeter.compactNote(provider: thread.provider))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Divider().padding(.vertical, 2)
+                let settings = ThreadSettings(app: app, thread: thread)
+                row("Model", ComposerChips.chipTitle(model: settings.effectiveModel, effort: settings.effectiveEffort, choices: settings.choices))
+                row("Login", settings.logins.account(thread.accountId).map(AccountName.title) ?? thread.accountId)
+                if let cost = CostText.format(thread.costUsd) { row("Cost so far", cost) }
+            }
+        }
+        .padding(14)
+        .frame(width: 260)
+    }
+
+    private func row(_ name: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(name).foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            Text(value).lineLimit(1).truncationMode(.middle)
+        }
+        .font(.system(size: 12))
+    }
+}
+
 private struct ChipDivider: View {
     var body: some View {
         Rectangle()
@@ -860,10 +954,10 @@ private struct SendButton: View {
                 Image(systemName: "stop.fill").font(.system(size: zoomed(9), weight: .bold))
             }
             .buttonStyle(CircleButtonStyle(filled: true))
-            .shortcutHint("⌘.", .before)
-            .tip("Stop (⌘.)")
+            .shortcutHint(AppShortcuts.shared.display(.stop), .before)
+            .tip(AppShortcuts.shared.tip("Stop", .stop))
             .accessibilityLabel("Stop")
-            .keyboardShortcut(".", modifiers: .command)
+            .shortcut(.stop)
         } else {
             Button(action: onSend) {
                 Image(systemName: "arrow.up").font(.system(size: zoomed(13), weight: .semibold))

@@ -20,6 +20,7 @@ struct ThreadbearApp: App {
                 .environment(quick)
                 .onAppear {
                     delegate.model = model
+                    delegate.pushTaps.open = { [model] threadId in model.openThreadId = threadId }
                     quick.keep = { [model] record in try await model.keepQuickAsk(record) }
                     quick.sendFollowUp = { [model] threadId, text in
                         guard let backend = model.backend else { throw TransportError.server("Not paired with a Mac.") }
@@ -134,11 +135,18 @@ struct RootView: View {
 /// opens the thread a notification is about.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var model: AppModel?
+    /// Opens a tapped push's thread, once `model` is there to open it.
+    let pushTaps = PushTaps()
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         // First, to catch a crash at launch. App Store builds only.
         CrashReporting.start()
         UNUserNotificationCenter.current().delegate = self
+        WhisperModel.shared.reconnect()
+        _ = DictationWords.shared  // takes -ThreadbearAddWords
+        #if DEBUG
+        WhisperEngine.testFromLaunchArguments()
+        #endif
         return true
     }
 
@@ -146,6 +154,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in
             let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
             if granted { UIApplication.shared.registerForRemoteNotifications() }
+        }
+    }
+
+    /// Whisper's download finishing with the app closed (WhisperModel).
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        guard identifier == WhisperModel.sessionId else { completionHandler(); return }
+        Task { @MainActor in
+            WhisperModel.shared.backgroundCompletion = completionHandler
+            WhisperModel.shared.reconnect()
         }
     }
 
@@ -157,14 +175,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in model?.report(error) }
     }
 
+    // The completion-handler forms, not `async`: Swift calls an async
+    // delegate method's handler from a background thread when its task
+    // ends, and UIKit asserts it's on main, which crashed the app on a
+    // tapped push (THREADBEAR-12). Each handler is called on the main actor.
+
     /// Banners show while the app's open too, since the push is usually
     /// about a thread other than the one on screen.
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void) {
+        Task { @MainActor in completionHandler([.banner, .sound]) }
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard let threadId = response.notification.request.content.userInfo["threadId"] as? String else { return }
-        await MainActor.run { model?.openThreadId = threadId }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
+        let threadId = response.notification.request.content.userInfo["threadId"] as? String
+        pushTaps.tapped(threadId: threadId, done: completionHandler)
     }
 }

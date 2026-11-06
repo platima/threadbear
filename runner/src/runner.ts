@@ -1,6 +1,7 @@
 // The thread manager: owns threads, turns, the event log, approvals, idle
 // release and snoozes. Providers plug in through AgentAdapter; the WebSocket
 // server in rpc.ts is a thin layer over the public methods here.
+import { RELEASE } from './release.ts';
 import { reachable, type Reachable } from './net-probe.ts';
 import type { UpstreamStatus } from './upstream.ts';
 import fs from 'node:fs';
@@ -129,6 +130,7 @@ import { handoversPart, type HandoversPart } from './runner/handovers.ts';
 import { stoppedWorkPart, type StoppedWorkPart } from './runner/stopped-work.ts';
 import { projectsHostPart, type ProjectsHostPart } from './runner/projects-host.ts';
 import { approvalsPart, settleDeclined, type ApprovalsPart, type SecretAnswer } from './runner/approvals.ts';
+import type { RequestAnswer } from './cross-runner.ts';
 import { SecretStore } from './secrets.ts';
 import { reviewsPart, type ReviewsPart } from './runner/reviews.ts';
 import { clisPart, type ClisPart } from './runner/clis.ts';
@@ -136,8 +138,11 @@ import { editingPart, type EditingPart } from './runner/editing.ts';
 import { patchesPart, type PatchesPart } from './runner/patches.ts';
 import { highlightsPart, type HighlightsPart } from './runner/highlights.ts';
 import { titlesPart, type TitlesPart } from './runner/titles.ts';
+import { commandsPart, type CommandsPart } from './runner/commands.ts';
+import type { SlashCommand } from './slash-commands.ts';
 import { hibernationPart, type HibernationPart } from './runner/hibernation.ts';
 import { newThreadsPart, type NewThreadsPart } from './runner/new-threads.ts';
+import { labReviewPart, type LabReviewPart } from './runner/lab-review.ts';
 
 export type Notification =
   | { method: 'thread.updated'; params: { thread: ThreadSummary } }
@@ -230,17 +235,31 @@ export type BinaryReporter = { binariesInUse?(): string[] };
 // and reads nothing else until it's answered. A background subagent's card
 // (no tool call of the agent's to point at) holds up only that subagent.
 export type PendingApproval =
-  | { approvalId: string; kind: 'tool'; main: boolean; resolve: (a: ToolApprovalAnswer) => void }
+  // plan: the "Plan first" plan (its itemId) this approval is Claude's ExitPlanMode for.
+  | { approvalId: string; kind: 'tool'; main: boolean; plan?: string; resolve: (a: ToolApprovalAnswer) => void }
   | { approvalId: string; kind: 'question'; main: boolean; questions: Question[]; resolve: (a: QuestionAnswer) => void }
   // An agent's ask_secret (docs/protocol.md, "Secrets"). The value never
   // passes through here: secrets.answer writes the file and hands this the
   // paths.
-  | { approvalId: string; kind: 'secret'; main: boolean; resolve: (a: SecretAnswer) => void };
+  | { approvalId: string; kind: 'secret'; main: boolean; resolve: (a: SecretAnswer) => void }
+  // create_thread asking for a thread on another runner (cross-runner.ts).
+  // check reads the backend's answer, which is the only one it believes.
+  | { approvalId: string; kind: 'request'; main: boolean; check: () => Promise<RequestAnswer>; resolve: (a: RequestAnswer) => void };
 
 export type Turn = {
   turnId: string;
   startedAt: number;
   interruptRequested: boolean;
+  // A slash command the runner answered itself (runner/commands.ts): no
+  // CLI turn, and settings it changed apply from the next one.
+  local?: boolean;
+  // Started by a slash command the CLI runs. Its output (/cost's table,
+  // /model's usage line) isn't a reply asking anything: without an
+  // end_turn the turn leaves no card.
+  command?: boolean;
+  // A compaction, review or clear: the CLI can't take words into it, so
+  // they wait for the next turn. A skill's turn is an ordinary one.
+  noSteer?: boolean;
   // Opened by the runner for work the CLI started itself (a background
   // shell or async subagent finished, or a background subagent asked for
   // approval). There's no user.message.
@@ -252,6 +271,9 @@ export type Turn = {
   // sent while it ran, which go straight into the CLI. The turn ends when
   // the CLI has answered them all.
   messages: string[];
+  // The most access the CLI has had in this turn (accessOf): a Codex turn
+  // keeps the mode it started with when the thread is lowered mid-turn.
+  access?: PermissionMode;
   // Files the turn edited, wrote or proposed to (edit.diff paths, Write
   // and Edit calls, denied ones too), for hooks that run only after a
   // change to certain files. Never trusted from: see 'wrote'.
@@ -426,6 +448,8 @@ export const DRAIN_SETTLE_MS = 30 * 60_000;
 export const DRAIN_AGENT_MS = 4 * 60 * 60_000;
 
 export type RunnerDeps = {
+  // The release it runs, when not this code's own (tests).
+  release?: string;
   config: Config;
   store: ThreadStore;
   adapters: Record<string, AgentAdapter>;
@@ -455,6 +479,10 @@ export type RunnerDeps = {
   // tests pass /bin/sh -c and a short limit.
   actionShell?: string[];
   actionTimeoutMs?: number;
+  // A worktree's setup and turn hooks run at background priority
+  // (background.ts) unless this is false. Tests not about priority turn it
+  // off, as a background shell can wait seconds for a core on a busy Mac.
+  backgroundJobs?: boolean;
   // Opens a url action's page, for an app too old to open it itself
   // (runAction); tests pass a fake rather than starting a browser.
   openUrl?: (url: string) => Promise<void>;
@@ -529,17 +557,22 @@ export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
 export const NO_WAKE_TIME = UNTIL_RESTART;
 
 // Parts of the Runner that live in runner/ (see each file's top).
-export interface Runner extends NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart {}
+export interface Runner extends LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart {}
 export class Runner {
   // While main.ts is still starting up: waking a thread for its waits
   // (reconcileWaits) would start a CLI whose tools aren't ready, so they
   // wait for main.ts's own reconcileWaits once it's listening.
   holdWaits = false;
+  // The release this runner runs (none from a source checkout), for
+  // threads hibernating until a new one (snoozedUntil "release"). Tests set it.
+  release: string | undefined = RELEASE.release;
   cfg: Config;
   store: ThreadStore;
   adapters: Record<string, AgentAdapter>;
   accounts: AccountSource;
   usage?: UsageSink;
+  // Each login and folder's slash commands, for the picker (runner/commands.ts).
+  commandCache = new Map<string, { at: number; commands: SlashCommand[] }>();
   pickAccount: AccountPicker;
   clis?: CliControl;
   clock: Clock;
@@ -551,6 +584,7 @@ export class Runner {
   panelsRoot?: string;
   actionShell?: string[];
   actionTimeoutMs?: number;
+  backgroundJobs: boolean;
   openUrl: (url: string) => Promise<void>;
   convexKeys: ConvexKeys;
   // Where answers to ask_secret go, and the key the phone seals them to.
@@ -616,6 +650,7 @@ export class Runner {
   atMac?: () => boolean | undefined;
 
   constructor(deps: RunnerDeps) {
+    if ('release' in deps) this.release = deps.release;
     this.cfg = deps.config;
     this.store = deps.store;
     this.copyTranscript = deps.copyTranscript ?? copySessionTranscript;
@@ -625,6 +660,7 @@ export class Runner {
     this.patchTrust = deps.patchTrust ?? new PatchTrust({ file: path.join(deps.config.home, 'patch-trust.json') });
     this.actionShell = deps.actionShell;
     this.actionTimeoutMs = deps.actionTimeoutMs;
+    this.backgroundJobs = deps.backgroundJobs ?? true;
     this.openUrl = deps.openUrl ?? openInBrowser;
     this.convexKeys = new ConvexKeys(
       path.join(paths.secrets(deps.config.home), 'convex-panels'),
@@ -683,7 +719,7 @@ export class Runner {
     // restart waited still gets carried on.
     // A wake-when still being worked out lost its answer with the old
     // runner, so it comes back too.
-    for (const st of this.threads.values()) if (st.rec.snoozedUntilRestart || st.rec.wakeWhen?.pending) this.wake(st, 'restart');
+    for (const st of this.threads.values()) if (this.wakesOnStart(st.rec)) this.wake(st, 'restart');
     // Before anything reads a thread's patches. Every thread on disk,
     // including ones a draining runner still has.
     this.seedPatchTrust(records.map((r) => r.cwd));
@@ -1281,6 +1317,8 @@ export class Runner {
     if (opts.origin !== 'runner') {
       rt.hookTurns = undefined;
       delete rec.stoppedWorkWakes;
+      // A new ask from Mike: its change can be reviewed afresh.
+      delete rec.labReviews;
     }
     // Copy images into the thread's own media folder now, so a queued
     // message still works if inbox/ is cleaned before it's sent.
@@ -1301,6 +1339,7 @@ export class Runner {
     if (rec.snoozedUntil || rec.archivedAt) {
       delete rec.snoozedUntil;
       delete rec.snoozedUntilRestart;
+      delete rec.untilRelease;
       delete rec.wakeWhen;
       delete rec.waitingOn;
       delete rec.archivedAt;
@@ -1334,6 +1373,14 @@ export class Runner {
       this.interrupt(rec.id);
       return turnId;
     }
+    // A message from Mike while a plan waits (and isn't Claude's approval,
+    // which the card-declining below sends back): he's answering it in
+    // words, so it goes back for another go.
+    if (rec.openPlan && fromMike(text, opts) && ![...rt.approvals.values()].some((p) => p.kind === 'tool' && p.plan === rec.openPlan)) {
+      this.emit(st, { type: 'plan.resolved', itemId: rec.openPlan, decision: 'revise' }, rt.turn?.turnId);
+      delete rec.openPlan;
+      this.markDirty(st);
+    }
     if (rt.turn && rt.approvals.size && fromMike(text, opts)) {
       // He wrote instead of using the card. The CLI is parked on the card's
       // answer and won't read anything else until it has one, so a message
@@ -1345,7 +1392,10 @@ export class Runner {
         settleDeclined(pending, 'deny', WROTE_INSTEAD);
       }
     }
-    if (rt.turn && !opts.queue && this.canSteer(st)) {
+    // A slash command waits for the turn to end rather than going into it:
+    // a CLI runs one only as a message of its own, and the runner's own
+    // change settings for the next turn.
+    if (rt.turn && !opts.queue && this.canSteer(st) && !this.commandPlan(st, text)) {
       // Sent while a turn runs: it goes into that turn now, as typing into
       // the CLI would. The CLI takes it at its next step, or straight after
       // its reply if that was already finishing; either way the thread's
@@ -1379,6 +1429,8 @@ export class Runner {
     const turn = rt.turn;
     if (!turn || !rt.session || rt.closing || this.stopping || rt.editing) return false;
     if (rec.queue.length || rec.handoff || rec.moved || rt.releaseWhenIdle || turn.interruptRequested) return false;
+    // Nor into a compaction or review (a skill's turn takes them).
+    if (turn.noSteer || turn.local) return false;
     return !turn.auto || Boolean(turn.cliStarted);
   }
 
@@ -1448,7 +1500,7 @@ export class Runner {
     }
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
-    rt.turn = { turnId: msg.turnId, startedAt: this.clock.now(), interruptRequested: false, messages: [msg.turnId], edited: new Set() };
+    rt.turn = { turnId: msg.turnId, startedAt: this.clock.now(), interruptRequested: false, messages: [msg.turnId], edited: new Set(), access: rec.permissionMode };
     rt.activeAt = this.clock.now();
     rec.turnId = msg.turnId;
     rec.lastActivityAt = this.isoNow();
@@ -1487,7 +1539,21 @@ export class Runner {
     // Never two live CLIs on one session: wait for a releasing one to exit.
     while (rt.closing) await rt.closing;
     if (rt.turn?.turnId !== msg.turnId) return; // interrupted while waiting
-    let text = this.forAgent(msg);
+    const local = this.runLocalCommand(st, msg);
+    if (local === true || (local !== false && (await local))) return;
+    // A slash command reaches the CLI as typed: anything put in front of it
+    // (the phone's line, project news) would make it words to the model.
+    const command = this.commandPlan(st, msg.text);
+    if (command && rt.turn) {
+      rt.turn.command = true;
+      if (/^\/(compact|review|clear)\b/i.test(msg.text.trim())) rt.turn.noSteer = true;
+    }
+    let text = command ? msg.text : this.forAgent(msg);
+    // Claude's CLI starts a new session for /clear, which the runner follows
+    // (its next init), but says nothing.
+    if (command && rec.provider === 'claude' && /^\/clear\b/i.test(msg.text.trim())) {
+      this.emit(st, { type: 'system.note', text: 'Cleared the conversation. The agent starts fresh from your next message; the transcript above stays here for you.' }, msg.turnId);
+    }
     if (!rt.session && rec.worktreePending) {
       await this.prepareWorktree(st, msg.turnId);
       if (rt.turn?.turnId !== msg.turnId) return; // interrupted during setup
@@ -1530,7 +1596,8 @@ export class Runner {
     }
     // Projects the session hasn't been told about: one it was put in while
     // live, or since it last ran. A fresh session got them as instructions.
-    const news = this.projectNews(rec);
+    // Kept for the next message when this one is a command.
+    const news = command ? undefined : this.projectNews(rec);
     if (news) text = `${news}\n\n${text}`;
     if (rec.moved) {
       // A CLI that moves folders itself: the live session got setCwd, or a
@@ -1575,6 +1642,17 @@ export class Runner {
     const ok = this.copyTranscript(fromAccount.configDir, account.configDir, from.fromCwd, rec.cwd, rec.nativeSessionId);
     if (!ok) this.log.info('could not carry the transcript across; using a handoff note', { threadId: rec.id, from: from.fromAccountId, to: rec.accountId });
     return ok;
+  }
+
+  // Threads working now: a turn, a background job or a sub-agent going,
+  // for keeping the Mac awake (keep-awake.ts).
+  workingThreads(): number {
+    let n = 0;
+    for (const { rec, rt } of this.threads.values()) {
+      if (rt.deleted) continue;
+      if (rt.turn || rt.tasks.length || rec.subagents?.some((a) => a.status === 'running')) n++;
+    }
+    return n;
   }
 
   makeRoomForCli(starting: ThreadState): void {
@@ -1640,6 +1718,8 @@ export class Runner {
         env: threadEnv(rec.id, this.cfg.home),
         ...this.briefFor(rec, resume),
         ...(rt.claudeSkipped ? { untrustedProjectSettings: claudeSettingsWithoutCommands(rec.cwd) } : {}),
+        // Read at each call, from the thread's folder then.
+        runsAsCode: (file) => this.writeRunsAsCode(rec, file),
       },
       sink,
     );
@@ -1870,12 +1950,25 @@ export class Runner {
       case 'wrote':
         // Patch files, and helpers a trusted patch may import, an edit the
         // CLI says it made: trusted as that edit left them, and only while
-        // the file still has those bytes (patch-trust.ts).
+        // the file still has those bytes (patch-trust.ts). Only one made on
+        // Full access, by the mode recorded with the call: in Ask and Auto
+        // permission to edit a file isn't permission to run it, so what it
+        // wrote waits for Mike in Patches (code-writes.ts, Gautam's scan
+        // F1 and F4). Only inside the thread's own folder.
+        if (o.mode !== 'full') break;
         this.trustAgentPatches(
           o.files.map((f) => ({ ...f, path: path.resolve(rec.cwd, f.path) })),
-          true,
           rec.cwd,
+          true,
         );
+        break;
+      case 'planProposed':
+        // A newer plan replaces one still waiting (Codex can propose
+        // again in plan mode); the old card just stops offering Go ahead.
+        if (rec.openPlan && rec.openPlan !== o.itemId) this.emit(st, { type: 'plan.resolved', itemId: rec.openPlan, decision: 'revise' }, rt.turn?.turnId);
+        rec.openPlan = o.itemId;
+        this.emit(st, { type: 'plan.proposed', itemId: o.itemId, text: o.text }, rt.turn?.turnId);
+        this.markDirty(st);
         break;
       case 'allowRules': {
         const rules = new Set(rec.allowRules ?? []);
@@ -1947,7 +2040,7 @@ export class Runner {
     this.emit(st, wokeBy.length ? { type: 'turn.started', turnId, wokeBy } : { type: 'turn.started', turnId }, turnId);
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
-    rt.turn = { turnId, startedAt: this.clock.now(), interruptRequested: false, auto: true, messages: [], edited: new Set() };
+    rt.turn = { turnId, startedAt: this.clock.now(), interruptRequested: false, auto: true, messages: [], edited: new Set(), access: rec.permissionMode };
     rt.activeAt = this.clock.now();
     rec.turnId = turnId;
     rec.status = rt.approvals.size ? 'waiting' : 'running';
@@ -1976,7 +2069,8 @@ export class Runner {
     // The CLI resumed at the cut an edit asked for and has written a turn
     // after it, which is the conversation's end from now on. Kept until
     // then, so a CLI that died first cuts again on the next start.
-    if (rec.resumeAt && rt.resumed) delete rec.resumeAt;
+    // Not a command the runner answered: no CLI resumed for it.
+    if (rec.resumeAt && rt.resumed && !turn.local) delete rec.resumeAt;
     if (outcome === 'failed' && r.error) this.emit(st, { type: 'error', message: r.error }, turn.turnId);
     const body: EventBody = {
       type: 'turn.completed',
@@ -2043,7 +2137,24 @@ export class Runner {
       // A job that ended mid-turn: the CLI's turn reading its result is next.
       !rt.taskEndedInTurn && !rt.finished.length;
     this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost);
-    if (finished) this.markFinished(st, turn.lastText);
+    // A code change gets another lab's review before it counts as done
+    // (experiment labReview, runner/lab-review.ts): the thread waits on
+    // the review, so anything waiting on it hears once it's been fixed.
+    // One the last runner owed (a handover) is settled by the next turn to
+    // complete: a finish gives this turn's change if it made one worth it,
+    // else that earlier one; a turn that needs Mike, or waits, drops it,
+    // as it would have stopped that review from starting too. Not a slash
+    // command the runner answered itself (/model): that's no agent turn.
+    const owed = outcome === 'completed' && !turn.local ? rec.labReviewOwed : undefined;
+    if (owed) {
+      delete rec.labReviewOwed;
+      this.markDirty(st);
+    }
+    let review = finished && !rt.turn ? this.startLabReview(st, turn.turnId, turn.lastText) : undefined;
+    if (!review && owed && finished && !rt.turn && !rec.labReviewOwed) review = this.startLabReview(st, owed.turnId, owed.reply, owed.seq);
+    if (review) this.waitOnReview(st, review);
+    // Owed to the next runner (a handover): finished once it's reviewed.
+    else if (finished && !rec.labReviewOwed) this.markFinished(st, turn.lastText);
     if (outcome === 'completed' && this.waitedOnFor(rec.id).length) this.tellActivity({ kind: 'waited-on', threadId: rec.id });
     if (archive && !rt.turn && !rec.archivedAt && !this.stopping) {
       this.emit(st, { type: 'system.note', text: 'Archived, as the agent was asked to once it had finished.' });
@@ -2058,7 +2169,7 @@ export class Runner {
   snoozeAfterTurn(st: ThreadState, when: string): void {
     const { rec } = st;
     let until: string | undefined;
-    if (when.toLowerCase() === 'restart') until = 'restart';
+    if (when.toLowerCase() === 'restart' || when.toLowerCase() === 'release') until = when.toLowerCase();
     else {
       try {
         until = parseWhen(when, this.clock.now());
@@ -2075,12 +2186,13 @@ export class Runner {
       });
       return;
     }
-    if (until !== 'restart' && Date.parse(until) <= this.clock.now()) {
+    if (until !== 'restart' && until !== 'release' && Date.parse(until) <= this.clock.now()) {
       this.emit(st, { type: 'system.note', text: `Not hibernated: the agent asked to wake at ${when}, which has passed.` });
       return;
     }
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const text = until === 'restart' ? 'Hibernating until the runner next starts, as the agent was asked to.' : `Hibernating until ${localWhen(Date.parse(until), timeZone)}, as the agent was asked to.`;
+    const text = until === 'restart' ? 'Hibernating until the runner next starts, as the agent was asked to.'
+      : until === 'release' ? 'Hibernating until the runner starts on a new release, as the agent was asked to.' : `Hibernating until ${localWhen(Date.parse(until), timeZone)}, as the agent was asked to.`;
     this.emit(st, { type: 'system.note', text });
     this.update({ threadId: rec.id, snoozedUntil: until });
   }
@@ -2315,7 +2427,7 @@ export class Runner {
     model?: string | null;
     effort?: EffortLevel | null;
     permissionMode?: PermissionMode;
-    snoozedUntil?: string | null; // an ISO time, or 'restart' for until the runner next starts
+    snoozedUntil?: string | null; // an ISO time, 'restart' for until the runner next starts, or 'release' for until it starts on a new release
     archived?: boolean;
     // Who's archiving it: Mike (the default: the app, the phone, tb), an
     // agent (update_thread, end_turn's archive) or Threadbear itself. With
@@ -2375,7 +2487,7 @@ export class Runner {
     // Changes a CLI that applies settings from its next turn only (Codex)
     // can't take into a turn that's running; the thread says so.
     const nextTurn: string[] = [];
-    const sayNextTurn = () => Boolean(rt.turn) && Boolean(adapter?.settingsApplyNextTurn) && !release;
+    const sayNextTurn = () => Boolean(rt.turn) && !rt.turn?.local && Boolean(adapter?.settingsApplyNextTurn) && !release;
     if (cwdChanged && !accountChanged && !rec.handoff && adapter?.movesFolders) {
       // Same account on a CLI that moves folders itself: the same session
       // carries on in the new folder from its next turn, with no
@@ -2458,13 +2570,20 @@ export class Runner {
       }
     }
     if (params.permissionMode !== undefined && params.permissionMode !== rec.permissionMode) {
+      // What approving a plan goes back to.
+      if (params.permissionMode === 'plan') rec.modeBeforePlan = rec.permissionMode;
+      else delete rec.modeBeforePlan;
       rec.permissionMode = params.permissionMode;
+      // The turn counts as having had the most access it was given: a
+      // Claude CLI takes a raise now, and a lowered Codex turn carries on
+      // as it started.
+      if (rt.turn) rt.turn.access = moreAccess(rt.turn.access, params.permissionMode);
       if (rt.session && !release) {
         rt.session.setPermissionMode(params.permissionMode).catch(() => {
           rt.releaseWhenIdle = true;
           if (!rt.turn) this.releaseSession(st);
         });
-        if (sayNextTurn()) nextTurn.push(params.permissionMode === 'ask' ? 'Ask before edits' : params.permissionMode === 'auto' ? 'Auto' : 'Full access');
+        if (sayNextTurn()) nextTurn.push(params.permissionMode === 'ask' ? 'Ask before edits' : params.permissionMode === 'auto' ? 'Auto' : params.permissionMode === 'plan' ? 'Plan first' : 'Full access');
       }
     }
     if (nextTurn.length) {
@@ -2480,16 +2599,20 @@ export class Runner {
       if (params.snoozedUntil !== null && this.bucket(rec) !== 'snoozed') rec.snoozedAt = this.isoNow();
       delete rec.woke;
       delete rec.snoozedUntilRestart;
+      delete rec.untilRelease;
       delete rec.wakeWhen;
       delete rec.waitingOn;
       if (params.snoozedUntil === null) delete rec.snoozedUntil;
-      else if (params.snoozedUntil === 'restart') {
+      else if (params.snoozedUntil === 'restart' || params.snoozedUntil === 'release') {
         rec.snoozedUntil = UNTIL_RESTART;
         rec.snoozedUntilRestart = true;
+        // Until a start on another release than this one. From a source
+        // checkout there's no release to tell apart, so any start does.
+        if (params.snoozedUntil === 'release' && this.release) rec.untilRelease = this.release;
         stop = true;
       } else {
         const t = Date.parse(params.snoozedUntil);
-        if (Number.isNaN(t)) throw new RpcError(ErrorCode.badParams, 'snoozedUntil must be an ISO time or "restart"');
+        if (Number.isNaN(t)) throw new RpcError(ErrorCode.badParams, 'snoozedUntil must be an ISO time, "restart" or "release"');
         rec.snoozedUntil = new Date(t).toISOString();
         stop = true;
       }
@@ -2866,6 +2989,7 @@ export class Runner {
     if (rec.effortInUse) s.effortInUse = rec.effortInUse;
     if (rec.snoozedUntil) s.snoozedUntil = rec.snoozedUntil;
     if (rec.snoozedUntilRestart) s.snoozedUntilRestart = true;
+    if (rec.snoozedUntilRestart && rec.untilRelease) s.snoozedUntilRelease = true;
     if (rec.wakeWhen && rec.snoozedUntil) s.wakeWhen = { ...rec.wakeWhen };
     if (rec.waitingOn && rec.snoozedUntil) s.waitingOn = rec.waitingOn.map((w) => ({ threadId: w.threadId, title: w.title, ...(w.until ? { until: w.until } : {}), ...(w.done ? { done: true as const } : {}) }));
     if (rec.woke && rec.forceUnread) s.woke = { ...rec.woke };
@@ -2931,6 +3055,14 @@ export class Runner {
     if (exact) return this.summary(exact);
     const hits = [...this.threads.values()].filter((t) => t.rec.id.startsWith(q));
     return hits.length === 1 ? this.summary(hits[0]) : undefined;
+  }
+
+  // The most access a thread's agent has now: its mode, or more while a
+  // turn that started with (or was raised to) more is still running.
+  // threadbear-mcp.ts, "Raising access", goes by it for messages.
+  accessOf(threadId: string): PermissionMode {
+    const { rec, rt } = this.mustGet(threadId);
+    return moreAccess(rt.turn?.access, rec.permissionMode);
   }
 
   mustGet(threadId: string): ThreadState {
@@ -3026,7 +3158,9 @@ export class Runner {
 
   noticeOverOnMac(threadId: string, text: string, archive: boolean): void {
     const st = this.mustGet(threadId);
-    st.rec.forceUnread = false;
+    // Without archive something in the thread is still to do (a dialog
+    // still up, or the access still missing), so it stays in Needs you.
+    if (archive) st.rec.forceUnread = false;
     this.emit(st, { type: 'system.note', text });
     this.markDirty(st);
     if (archive && !st.rt.turn && !st.rec.archivedAt && this.opening(threadId).text === undefined) this.update({ threadId, archived: true, archivedBy: 'threadbear' });
@@ -3035,7 +3169,7 @@ export class Runner {
 
 // The Runner's other methods live in parts under runner/, one area each;
 // they go onto its prototype here, as the class's own methods would be.
-for (const part of [newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart]) {
+for (const part of [labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart]) {
   for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(part))) {
     Object.defineProperty(Runner.prototype, key, { ...d, enumerable: false });
   }
@@ -3187,6 +3321,7 @@ function turnNeeds(turn: Turn): (Needs & { from: 'tool' | 'text' }) | undefined 
   const tool = turn.endTurn && needsFromTool(turn.endTurn);
   if (turn.replyNeeds) return { ...turn.replyNeeds, from: 'text' };
   if (tool) return { ...tool, from: 'tool' };
+  if (turn.command) return undefined;
   const text = turn.lastText && needsFromText(turn.lastText);
   return text ? { ...text, from: 'text' } : undefined;
 }
@@ -3283,4 +3418,9 @@ function openInBrowser(url: string): Promise<void> {
     const [opener, openerArgs] = process.platform === 'win32' ? ['rundll32.exe', ['url.dll,FileProtocolHandler', page]] : ['/usr/bin/open', [page]];
     execFile(opener, openerArgs, (err) => (err ? reject(new RpcError(ErrorCode.other, `Couldn't open ${page}: ${err.message}`)) : resolve()));
   });
+}
+
+const ACCESS_ORDER: PermissionMode[] = ['ask', 'auto', 'full'];
+function moreAccess(a: PermissionMode | undefined, b: PermissionMode): PermissionMode {
+  return a && ACCESS_ORDER.indexOf(a) > ACCESS_ORDER.indexOf(b) ? a : b;
 }

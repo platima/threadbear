@@ -10,15 +10,60 @@ import { ErrorCode, RpcError } from '../protocol.ts';
 import { Projects } from '../projects.ts';
 import { threadEnv } from '../restart.ts';
 import { paths } from '../config.ts';
-import { isPatchFile, type ClaudeVerdict } from '../patch-trust.ts';
+import { commandFiles, isPatchFile, namedPaths, patchHash, scanModule, type ClaudeVerdict, type PatchHash } from '../patch-trust.ts';
 import type { AgentWrite } from '../adapters/types.ts';
-import { CLAUDE_PATCH_ID } from '../claude-trust.ts';
+import { CLAUDE_PATCH_ID, claudeCommands, settingsCommands, settingsNamedPaths } from '../claude-trust.ts';
+import { canonicalPath, runsAsCodeByName } from '../code-writes.ts';
 import type { PatchInfo } from '../protocol.ts';
-import { automaticTrust, EMPTY_PATCH_SET, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, type CommandOutcome, type PanelRender, type PatchSet, type ProjectFolder, projectPatchFiles } from '../patches.ts';
+import { automaticTrust, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, type CommandOutcome, type PanelRender, type PatchSet, type ProjectFolder, projectPatchFiles } from '../patches.ts';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { ThreadState, Turn } from '../runner.ts';
+import type { ThreadRecord } from '../store.ts';
 import { FOLDER_CACHE_MS, HOOK_TELL_CHARS, HOOK_TELL_LIMIT, LIVE_POLL_MS, LIVE_SHARE_MS, PATCHES_TTL_MS } from '../runner.ts';
+
+// What a patch that loads without a hash makes code, for a thread in
+// `cwd` (writeRunsAsCode): every file it reaches, as canonical lower-case
+// paths, or `all` when it can't all be followed. Kept until anything its
+// hash was made from changes, and for a few seconds at most, as what a
+// command reaches from the thread's folder isn't in that hash.
+type CodeScan = { at: number; h: PatchHash; all: boolean; files: Set<string> };
+const scans = new Map<string, CodeScan>();
+const SCAN_TTL_MS = 10_000;
+function codeOfUnhashedPatch(file: string, cwd: string, now: number): CodeScan {
+  const key = `${file}\0${cwd}`;
+  const hit = scans.get(key);
+  if (hit && now - hit.at < SCAN_TTL_MS && hit.h.looked.same()) return hit;
+  const h = patchHash(file);
+  const files = new Set<string>();
+  const add = (f: string) => files.add(canonicalPath(f).toLowerCase());
+  // One it can't follow all of, or that names a script that runs
+  // something it can't follow: any edit might be what it runs.
+  let all = Boolean(h.incomplete || h.blocked);
+  for (const f of [file, h.root, ...h.deps.map((d) => d.path), ...h.unnamed]) add(f);
+  for (const [from, bytes] of all ? [] : h.code) {
+    const text = bytes.toString('utf8');
+    for (const n of namedPaths(text)) add(path.resolve(cwd, n));
+    // Each string in it as a command run from the thread's folder, as its
+    // hooks are: what that reaches.
+    for (const command of scanModule(text, from).strings) {
+      if (!/\S/.test(command) || command.length > 2000) continue;
+      const reach = commandFiles(command, cwd);
+      if (reach.problem) all = true;
+      reach.files.forEach(add);
+    }
+    // Absolute and `~/` paths, there yet or not.
+    for (const word of text.split(/[\s'"`;&|()<>=,[\]{}]+/)) {
+      if (word.startsWith('/') && word.length > 1) add(word);
+      else if (word.startsWith('~/')) add(path.join(os.homedir(), word.slice(2)));
+    }
+  }
+  const scan = { at: now, h, all, files };
+  scans.set(key, scan);
+  if (scans.size > 200) scans.delete(scans.keys().next().value!);
+  return scan;
+}
 
 export const patchesPart = {
   // What the thread's folder gives it (see Runtime.patches): the last set
@@ -84,7 +129,7 @@ export const patchesPart = {
       // Claude threads only: a Codex thread doesn't read them.
       const claude = rec.provider === 'claude' ? this.claudePatchInfo(cwd) : undefined;
       if (claude) base = { ...base, patches: [...base.patches, claude] };
-      set = await applyLive(base, { cwd, threadId: rec.id, run: (command, dir) => this.runLiveCommand(rec.id, command, dir) });
+      set = await applyLive(base, { cwd, threadId: rec.id, run: (command, dir) => this.runLiveCommand(rec.id, command, dir), verify: (file, hash) => this.patchTrust.verify(file, hash) });
     } catch (e) {
       this.log.warn('could not read the folder for patches', { threadId: rec.id, cwd, error: String(e) });
       base = entry.base;
@@ -240,22 +285,103 @@ export const patchesPart = {
     return { trusted };
   },
 
-  // Trusts patch files an agent's verified edit wrote (an adapter's
-  // 'wrote', never a preview), as that edit left them: each only while it
-  // still hashes to `sha256`, checked in the same read the trust hash is
-  // made from, and only when every other file in the patch is bytes
-  // trusted before or another verified edit's (patch-trust.ts). A helper
-  // the agent edited carries on the patches importing it the same way.
-  // With `cwd` (the thread's folder), its Claude Code settings and the
-  // scripts they name count too (claude-trust.ts). `reread` false when
-  // the caller reads them again itself.
-  trustAgentPatches(this: Runner, files: AgentWrite[], reread = true, cwd?: string): void {
+  // Trusts patch files a Full access thread's verified edit wrote (an
+  // adapter's 'wrote' on 'full', never a preview: the caller checks), as
+  // that edit left them: each only while it still hashes to `sha256`,
+  // checked in the same read the trust hash is made from, only inside
+  // `folder` (the thread's), only an Edit of trusted bytes or a whole
+  // Write, and only when every other file in the patch is bytes trusted
+  // before or another verified edit's (patch-trust.ts). A helper the agent
+  // edited carries on the patches importing it the same way. With
+  // `claude`, the folder's Claude Code settings and the scripts they name
+  // count too (claude-trust.ts).
+  trustAgentPatches(this: Runner, files: AgentWrite[], folder: string, claude = false): void {
     const done: string[] = [];
-    for (const { path: file, sha256 } of files) {
-      done.push(...this.patchTrust.trustAgentWrite(file, sha256));
-      if (cwd && !isPatchFile(file) && this.patchTrust.trustClaudeEdit(cwd, file, sha256)) done.push(file);
+    for (const { path: file, sha256, base } of files) {
+      done.push(...this.patchTrust.trustAgentWrite(file, sha256, base, folder));
+      if (claude && !isPatchFile(file) && this.patchTrust.trustClaudeEdit(folder, file, sha256, base)) done.push(file);
     }
-    if (done.length && reread) this.rereadAllPatches();
+    if (done.length) this.rereadAllPatches();
+  },
+
+  // Whether an edit of `file` (absolute) by the thread `rec` changes code
+  // the runner or Claude runs by itself, beyond what code-writes.ts knows
+  // by name. Outside Full access such an edit always asks. Fails closed:
+  // anything it can't read or follow asks.
+  //
+  // - What a patch the runner has hashed covers (covers()).
+  // - The runner's own data dir: patch-trust.json is the trust itself,
+  //   runner.json names the CLIs it runs.
+  // - Every Claude login's user settings (by their own name and what a link
+  //   to them points at) and the paths their commands name, there yet or
+  //   not, from the login's folder, the thread's or absolute: they run in
+  //   every session on that login. The same for the thread folder's
+  //   settings.
+  // - Patches that load without a hash (home's, Threadbear's own
+  //   checkout's): what one is a link to, imports and names, a missing
+  //   one included, absolute or `~/` paths in it, and its `./` paths from
+  //   the thread's folder, where its commands run. One whose code can't
+  //   all be followed asks for every edit (Codex review). What such a
+  //   hook runs by name (`npm test`, a tool on PATH) is the folder's own
+  //   code, run as its owner set it up, and isn't followed.
+  writeRunsAsCode(this: Runner, rec: ThreadRecord, file: string): boolean {
+    const cwd = rec.cwd;
+    const home = this.panelsRoot ?? os.homedir();
+    const real = canonicalPath(file).toLowerCase();
+    const same = (f: string) => canonicalPath(f).toLowerCase() === real;
+    if (runsAsCodeByName(file, home) || this.patchTrust.covers(canonicalPath(file))) return true;
+    try {
+      const data = canonicalPath(this.cfg.home).toLowerCase();
+      const rel = path.relative(data, real);
+      if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return true;
+      if (same(path.join(os.homedir(), '.claude.json'))) return true;
+      const logins = new Set([path.join(os.homedir(), '.claude'), ...this.accounts.list().filter((a) => a.provider === 'claude' && a.configDir).map((a) => a.configDir!)]);
+      const settings: { file: string; dir: string }[] = [];
+      for (const dir of logins) {
+        if (!fs.existsSync(dir)) continue;
+        for (const f of fs.readdirSync(dir)) if (/^(settings(\..*)?\.json|\.claude\.json)$/i.test(f)) settings.push({ file: path.join(dir, f), dir });
+      }
+      for (const rel of ['.claude/settings.json', '.claude/settings.local.json']) settings.push({ file: path.join(cwd, rel), dir: cwd });
+      for (const s of settings) {
+        if (same(s.file)) return true;
+        if (settingsNamedPaths(s.file, s.dir, os.homedir(), cwd).some(same)) return true;
+        // Each command as a shell runs it, from where hooks run (the
+        // thread's folder) and the login's: the script it names, quoted
+        // names with spaces too, and what that imports or runs in turn.
+        // What it can't follow doesn't make every edit ask, unlike an
+        // unhashed patch's: these are the user's own hooks, and on 6 Nov
+        // eight of Mike's thirty didn't follow all the way (a decision
+        // for him, in the fix's report).
+        for (const command of settingsCommands(s.file)) {
+          const text = command.replace(/\$\{?CLAUDE_CONFIG_DIR\}?/g, s.dir).replace(/\$\{?CLAUDE_PROJECT_DIR\}?/g, cwd);
+          for (const from of new Set([cwd, s.dir])) if (commandFiles(text, from).files.some(same)) return true;
+        }
+      }
+      const found = claudeCommands(cwd, home);
+      if (found && [...found.files, ...found.named].some(same)) return true;
+      // Every patch folder the thread reads, its projects' too: the ones
+      // that load without a hash.
+      const dirs = new Map<string, 'home' | 'project'>();
+      for (const folder of [cwd, ...(this.projects?.foldersFor(rec) ?? []).map((f) => f.folder)]) for (const d of patchDirs(folder, home)) dirs.set(d.dir, d.source);
+      for (const [dir, source] of dirs) {
+        if (source === 'project' && !this.patchTrust.loadsUnhashed(dir)) continue;
+        for (const name of fs.readdirSync(dir)) {
+          if (!PATCH_EXTENSIONS.includes(path.extname(name)) || name.endsWith('.d.ts') || name.startsWith('.')) continue;
+          const p = path.join(dir, name);
+          if (same(p)) return true;
+          let scan: CodeScan;
+          try {
+            scan = codeOfUnhashedPatch(p, cwd, this.clock.now());
+          } catch {
+            continue; // can't be read, so can't be loaded either
+          }
+          if (scan.all || scan.files.has(real)) return true;
+        }
+      }
+      return false;
+    } catch {
+      return true;
+    }
   },
 
   // The thread folder's Claude Code settings, as an entry in its patch
@@ -328,6 +454,7 @@ export const patchesPart = {
         cwd: st.rec.cwd,
         threadId,
         run: (command, cwd) => this.runPatchCommand(threadId, command, cwd),
+        verify: (file, hash) => this.patchTrust.verify(file, hash),
       });
     }
     return renderPanel(panel, paths.panels(this.cfg.home, threadId), this.screenshot);
@@ -411,6 +538,7 @@ export const patchesPart = {
         env: { ...process.env, ...threadEnv(st.rec.id, this.cfg.home) },
         shell: this.actionShell,
         timeoutMs: this.actionTimeoutMs,
+        background: this.backgroundJobs,
       });
       if (st.rt.deleted || this.stopping) return;
       const body: EventBody = {

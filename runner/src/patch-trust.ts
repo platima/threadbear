@@ -12,9 +12,12 @@
 // of the patch files you said yes to. A file whose content you haven't
 // trusted waits: "new" when nothing in that folder has been trusted yet,
 // "changed" when something has (a git pull brought a new version). A
-// patch file a thread's agent writes with Edit or Write is trusted as it
-// stands, as that agent could already run anything in the folder, and
-// asking about every button you ask for would be noise.
+// patch file a Full access thread's agent writes with Edit or Write in its
+// own folder is trusted as it stands, as that agent could already run
+// anything there, and asking about every button you ask for would be
+// noise. Not in Ask or Auto, where it couldn't (code-writes.ts), and an
+// Edit only when the file it started from was trusted: it vouches for
+// what it changed, not for the rest of the file.
 //
 // A git worktree counts as its main checkout, so a thread's worktree of a
 // trusted repo isn't asked about again. Only a worktree git itself made
@@ -29,8 +32,8 @@
 // pull that changes only a helper is asked about too. Files it names in a
 // `./` or `../` path (the script its worktree setup or an action runs) are
 // hashed as well, as they run by themselves too, and so is what those
-// scripts run in turn (script-trust.ts). A patch with no local
-// files hashes as its own text alone, as it did before helpers counted.
+// scripts run in turn (script-trust.ts), in an encoding no file name can
+// fake (patchHash).
 // Packages (`node:fs`, `zod`) aren't followed: they're the folder's
 // dependencies, as `npm install` put them there, and hashing node_modules
 // every 15 seconds would be slow and re-ask after every install.
@@ -50,7 +53,7 @@ import { fileURLToPath } from 'node:url';
 import { parseSync } from 'oxc-parser';
 import { atomicWriteFileSync } from './fsutil.ts';
 import { claudeCommands } from './claude-trust.ts';
-import { looksRunnable, reachOf, reachOfCommand, Reads } from './script-trust.ts';
+import { looksRunnable, MAX_READ_BYTES, reachOf, reachOfCommand, Reads } from './script-trust.ts';
 
 export type TrustVerdict =
   // `files`: the local files its hash covered, real paths. Absent when the
@@ -79,18 +82,32 @@ export type ClaudeVerdict =
 // with this in front, so a runner from before them keeps them when it
 // saves (they're strings it never matches) and they can be told apart.
 export const CLAUDE_PREFIX = 'claude:';
+// A patch hash from a trust file before version 3, kept only to say the
+// folder had something trusted: it never matches (see TrustFile).
+const LEGACY_PREFIX = 'legacy:';
 
 // Hashes kept per folder: enough for a repo's patches across a few
 // branches and versions, without the file growing for ever.
 export const HASHES_KEPT = 200;
 
-// Version 1 hashed patch files alone. Its hashes are read as they are: one
-// for a patch with no helpers is the same in both, and one for a patch
-// with helpers matches nothing now, so it's asked about again. (A first
-// look used to take such a patch's helpers as trusted, but version 1 never
-// saw them, so that trusted whatever a pull had put there: Daybreak, 5 Nov.)
-// A `legacy` list a runner from then wrote is ignored, and goes on the next save.
-type TrustFile = { version: 1 | 2; folders: Record<string, string[]> };
+// Version 1 hashed patch files alone, and version 2 joined `<path> <sha>`
+// lines with newlines, which a path holding a newline could fake (Gautam's
+// scan, 6 Nov). Version 3's hash (HASH_TAG) is made a way no path can fake,
+// so no earlier hash matches one now: every patch trusted before is asked
+// about again ("changed"), once. Nothing is carried over from an old hash,
+// as an old hash can't tell the file sets it was fooled by apart. (Version
+// 2 had carried a version 1 patch's helpers over as trusted, which trusted
+// whatever a pull had put there: Daybreak, 5 Nov.) Old hashes stay in the
+// list until HASHES_KEPT pushes them out, matching nothing. A `legacy`
+// list a runner from then wrote is ignored, and goes on the next save.
+type TrustFile = { version: 1 | 2 | 3; folders: Record<string, string[]> };
+
+// In front of every patch hash, the helper-less ones too, so no version's
+// hash can match another's, nor one patch's text another's whole hash.
+const HASH_TAG = 'threadbear-patch-3';
+// Control characters (a newline, a NUL): no followed path may hold one.
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]/;
 
 // At most this many local files are followed from one patch file; one that
 // reaches more can't be checked.
@@ -107,25 +124,38 @@ export interface PatchTrustStore extends PatchGate {
   trust(file: string, hash: string): boolean;
   // As they are now, unasked: the first start's seeding.
   trustCurrent(files: string[]): string[];
-  // An agent's verified edit left `file` as bytes hashing to `sha256`
-  // (an adapter's 'wrote'). Trusts the patch files it's part of (itself,
-  // or ones importing or running it) only while it still has those bytes
-  // and every other file in the patch's hash is bytes trusted before or
-  // another such edit's: one edit doesn't vouch for files it didn't write.
-  // Only patches already looked at are known as importing it.
-  trustAgentWrite(file: string, sha256: string): string[];
+  // An agent's verified edit, in a Full access thread in `folder`, left
+  // `file` as bytes hashing to `sha256` (an adapter's 'wrote'). `base`:
+  // the hash of the file it edited, or null when it wrote all of it (a
+  // Write, or an edit of a missing or empty file). Trusts the patch files
+  // it's part of (itself, or ones importing or running it) only while it
+  // still has those bytes and every other file in the patch's hash is
+  // bytes trusted before or another such edit's: one edit doesn't vouch
+  // for files it didn't write, nor an Edit for the rest of a file that
+  // wasn't trusted before it. Only files inside `folder` count, only
+  // patches in `folder`'s own `.threadbear/patches`, and only patches
+  // already looked at are known as importing it.
+  trustAgentWrite(file: string, sha256: string, base: string | null, folder: string): string[];
+  // Whether `file` is part of a patch this has hashed (the patch file, a
+  // helper, a script it names): an edit to it changes code that runs.
+  covers(file: string): boolean;
+  // Whether a patch folder's patches load whatever they hold, unhashed
+  // (Threadbear's own checkout): code-writes looks at those itself.
+  loadsUnhashed(dir: string): boolean;
   // Whether `file` hashes to `hash` now, read afresh (no cache): checked
   // just before a trusted hook or setup script runs.
   verify(file: string, hash: string): boolean;
   // The thread folder's Claude Code settings (claude-trust.ts).
   checkClaude(cwd: string): ClaudeVerdict;
   trustClaude(cwd: string, hash: string): boolean;
-  // An agent's verified Edit or Write to `file` in a thread in `cwd`,
-  // which wrote bytes hashing to `sha256`: the folder's settings are
-  // trusted as they are only while the file still has those bytes and
-  // every other file they're hashed from is bytes trusted before or
-  // another such edit's. True when they were.
-  trustClaudeEdit(cwd: string, file: string, sha256: string): boolean;
+  // An agent's verified Edit or Write to `file` in a Full access thread in
+  // `cwd`, which wrote bytes hashing to `sha256` from a file hashing to
+  // `base` (null: it wrote all of it): the folder's settings are trusted
+  // as they are only while the file still has those bytes, an Edit's
+  // `base` was bytes trusted before, and every other file they're hashed
+  // from is bytes trusted before or another such edit's. Only a file
+  // inside `cwd`. True when they were.
+  trustClaudeEdit(cwd: string, file: string, sha256: string, base: string | null): boolean;
   save(): void;
 }
 
@@ -137,6 +167,8 @@ export const TRUST_ALL: PatchTrustStore = {
   trust: () => true,
   trustCurrent: (files) => files,
   trustAgentWrite: () => [],
+  covers: () => false,
+  loadsUnhashed: () => true,
   verify: () => true,
   checkClaude: () => ({ trusted: true }),
   trustClaude: () => true,
@@ -188,9 +220,18 @@ export class PatchTrust implements PatchTrustStore {
     this.loadedMtime = mtimeMs;
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8')) as Partial<TrustFile>;
+      // A file from before version 3: its patch hashes go under LEGACY, so
+      // none can match a version 3 one. Moving the tag wasn't enough: an
+      // old hash of a helper-less patch is its bytes' SHA-256, so an old
+      // patch whose text was a version 3 hash's JSON had the same hash as
+      // the patch it names (Codex's review, 6 Nov). They still say the
+      // folder had something trusted ("changed").
+      const legacy = typeof raw.version !== 'number' || raw.version < 3;
       this.folders.clear();
       for (const [key, list] of Object.entries(raw.folders ?? {})) {
-        if (Array.isArray(list)) this.folders.set(key, list.filter((h): h is string => typeof h === 'string'));
+        if (!Array.isArray(list)) continue;
+        const hashes = list.filter((h): h is string => typeof h === 'string');
+        this.folders.set(key, legacy ? hashes.map((h) => (h.startsWith(CLAUDE_PREFIX) || h.startsWith(LEGACY_PREFIX) ? h : LEGACY_PREFIX + h)) : hashes);
       }
       return 'read';
     } catch {
@@ -238,8 +279,12 @@ export class PatchTrust implements PatchTrustStore {
     return true;
   }
 
-  trustClaudeEdit(cwd: string, file: string, sha256: string): boolean {
+  trustClaudeEdit(cwd: string, file: string, sha256: string, base: string | null): boolean {
     const target = path.resolve(cwd, file);
+    if (!isInside(realpath(target), realpath(path.resolve(cwd)))) return false;
+    // An Edit wrote only what it changed; the rest is the file it started
+    // from, which counts only if it was trusted (F21).
+    if (base !== null && !this.isApproved(target, base)) return false;
     this.approve(target, sha256);
     const verdict = this.checkClaude(cwd);
     if (verdict.trusted) return false;
@@ -266,11 +311,26 @@ export class PatchTrust implements PatchTrustStore {
     return this.trustWhere(files, () => true);
   }
 
-  trustAgentWrite(file: string, sha256: string): string[] {
+  trustAgentWrite(file: string, sha256: string, base: string | null, folder: string): string[] {
     const target = realpath(path.resolve(file));
+    // The thread's own folder only: an agent working in one repo doesn't
+    // vouch for another project's patches, or a tool patch's.
+    const within = realpath(path.resolve(folder));
+    if (!isInside(target, within)) return [];
+    // An Edit wrote only what it changed; the rest of the file is what it
+    // started from. Unless that was trusted bytes (a version of a trusted
+    // patch, or another such edit's), a small edit to a cloned or pulled
+    // file would trust all of it (Gautam's scan, F21).
+    if (base !== null && !this.isApproved(target, base)) return [];
     this.approve(target, sha256);
-    const files = isPatchFile(file) ? [file] : [];
-    for (const [f, h] of this.hashes) if (!files.includes(f) && h.deps.some((d) => d.path === target)) files.push(f);
+    // And only the folder's own patches, from its own `.threadbear/`: in a
+    // thread in a parent folder (~, ~/dev), every repo under it is inside,
+    // but their patches aren't this thread's.
+    // By where its patches folder is, not the file: a patch that's a link
+    // to `src/p.ts` is still the folder's own.
+    const own = (f: string) => path.dirname(path.dirname(realpath(path.dirname(path.resolve(f))))) === within;
+    const files = isPatchFile(file) && own(file) ? [file] : [];
+    for (const [f, h] of this.hashes) if (!files.includes(f) && own(f) && h.deps.some((d) => d.path === target)) files.push(f);
     // The edited file as the edit left it (the bytes hashed now are its),
     // and every other file trusted bytes or another verified edit's.
     return this.trustWhere(files, (entry) => {
@@ -278,6 +338,20 @@ export class PatchTrust implements PatchTrustStore {
       const mine = parts.find((d) => d.path === target);
       return mine?.sha256 === sha256 && parts.every((d) => d.sha256 === undefined || this.isApproved(d.path, d.sha256));
     });
+  }
+
+  loadsUnhashed(dir: string): boolean {
+    const key = folderKeyOfDir(path.dirname(path.dirname(path.resolve(dir))));
+    return this.always.some((d) => isInside(key, d));
+  }
+
+  // Without case, as macOS names a file either way: a wider match only asks more.
+  covers(file: string): boolean {
+    const target = realpath(path.resolve(file)).toLowerCase();
+    const same = (p: string) => p.toLowerCase() === target;
+    // `unnamed`: a script it names that isn't there yet, which a write makes.
+    for (const h of this.hashes.values()) if (same(h.root) || h.deps.some((d) => same(d.path)) || h.unnamed.some(same)) return true;
+    return false;
   }
 
   verify(file: string, hash: string): boolean {
@@ -347,7 +421,7 @@ export class PatchTrust implements PatchTrustStore {
   // next start doesn't seed again.
   save(): void {
     if (!this.file) return;
-    const out: TrustFile = { version: 2, folders: Object.fromEntries(this.folders) };
+    const out: TrustFile = { version: 3, folders: Object.fromEntries(this.folders) };
     atomicWriteFileSync(this.file, JSON.stringify(out, null, 2) + '\n');
     this.loadedMtime = fs.statSync(this.file).mtimeMs;
   }
@@ -394,17 +468,21 @@ export type PatchHash = {
   blocked?: Record<string, string>;
 };
 
-// A patch file's hash: its own text's alone when it has no local files,
-// else one over its text and each file's, by path relative to the patch
-// (so a worktree and its main checkout agree). A helper it imports that's
-// missing counts as missing, so adding it later changes the hash.
+// A patch file's hash: SHA-256 over the JSON of [HASH_TAG, its own text's
+// hash, [path, hash] for each local file], the paths relative to the patch
+// (so a worktree and its main checkout agree) and sorted. JSON quotes every
+// string, so no two file sets read the same: joining `<path> <sha>` lines
+// with newlines let a folder named "lib.sh <hex>\nz" stand in for two files
+// (Gautam's scan, 6 Nov). A helper it imports that's missing counts as
+// missing, so adding it later changes the hash.
 export function patchHash(file: string): PatchHash {
   // Every file is read once, through `reads`: the bytes scanned are the
   // bytes hashed, and the patch's own code is imported from them
   // (patches.ts), never read from the folder again.
   const reads = new Reads();
   const root = reads.real(path.resolve(file)) ?? path.resolve(file);
-  const text = reads.read(root);
+  // A fifo named like a patch would hold the read (and the runner) for ever.
+  const text = isFile(root) ? reads.read(root) : undefined;
   if (!text) throw new Error(`can't read ${file}`);
   const own = sha256(text);
   const resolve = (dir: string, spec: string) => resolveHelper(dir, spec, reads);
@@ -515,20 +593,31 @@ export function patchHash(file: string): PatchHash {
   }
   const missing = [...unnamed];
   for (const m of missing) if (!reads.links.has(m)) reads.real(m);
-  const extra = { ...(incomplete ? { incomplete } : {}), ...(blocked ? { blocked } : {}) };
   const dir = path.dirname(root);
-  const lines = deps
-    .map((d) => {
+  const pairs = deps
+    .map((d): [string, string] => {
       const bytes = isFile(d.path) ? reads.read(d.path) : undefined;
       const h = bytes ? sha256(bytes) : 'missing';
       if (bytes) d.sha256 = h;
-      return `${path.relative(dir, d.path)} ${h}`;
+      return [path.relative(dir, d.path), h];
     })
-    .sort();
-  const hash = deps.length ? sha256(Buffer.from(['threadbear-patch-2', own, ...lines].join('\n'))) : own;
+    .sort(([a, x], [b, y]) => (a < b ? -1 : a > b ? 1 : x < y ? -1 : x > y ? 1 : 0));
+  // A path with a newline or another control character in it is refused,
+  // not hashed: nothing real needs one, and it's how version 2's encoding
+  // was fooled (below).
+  const odd = pairs.find(([p]) => CONTROL.test(p));
+  if (odd) incomplete ??= `patch trust won't follow ${JSON.stringify(odd[0])}: a path with a newline or another control character in it.`;
+  // A file too big to read can't be hashed, so nothing that reaches it can
+  // be trusted.
+  const huge = [...reads.tooBig][0];
+  if (huge) incomplete ??= `patch trust can't read ${path.relative(path.dirname(root), huge)}: it's over ${MAX_READ_BYTES / 1024 / 1024} MB.`;
+  const extra = { ...(incomplete ? { incomplete } : {}), ...(blocked ? { blocked } : {}) };
+  const hash = sha256(Buffer.from(JSON.stringify([HASH_TAG, own, pairs])));
   // Kept to tell whether a cached hash still holds; the bytes only for
   // the code that's imported.
   reads.bytes.clear();
+  reads.texts.clear();
+  reads.parsed.clear();
   return { hash, own, root, deps, unnamed: missing, code, edges, looked: reads, ...extra };
 }
 
@@ -699,11 +788,24 @@ function isReference(parent: AstNode | undefined, key: string | undefined): bool
 // (`setup: "./scripts/setup.sh --fast"`), an argument, a comment. Extra
 // matches only add files to the hash. Pictures are left out: an icon is
 // only ever shown, and redrawing one shouldn't ask about the patch again.
+//
+// Linear in the text: the match is one greedy run with nothing after it to
+// backtrack into, and the trailing dots and colons (a sentence's full stop)
+// come off by a loop. `/[.:]+$/` restarted at every dot of a long run of
+// them, so `./` and a few MB of dots held the runner for minutes before
+// anyone was asked anything (Gautam's scan, 6 Nov). A match longer than
+// any path can be (PATH_MAX is 1024 on macOS, 4096 on Linux) is no file.
+export const MAX_PATH = 4096;
+
 export function namedPaths(src: string): string[] {
   const out = new Set<string>();
   const re = /(?<![\w./\\-])\.\.?\/[^\s'"`;&|()<>{}[\],*?!$=\\]+/g;
   for (let m; (m = re.exec(src)); ) {
-    const p = m[0].replace(/[.:]+$/, '');
+    const found = m[0];
+    if (found.length > MAX_PATH) continue;
+    let end = found.length;
+    while (end > 0 && (found[end - 1] === '.' || found[end - 1] === ':')) end--;
+    const p = found.slice(0, end);
     if (p.length > 2 && !PICTURES.includes(path.extname(p).toLowerCase())) out.add(p);
   }
   return [...out];
@@ -764,6 +866,40 @@ export function unhashedFiles(command: string, folder: string, files: string[]):
   const top = repoTop(real);
   const reach = reachOfCommand(command, 'the action', { folder: real, top, scanJs: scriptScan, resolveImport: resolveHelper, namedPaths });
   return reach.files.filter((f) => !files.includes(f) && !PICTURES.includes(path.extname(f).toLowerCase())).map((f) => path.relative(real, f));
+}
+
+// The files a shell command run in `folder` reaches, as patch trust
+// follows a patch's commands (script-trust.ts): the scripts it runs, what
+// they import, run and source, there or not. For code-writes, which asks
+// before an edit of any of them. `problem`: something it runs that can't
+// be followed, a script that isn't there yet included, as the follow
+// stops at the first: what came after it wasn't seen.
+export function commandFiles(command: string, folder: string): { files: string[]; problem?: string } {
+  const real = realpath(folder);
+  const reach = reachOfCommand(command, 'the command', { folder: real, top: repoTop(real), scanJs: scriptScan, resolveImport: resolveHelper, namedPaths });
+  return { files: [...reach.files, ...reach.missing], ...(reach.problem ? { problem: reach.problem } : {}) };
+}
+
+// Why a command a trusted-by-hash patch's live function (`when`, `badge`,
+// `summary`, a list panel's `items`) hands `sh` mustn't run, or undefined
+// when it may. Those run by themselves, every few seconds, so they're held
+// as a hook's script is, short of the one-script rule (a live function's
+// command is worked out in code by design): followed from `folder` (the
+// one holding `.threadbear/`, where they run), it may reach only files the
+// hash covered, no script patch trust can't follow (`blocked`), and
+// nothing it can't follow itself. They ran in the thread's folder, so a
+// relative script resolved to a file in a subfolder that nothing hashed,
+// and a blocked script ran (Gautam's scan, 6 Nov).
+export function liveCommandProblem(command: string, folder: string, files: string[], blocked: Record<string, string> = {}): string | undefined {
+  const real = realpath(folder);
+  const top = repoTop(real);
+  const reach = reachOfCommand(command, `\`${command.length > 80 ? command.slice(0, 80) + '...' : command}\``, { folder: real, top, scanJs: scriptScan, resolveImport: resolveHelper, namedPaths });
+  const missed = reach.files.find((f) => !files.includes(f) && !PICTURES.includes(path.extname(f).toLowerCase()));
+  if (missed) return `runs ${path.relative(real, missed)}, which patch trust didn't hash: write the command in the patch as plain text, so trusting the patch covers what it runs.`;
+  const stuck = reach.files.find((f) => Object.hasOwn(blocked, f) && blocked[f]);
+  if (stuck) return `runs ${path.relative(real, stuck)}, and patch trust can't follow everything that runs: ${blocked[stuck]}`;
+  if (reach.problem) return reach.problem;
+  return undefined;
 }
 
 // The top of the git checkout (or worktree) `dir` is in, else `dir`.
@@ -849,12 +985,16 @@ function realpath(p: string): string {
 }
 
 // The nearest folder from `dir` up with a `.git`, when that `.git` is a
-// file (a worktree's) rather than a folder.
+// file (a worktree's) rather than a folder. The entry itself, not what it
+// points at: a `.git` that's a symlink (to a real worktree's .git file,
+// say) is no worktree, as git never makes one, and following it let any
+// folder from a zip pass as a worktree of Threadbear's own, always
+// trusted checkout (Gautam's scan, 6 Nov).
 function worktreeTop(dir: string): string | undefined {
   for (let d = dir; ; d = path.dirname(d)) {
     let st: fs.Stats | undefined;
     try {
-      st = fs.statSync(path.join(d, '.git'));
+      st = fs.lstatSync(path.join(d, '.git'));
     } catch {
       // none here
     }
@@ -873,20 +1013,54 @@ export function worktreeOf(dir: string): { top: string; main: string } | undefin
 
 // The main checkout a worktree belongs to, if git really made it: its .git
 // file names `<repo>/.git/worktrees/<name>`, and that folder's `gitdir`
-// names this worktree's .git back.
+// names this worktree's .git back. `top`'s own .git entry must be a plain
+// file (never a symlink, which would read some other worktree's), and the
+// path named back must be that entry: `<top>/.git`, with only the folder
+// part's symlinks resolved. Comparing the two entries' real paths took a
+// symlinked .git as the worktree it points at (Gautam's scan, 6 Nov).
 export function mainCheckoutOf(top: string): string | undefined {
   try {
-    const dotGit = path.join(top, '.git');
-    const m = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, 'utf8'));
-    if (!m) return undefined;
-    const gitdir = path.resolve(top, m[1]);
-    const back = path.resolve(gitdir, fs.readFileSync(path.join(gitdir, 'gitdir'), 'utf8').trim());
-    if (fs.realpathSync(back) !== fs.realpathSync(dotGit)) return undefined;
-    const common = path.resolve(gitdir, fs.readFileSync(path.join(gitdir, 'commondir'), 'utf8').trim());
+    const realTop = fs.realpathSync(top);
+    const dotGit = path.join(realTop, '.git');
+    if (!fs.lstatSync(dotGit).isFile()) return undefined;
+    const named = gitdirLine(readHead(dotGit));
+    if (!named) return undefined;
+    const gitdir = path.resolve(realTop, named);
+    const back = path.resolve(gitdir, readHead(path.join(gitdir, 'gitdir')).trim());
+    if (path.basename(back) !== '.git' || fs.realpathSync(path.dirname(back)) !== realTop) return undefined;
+    const common = path.resolve(gitdir, readHead(path.join(gitdir, 'commondir')).trim());
     const name = path.relative(path.join(common, 'worktrees'), gitdir);
     if (path.basename(common) !== '.git' || !name || name.startsWith('..') || name.includes(path.sep)) return undefined;
     return path.dirname(common);
   } catch {
     return undefined;
   }
+}
+
+// The start of a small file git writes (a .git file, a worktree's gitdir
+// or commondir): a path, so a few KB is plenty, and a huge one planted
+// there isn't read whole. Only a plain file: the paths come from the
+// folder's .git file, and opening a fifo there would wait for ever, so
+// it's opened without waiting and refused.
+function readHead(file: string): string {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`${file} isn't a file`);
+    const buf = Buffer.alloc(8192);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    return buf.subarray(0, n).toString('utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// The path a .git file's `gitdir:` line names, read without a regex (a
+// lazy match before `\s*$` was quadratic in a line of spaces).
+function gitdirLine(text: string): string | undefined {
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('gitdir:')) continue;
+    const p = line.slice('gitdir:'.length).trim();
+    return p || undefined;
+  }
+  return undefined;
 }

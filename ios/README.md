@@ -23,6 +23,18 @@ directly, so it works with the Mac asleep: whatever you send waits in
   (accent while working, orange for Needs you, red for Failed) and the
   same section headings. The accent is the system blue the Mac's accent
   is.
+- The new-thread mic (`Threadbear/Dictation.swift`) uses Apple's speech
+  recognition or Whisper, asked on the first tap (Settings › Dictation
+  after). Whisper is whisper.cpp's prebuilt framework (`WhisperBinary/`,
+  the release Voice Type on the Mac runs) with large-v3-turbo q8_0, an
+  874 MB background download into Application Support
+  (`Threadbear/Whisper/`), on the GPU. It records while listening and types
+  it all out on stop; Apple's fills in until the download's done. Whisper gets a
+  word list as its prompt, as Voice Type does ("Convex, Claude."):
+  `DictationWords` has defaults, Settings › Dictation › Words edits them,
+  and `-ThreadbearAddWords "A, B"` at launch adds some. Debug builds take `-WhisperTestWAV
+  <path>` to transcribe a file at launch and print it (the simulator runs
+  it on the CPU, as its Metal can't map the model: about 50 s a clip).
 - `Threadbear/`: the SwiftUI app. iOS 18, so the XS Max runs it too.
 - `scripts/sim-shots.sh [dir] [--dark]`: screenshots on sample data in the
   simulator (`-ThreadbearFake`, `-ThreadbearOpen <threadId>`,

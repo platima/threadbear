@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
-import { ConvexSync, forBackend, ASKED_API_VERSION, LINKS_API_VERSION, PROJECTS_DIFF_API_VERSION, STARS_API_VERSION, NETWORK_WAIT_API_VERSION, BACKEND_API_VERSION, MAC_RUNNER_STATS_API_VERSION, TURNS_API_VERSION, ICONS_API_VERSION, RUNNER_ICON_API_VERSION, SCHEDULES_API_VERSION, SHARE_API_VERSION, WOKE_API_VERSION, STARTED_BY_API_VERSION, SECTIONS_API_VERSION, MODELS_API_VERSION, REPLY_IMAGES_API_VERSION, REPLY_IMAGES_LOOKBACK_MS, REPLY_IMAGES_SCANS_PER_FLUSH, toAccountDoc, PRESENCE_MS, SYNC_COALESCE_MS, HEARTBEAT_MS, SYNC_BATCH, ensureRunnerId, toThreadDoc, convexPoster, convexUploader, pictureName, type ThreadDoc } from '../../src/sync.ts';
+import { ConvexSync, forBackend, ASKED_API_VERSION, LINKS_API_VERSION, PROJECTS_DIFF_API_VERSION, STARS_API_VERSION, NETWORK_WAIT_API_VERSION, BACKEND_API_VERSION, MAC_RUNNER_STATS_API_VERSION, TURNS_API_VERSION, ICONS_API_VERSION, RUNNER_ICON_API_VERSION, SCHEDULES_API_VERSION, SHARE_API_VERSION, WOKE_API_VERSION, STARTED_BY_API_VERSION, SECTIONS_API_VERSION, MODELS_API_VERSION, REPLY_IMAGES_API_VERSION, REPLY_IMAGES_LOOKBACK_MS, REPLY_IMAGES_SCANS_PER_FLUSH, toAccountDoc, PRESENCE_MS, SYNC_COALESCE_MS, HEARTBEAT_MS, SHARED_USAGE_POLL_MS, SYNC_BATCH, ensureRunnerId, toThreadDoc, convexPoster, convexUploader, pictureName, type ThreadDoc } from '../../src/sync.ts';
 import type { Project } from '../../src/protocol.ts';
 import type { ScheduleBackend } from '../../src/schedules.ts';
 import { nullLogger, type Logger } from '../../src/log.ts';
@@ -338,7 +338,7 @@ test('the poster speaks the deployment HTTP API and reports its errors', async (
 
 import { MESSAGE_CHARS, toMessageDoc, toolLine, inputSummary, WokeRows, WOKE_BY_API_VERSION, type Command, type MessageDoc } from '../../src/sync.ts';
 
-type Fake = { h: ReturnType<typeof makeHarness>; sync: ConvexSync; calls: Call[]; push: (value: unknown) => void; applied: string[] };
+type Fake = { h: ReturnType<typeof makeHarness>; sync: ConvexSync; calls: Call[]; push: (value: unknown) => void; applied: string[]; landed: Call[] };
 
 // A harness whose sync has lists, commands and a fake subscription; the
 // fake post answers messageHeads and takeCommand the way the deployment
@@ -346,12 +346,17 @@ type Fake = { h: ReturnType<typeof makeHarness>; sync: ConvexSync; calls: Call[]
 // What the fake deployment's photos were fetched from, across setupFull calls in a test.
 const downloads: string[] = [];
 
-function setupFull(opts: { heads?: { threadId: string; lastSeq: number }[]; taken?: Set<string>; failApply?: boolean | 'async'; log?: Logger; apiVersion?: number } = {}): Fake {
+function setupFull(opts: { heads?: { threadId: string; lastSeq: number }[]; taken?: Set<string>; failApply?: boolean | 'async'; log?: Logger; apiVersion?: number; hold?: (fn: string, args: Record<string, unknown>) => Promise<void> | undefined } = {}): Fake {
   const h = makeHarness();
   const calls: Call[] = [];
+  // In the order they finish, with hold() keeping some back.
+  const landed: Call[] = [];
   const taken = opts.taken ?? new Set<string>();
   const post = async (kind: 'mutation' | 'query', fn: string, args: Record<string, unknown>) => {
     calls.push({ kind, fn, args });
+    const held = opts.hold?.(fn, args);
+    if (held) await held;
+    landed.push({ kind, fn, args });
     if (fn === 'sync:messageHeads') return opts.heads ?? [];
     if (fn === 'sync:heartbeat' && opts.apiVersion !== undefined) return { apiVersion: opts.apiVersion };
     if (fn === 'sync:takeCommand') {
@@ -439,7 +444,7 @@ function setupFull(opts: { heads?: { threadId: string; lastSeq: number }[]; take
     subscriber,
     secretBox: h.runner.secrets,
   });
-  return { h, sync, calls, push: (v) => onUpdate?.(v), applied };
+  return { h, sync, calls, push: (v) => onUpdate?.(v), applied, landed };
 }
 
 const messagesSent = (calls: Call[]): MessageDoc[] => calls.filter((c) => c.fn === 'sync:appendMessages').flatMap((c) => c.args.messages as MessageDoc[]);
@@ -666,12 +671,98 @@ test('commands: each pending one is taken once, applied through the runner as fr
   const finishAt = calls.findIndex((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'c3');
   const rowAt = calls.findIndex((c) => c.fn === 'sync:upsertThreads' && (c.args.threads as { threadId: string }[]).some((r) => r.threadId === finished[2]!.resultThreadId));
   assert.ok(rowAt >= 0 && rowAt < finishAt, 'the new row is written before the command finishes');
+  // A share's row too (with its link, on a backend that takes one): the
+  // Mac that asked through the relay reads the link from it once it's done.
+  const shareTaken = calls.findIndex((c) => c.fn === 'sync:takeCommand' && c.args.commandId === 'c4');
+  const shareDone = calls.findIndex((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'c4');
+  const sharedRow = calls.findIndex((c, i) => i > shareTaken && c.fn === 'sync:upsertThreads' && (c.args.threads as { threadId: string }[]).some((r) => r.threadId === t.id));
+  assert.ok(sharedRow > shareTaken && sharedRow < shareDone, 'the shared row is written before the share finishes');
   // The message the phone sent is in the transcript, marked as from the phone.
   const ev = h.events(t.id).find((e: { type: string; text?: string }) => e.type === 'user.message' && e.text === 'from my phone') as { origin?: string };
   assert.equal(ev?.origin, 'phone');
   assert.equal(h.runner.get(t.id).archivedAt !== undefined, true);
   assert.equal(h.runner.get(t.id).share?.access, 'link');
   assert.deepEqual(sync.status().commands, { state: 'on', applied: 4, failed: 0 });
+});
+
+test("commands: a share's row waits for a flush under way, which took the row before it and would undo it", async () => {
+  // Stopping sharing wrote "off" at once while a flush held the row from
+  // before it ("link"), which landed after and made the link public again.
+  let release: (() => void) | undefined;
+  let holding = false;
+  const { h, sync, push, landed } = setupFull({
+    apiVersion: BACKEND_API_VERSION,
+    hold: (fn) => (holding && fn === 'sync:upsertThreads' && !release ? new Promise<void>((r) => (release = r)) : undefined),
+  });
+  sync.start();
+  await sync.flushNow();
+  const t = h.runner.create({ text: 'hello', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  h.runner.share(t.id, { access: 'link' });
+  await sync.flushNow();
+  holding = true;
+  h.runner.update({ threadId: t.id, title: 'Renamed' });
+  const flushing = sync.flushNow();
+  await tick();
+  assert.ok(release, 'the flush is writing the row as it was, still shared');
+  push([{ commandId: 'off', kind: 'share', threadId: t.id, args: { access: 'off' }, createdAt: 1 }]);
+  await tick(10);
+  release!();
+  await flushing;
+  await tick(10);
+  const rows = landed.filter((c) => c.fn === 'sync:upsertThreads').flatMap((c) => c.args.threads as { threadId: string; share?: { access: string } }[]).filter((r) => r.threadId === t.id);
+  assert.equal(rows.at(-1)?.share?.access, 'off', 'the last row written for it says off');
+});
+
+test("commands: two shares' rows written at once land in the order they were done", async () => {
+  // Sharing from one place, stopping from another: the first row stalled
+  // and landed after the second, leaving the link public.
+  let release: (() => void) | undefined;
+  let holding = false;
+  const { h, sync, push, landed } = setupFull({
+    apiVersion: BACKEND_API_VERSION,
+    hold: (fn) => (holding && fn === 'sync:upsertThreads' && !release ? new Promise<void>((r) => (release = r)) : undefined),
+  });
+  sync.start();
+  await sync.flushNow();
+  const t = h.runner.create({ text: 'hello', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  await sync.flushNow();
+  holding = true;
+  push([{ commandId: 'on', kind: 'share', threadId: t.id, args: { access: 'link' }, createdAt: 1 }]);
+  await tick(10);
+  assert.ok(release, "the share's row is on its way");
+  push([{ commandId: 'off', kind: 'share', threadId: t.id, args: { access: 'off' }, createdAt: 2 }]);
+  await tick(10);
+  release!();
+  await tick(10);
+  const rows = landed.filter((c) => c.fn === 'sync:upsertThreads').flatMap((c) => c.args.threads as { threadId: string; share?: { access: string } }[]).filter((r) => r.threadId === t.id);
+  assert.equal(rows.at(-1)?.share?.access, 'off');
+});
+
+test("commands: a share stopped while its row is on its way isn't lost", async () => {
+  // Off was the row sent before, so the stop looked like nothing new and
+  // was dropped; the shared row then landed and stayed.
+  let release: (() => void) | undefined;
+  let holding = false;
+  const { h, sync, push, landed } = setupFull({
+    apiVersion: BACKEND_API_VERSION,
+    hold: (fn) => (holding && fn === 'sync:upsertThreads' && !release ? new Promise<void>((r) => (release = r)) : undefined),
+  });
+  sync.start();
+  await sync.flushNow();
+  const t = h.runner.create({ text: 'hello', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  h.runner.share(t.id, { access: 'link' });
+  h.runner.share(t.id, { access: 'off' });
+  await sync.flushNow();
+  holding = true;
+  push([{ commandId: 'on', kind: 'share', threadId: t.id, args: { access: 'link' }, createdAt: 1 }]);
+  await tick(10);
+  assert.ok(release, "the share's row is on its way");
+  h.runner.share(t.id, { access: 'off' });
+  release!();
+  await tick(10);
+  await sync.flushNow();
+  const rows = landed.filter((c) => c.fn === 'sync:upsertThreads').flatMap((c) => c.args.threads as { threadId: string; share?: { access: string } }[]).filter((r) => r.threadId === t.id);
+  assert.equal(rows.at(-1)?.share?.access, 'off');
 });
 
 test('commands: the website pauses, resumes and runs a schedule, and nonsense fails with a note', async () => {
@@ -957,7 +1048,7 @@ function setupPictures(opts: { backend?: number; has?: { projectId: string; pict
 }
 
 test('project pictures: sent to file storage once the backend takes them, once per copy, with the symbol on the project', async () => {
-  const { h, sync, calls, uploads, setIcons, change, iconPath, dir } = setupPictures();
+  const { sync, calls, uploads, setIcons, change, iconPath, dir } = setupPictures();
   sync.start();
   await sync.flushNow();
   await tick();
@@ -968,23 +1059,20 @@ test('project pictures: sent to file storage once the backend takes them, once p
   assert.deepEqual(setIcons()[0]!.args, { key: 'k', runnerId: 'r1', projectId: 'p1', picture: 'p1-abc123', storageId: 'st_1', mediaType: 'image/png' });
   // The list changing again doesn't send the same picture again.
   change({ title: 'Threadbear app' });
-  h.clock.advance(SYNC_COALESCE_MS);
-  await tick(20);
+  await sync.flushNow();
   assert.equal(uploads.length, 1);
   // A new copy (a new file name) does.
   const next = path.join(dir, 'p1-def456.png');
   fs.writeFileSync(next, Buffer.from('NEWBYTES'));
   change({ icon: { image: { path: next, mediaType: 'image/png' }, by: 'mike', updatedAt: '2026-10-28T00:00:00.000Z' } });
-  h.clock.advance(SYNC_COALESCE_MS);
-  await tick(20);
+  await sync.flushNow();
   assert.equal(uploads.length, 2);
   assert.equal(uploads[1]!.bytes, 'NEWBYTES');
   assert.equal(setIcons()[1]!.args.picture, 'p1-def456');
   // Back to a symbol only: nothing to upload, and the mirror drops the
   // picture with setProjects (this backend is older than upsertProjects).
   change({ icon: { symbol: 'leaf', by: 'librarian', updatedAt: '2026-10-28T00:00:00.000Z' } });
-  h.clock.advance(SYNC_COALESCE_MS);
-  await tick(20);
+  await sync.flushNow();
   assert.equal(uploads.length, 2);
   assert.deepEqual((calls.filter((c) => c.fn === 'sync:setProjects').at(-1)!.args.projects as { icon?: unknown }[])[0]!.icon, { symbol: 'leaf', by: 'librarian' });
   fs.rmSync(iconPath, { force: true });
@@ -1013,7 +1101,7 @@ test('project pictures: one the mirror already has is not sent again, and an old
 });
 
 test('project pictures: a picture that cannot be read is skipped, not retried until the projects change', async () => {
-  const { sync, uploads, iconPath, h, change, dir } = setupPictures();
+  const { sync, uploads, iconPath, change, dir } = setupPictures();
   fs.rmSync(iconPath, { force: true });
   sync.start();
   await sync.flushNow();
@@ -1024,8 +1112,7 @@ test('project pictures: a picture that cannot be read is skipped, not retried un
   const fixed = path.join(dir, 'p1-fixed.png');
   fs.writeFileSync(fixed, Buffer.from('OK'));
   change({ icon: { image: { path: fixed, mediaType: 'image/png' }, by: 'librarian', updatedAt: '2026-10-28T00:00:00.000Z' } });
-  h.clock.advance(SYNC_COALESCE_MS);
-  await tick(20);
+  await sync.flushNow();
   assert.equal(uploads.length, 1);
   await sync.stop();
 });
@@ -1764,9 +1851,29 @@ test('projects: the whole list once per start, then only the ones that changed, 
   assert.equal(old.length, 4);
 });
 
+test("projects: notes go up only when they change, and a backend before API 50 always gets them", async () => {
+  const run = async (backend: number) => {
+    const p = setupPictures({ backend });
+    const one = (state: string, notes: string) => [{ id: 'p1', title: 'Threadbear', folders: [], goals: '', state, notes, createdBy: 'mike', archived: false, createdAt: 'c', updatedAt: state, threadCount: 1 }];
+    p.sync.start();
+    await p.sync.flushNow();
+    await tick();
+    for (const [state, notes] of [['a', 'long notes'], ['b', 'long notes'], ['b', 'longer notes'], ['c', 'longer notes']]) {
+      p.h.runner.publish({ method: 'projects.updated', params: { projects: one(state!, notes!) as never } });
+      p.h.clock.advance(SYNC_COALESCE_MS);
+      await tick(20);
+    }
+    await p.sync.stop();
+    return p.calls.filter((c) => c.fn === 'sync:upsertProjects').map((c) => (c.args.projects as { notes?: string }[])[0]!.notes);
+  };
+  // The first list went whole; then a state change, notes edited, a state change.
+  assert.deepEqual(await run(BACKEND_API_VERSION), [undefined, 'longer notes', undefined]);
+  assert.deepEqual(await run(NOTES_APART_API_VERSION - 1), ['long notes', 'longer notes', 'longer notes']);
+});
+
 // docs/protocol.md, "Secrets".
 import { seal } from '../../src/secrets.ts';
-import { SECRETS_API_VERSION } from '../../src/sync.ts';
+import { NOTES_APART_API_VERSION, SECRETS_API_VERSION } from '../../src/sync.ts';
 
 test('secrets: the card goes up with the runner key, and the phone sealed answer is opened here', async () => {
   const f = setupFull({ apiVersion: SECRETS_API_VERSION });
@@ -1953,7 +2060,10 @@ test('a project picture held back by the upload allowance goes by itself once th
   h.clock.advance(11 * 60_000);
   await tick(20);
   h.clock.advance(SYNC_COALESCE_MS * 2);
-  await tick(20);
+  // The flush the timer started reads the picture's file for real, which a
+  // busy machine doesn't finish in a set number of ticks (6 Nov, with the
+  // rest of the suite running): wait for it, up to a generous limit.
+  for (const end = Date.now() + 10_000; setIcons().length === 0 && Date.now() < end; ) await new Promise((r) => setTimeout(r, 5));
   assert.equal(setIcons().length, 1);
 });
 
@@ -2089,6 +2199,33 @@ test("an archived thread's folder is looked at for its history", async () => {
   assert.ok(sent.length > 0);
   assert.ok(!JSON.stringify(sent).includes(value), 'neither its history nor its row');
   await sync.stop();
+});
+
+test("a runner key doesn't ask for the list of runners, which only the main key may read", async () => {
+  const { h } = setup();
+  const make = (key: string) => {
+    const calls: Call[] = [];
+    const sync = new ConvexSync({
+      config: { enabled: true, url: 'https://x.convex.cloud', name: 'TestMac', runnerId: 'r1' },
+      key,
+      runner: h.runner,
+      version: '0.1.0+test',
+      startedAt: '2026-10-27T00:00:00.000Z',
+      clock: h.clock,
+      log: nullLogger,
+      post: async (kind, fn, args) => {
+        calls.push({ kind, fn, args });
+        return fn === 'sync:runnersList' ? [{ runnerId: 'r2', name: 'other', lastSeenAt: 1 }] : null;
+      },
+    });
+    return { sync, calls };
+  };
+  const keyed = make(`tbr_${'ab12'.repeat(16)}`);
+  assert.deepEqual(await keyed.sync.scheduleBackend().runners(), []);
+  assert.equal(keyed.calls.filter((c) => c.fn === 'sync:runnersList').length, 0);
+  const main = make('k');
+  assert.equal((await main.sync.scheduleBackend().runners())[0]!.id, 'r2');
+  assert.equal(main.calls.filter((c) => c.fn === 'sync:runnersList').length, 1);
 });
 
 test('text waits rather than go up while .env files are still being read', async () => {
@@ -2294,4 +2431,129 @@ test('runners.stats marks the figures wanted at most every 20 s, and is empty wh
   assert.deepEqual(await old.sync.runnerStats(), [], 'an older backend has none');
   assert.equal(old.calls.filter((c) => c.fn === 'sync:runnerStatsList').length, 0);
   await old.sync.stop();
+});
+
+// Other runners' usage readings are read on a timer, not watched: watching
+// re-ran on every other runner's login write (78 runs in 20 minutes with
+// four runners, 6 Nov), and a poll costs the same whatever they write.
+test("other runners' usage readings are read now, then every five minutes, without this runner's own, until sync stops", async () => {
+  const got: unknown[][] = [];
+  const reading = (runnerId: string) => ({ runnerId, provider: 'claude', email: 'mike.cann@gmail.com', usage: { windows: [], readAt: '2026-11-06T00:00:00.000Z', source: 'live' } });
+  const { h, sync, calls } = setup({
+    answer: (fn) => (fn === 'sync:heartbeat' ? { apiVersion: BACKEND_API_VERSION } : fn === 'sync:sharedUsage' ? [reading('r1'), reading('bruce')] : null),
+    extra: { sharedUsage: { setShared: (rows) => got.push(rows) } },
+  });
+  const reads = () => calls.filter((c) => c.fn === 'sync:sharedUsage');
+  sync.start();
+  await tick(20);
+  // The first read waits for the heartbeat that says the backend's version,
+  // then goes on a zero timer.
+  h.clock.advance(1);
+  await tick(20);
+  assert.equal(reads().length, 1);
+  assert.equal(reads()[0]!.kind, 'query');
+  assert.equal(reads()[0]!.args.runnerId, 'r1');
+  assert.deepEqual(got.at(-1)!.map((r) => (r as { runnerId: string }).runnerId), ['bruce'], "this runner's own left out");
+  // Heartbeats in between don't start a second timer or read again.
+  h.clock.advance(HEARTBEAT_MS * 2);
+  await tick(20);
+  assert.equal(reads().length, 1);
+  h.clock.advance(SHARED_USAGE_POLL_MS);
+  await tick(20);
+  assert.equal(reads().length, 2);
+  await sync.stop();
+  h.clock.advance(SHARED_USAGE_POLL_MS * 3);
+  await tick(20);
+  assert.equal(reads().length, 2, 'nothing after stop');
+});
+
+// 5 and 6 Nov 2026: Apple turned the push relay's key down and every push
+// through it failed for two days with nothing said anywhere but the
+// backend's logs. The owner's heartbeat now carries it (convex/pushHealth.ts).
+test('pushes failing at the backend are said once per run in tb status and the app, and clear when one gets through', async () => {
+  const notices: { level: string; message: string }[] = [];
+  let failing: unknown = { failure: '403 InvalidProviderToken', since: Date.parse('2026-11-05T02:00:00Z'), failed: 52, via: 'relay' };
+  const { h, sync } = setup({
+    answer: (fn) => (fn === 'sync:heartbeat' ? { apiVersion: BACKEND_API_VERSION, ...(failing ? { pushFailing: failing } : {}) } : null),
+    extra: { notice: (level, message) => void notices.push({ level, message }) },
+  });
+  sync.start();
+  await tick();
+  h.clock.advance(HEARTBEAT_MS);
+  await tick();
+  assert.equal(sync.status().pushFailing?.failure, '403 InvalidProviderToken');
+  assert.equal(notices.length, 1, 'said once, not every minute');
+  assert.equal(notices[0]!.level, 'warning');
+  assert.match(notices[0]!.message, /push relay's key/);
+  failing = undefined;
+  h.clock.advance(HEARTBEAT_MS);
+  await tick();
+  assert.equal(sync.status().pushFailing, undefined);
+  failing = { failure: '0 timeout', since: Date.parse('2026-11-06T02:00:00Z'), failed: 1, via: 'apple' };
+  h.clock.advance(HEARTBEAT_MS);
+  await tick();
+  assert.equal(notices.length, 2, 'a new failing run is said again');
+  await sync.stop();
+});
+
+// docs/protocol.md, "Asking another runner" (cross-runner.ts): the card on
+// the asking runner's thread. The phone can't answer it, and an "allow"
+// that the backend's row doesn't back up changes nothing.
+import { START_CARD, type RequestAnswer } from '../../src/cross-runner.ts';
+
+test('asking another runner: the phone gets a card it can only read, and allow needs the backend to say it started', async () => {
+  const f = setupFull({ apiVersion: SECRETS_API_VERSION });
+  const { h, sync, calls, push } = f;
+  const rows = () => calls.filter((c) => c.fn === 'sync:upsertThreads').flatMap((c) => c.args.threads as ThreadDoc[]);
+  sync.start();
+  await sync.flushNow();
+  await tick();
+  const t = h.runner.create({ text: 'go', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  session(h, t.id).init();
+  let row: RequestAnswer | undefined;
+  const answer = h.runner.requestCard(t.id, {
+    approvalId: 'req-0001-abcd',
+    title: 'Start a thread on main?',
+    input: { runner: 'main', text: 'Look at the GPUI build.' },
+    minutes: 60,
+    check: async () => {
+      if (row) return row;
+      throw new Error('Answer this in the Threadbear app on the main Mac: it starts the thread from there.');
+    },
+  });
+  h.clock.advance(SYNC_COALESCE_MS);
+  await tick();
+  const card = rows().filter((d) => d.threadId === t.id).at(-1)!.pendingApproval as { kind: string; name: string; title: string; options: string[]; inputSummary?: string };
+  assert.equal(card.name, START_CARD);
+  assert.deepEqual(card.options, []);
+  assert.match(card.title, /Answer it on the Mac\.$/);
+  assert.equal(card.inputSummary, undefined, 'no part of the brief goes on the row');
+  // An old phone's Allow: refused, and the card stays open.
+  push([{ commandId: 'q1', kind: 'respond', threadId: t.id, args: { approvalId: 'req-0001-abcd', decision: 'allow' }, createdAt: 1 }] as Command[]);
+  await tick(10);
+  const failed = calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'q1')!;
+  assert.equal(failed.args.ok, false);
+  assert.match(String(failed.args.note), /main Mac/);
+  assert.equal(h.runner.get(t.id).status, 'waiting');
+  // The main Mac started it and marked the row; its allow goes through.
+  row = { status: 'started', runnerId: 'm5', runnerName: 'M5', threadId: 'new-thread' };
+  push([{ commandId: 'q2', kind: 'respond', threadId: t.id, args: { approvalId: 'req-0001-abcd', decision: 'allow' }, createdAt: 2 }] as Command[]);
+  await tick(10);
+  assert.deepEqual(await answer, row);
+  assert.notEqual(h.runner.get(t.id).status, 'waiting');
+});
+
+test('asking another runner: a deny from anywhere declines it, and no answer in time expires it', async () => {
+  const h = makeHarness();
+  const t = h.runner.create({ text: 'go', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  session(h, t.id).init();
+  const never = async (): Promise<RequestAnswer> => {
+    throw new Error('not yet');
+  };
+  const first = h.runner.requestCard(t.id, { approvalId: 'req-a', title: 'Start?', input: {}, minutes: 60, check: never });
+  await h.runner.respondApproval({ threadId: t.id, approvalId: 'req-a', decision: 'deny' });
+  assert.equal((await first).status, 'declined');
+  const second = h.runner.requestCard(t.id, { approvalId: 'req-b', title: 'Start?', input: {}, minutes: 60, check: never });
+  h.clock.advance(60 * 60_000);
+  assert.equal((await second).status, 'expired');
 });

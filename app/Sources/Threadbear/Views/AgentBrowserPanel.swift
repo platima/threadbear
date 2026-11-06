@@ -43,7 +43,18 @@ struct AgentTab: Decodable, Identifiable, Equatable {
     var handoffAt: Double?
     var popup: Bool?
     var openedAt: Double?
+    /// The agent's Chrome has a window of its own up over this page (a
+    /// passkey, a permission), which the panel's picture can't show.
+    var sheet: AgentSheet?
     var id: String { "\(profile ?? "agent-chrome")/\(tabId)" }
+}
+
+/// BrowserBear's agent host (agent/sheets.mjs) sets this while one of
+/// Chrome's own windows is up over a page.
+struct AgentSheet: Decodable, Equatable {
+    /// The host brought the page's window onto the screen with it.
+    var moved: Bool?
+    var since: Double?
 }
 
 struct BrowserProfile: Decodable, Identifiable, Equatable {
@@ -126,7 +137,15 @@ final class AgentBrowserModel: ObservableObject {
             lastApp = app
             return
         }
-        if !realWindowShown { lastApp?.activate() }
+        // A passkey or permission sheet needs Chrome in front to take a
+        // click or Touch ID, so it keeps the focus while one is up.
+        if !realWindowShown && !agentTabs.contains(where: { $0.sheet != nil }) { lastApp?.activate() }
+    }
+
+    /// Brings the agent's Chrome forward, with whatever sheet it has up.
+    func showChromeSheet() {
+        guard let chromePid else { return }
+        NSRunningApplication(processIdentifier: chromePid)?.activate()
     }
 
     private func read() {
@@ -135,7 +154,14 @@ final class AgentBrowserModel: ObservableObject {
         guard let data = FileManager.default.contents(atPath: path), data != last else { return }
         last = data
         guard let state = try? JSONDecoder().decode(AgentState.self, from: data) else { return }
+        let hadSheet = agentTabs.contains { $0.sheet != nil }
         agentTabs = state.tabs
+        // The sheet's done and its window's parked again, but Chrome kept the
+        // focus it took for it: give it back, as for any other activation.
+        if hadSheet, !agentTabs.contains(where: { $0.sheet != nil }), !realWindowShown,
+           let pid = state.chromePid, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+            lastApp?.activate()
+        }
         mergeTabs()
         port = state.port
         chromePid = state.chromePid
@@ -238,6 +264,9 @@ struct AgentBrowserPanel: View {
     @State private var address = ""
     @StateObject private var surface = AgentSurfaceHandle()
     @FocusState private var addressFocused: Bool
+    /// The profile an address typed with no page open goes to. Picking a
+    /// profile from the menu makes it the default, starred there.
+    @AppStorage("browserPanelProfile") private var defaultProfile = ""
 
     private var tabs: [AgentTab] { model.tabs(for: thread.id) }
 
@@ -250,12 +279,16 @@ struct AgentBrowserPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            profilePicker
+            // Only when there's a profile to choose: with BrowserBear agent-only
+            // (Mike's trial) or no profiles connected, an empty "Choose Chrome
+            // profile" menu just looked like a setup step.
+            if !model.profiles.isEmpty { profilePicker }
             if let tab, tab.bridge == true, model.profiles.first(where: { $0.id == tab.profile })?.panelPopups != true {
                 Text("New windows open in Chrome.").font(.system(size: TypeScale.label)).foregroundStyle(.secondary).padding(.bottom, zoomed(4))
             }
             if tabs.count > 1 { tabStrip }
             if let tab, tab.state == "yours" { yourTurn(tab) }
+            if let tab, let sheet = tab.sheet { chromeSheet(sheet) }
             if let tab, tab.inChrome == true || tab.suspended == true || tab.requiresConsent == true {
                 VStack(spacing: zoomed(10)) {
                     PaneNote(text: tab.inChrome == true ? "This page is open in Chrome's window." : "This Chrome tab is not connected to the panel.")
@@ -288,7 +321,7 @@ struct AgentBrowserPanel: View {
                         }
                     }
             } else {
-                PaneNote(text: model.error ?? (model.profiles.isEmpty ? "Connect BrowserBear in a Chrome profile to use its pages here." : "Choose a Chrome profile to open a page with its existing sign-ins."))
+                PaneNote(text: model.error ?? (model.profiles.isEmpty ? "Connect BrowserBear in a Chrome profile to use its pages here." : "Type an address, or choose a Chrome profile, to open a page with its existing sign-ins."))
             }
             if let tab, tab.state == "working", let action = tab.action { working(action) }
             if tab != nil, let error = model.error { Text(error).font(.system(size: TypeScale.label)).foregroundStyle(.secondary).padding(zoomed(6)) }
@@ -317,13 +350,32 @@ struct AgentBrowserPanel: View {
 
     private static func shown(_ url: String) -> String { url == "about:blank" ? "" : url }
 
+    /// The default profile, else the first connected one.
+    private var newPageProfile: BrowserProfile? {
+        model.profiles.first { $0.id == defaultProfile } ?? model.profiles.first
+    }
+
+    /// Where an address typed with no page goes: the chosen profile, else the
+    /// agent's own Chrome when none of the user's profiles is offered.
+    private var newPageProfileID: String? {
+        newPageProfile?.id ?? (model.profiles.isEmpty && model.available ? "agent" : nil)
+    }
+
+    /// The panel's page can take an address itself; otherwise one typed opens
+    /// a new page (no page yet, one that's in Chrome's window, waiting for
+    /// Show this tab here, or disconnected).
+    private var pageTakesAddress: Bool {
+        guard let tab else { return false }
+        return tab.inChrome != true && tab.requiresConsent != true && tab.suspended != true && surface.error == nil
+    }
+
     private var toolbar: some View {
         HStack(spacing: zoomed(2)) {
             PaneHeaderButton(symbol: "chevron.left", help: "Back") { surface.evaluate("history.back()") }
             PaneHeaderButton(symbol: "chevron.right", help: "Forward") { surface.evaluate("history.forward()") }
             PaneHeaderButton(symbol: "arrow.clockwise", help: "Reload") { surface.send("Page.reload") }
             TextField("Address", text: $address)
-                .disabled(tab == nil || tab?.inChrome == true || tab?.requiresConsent == true)
+                .disabled(!pageTakesAddress && tab?.profile == nil && newPageProfileID == nil)
                 .textFieldStyle(.plain)
                 .font(.system(size: TypeScale.label))
                 .focused($addressFocused)
@@ -345,9 +397,11 @@ struct AgentBrowserPanel: View {
         var text = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if !text.contains("://") { text = (text.contains(".") && !text.contains(" ") ? "https://" : "https://www.google.com/search?q=") + text }
-        if let tab {
-            if tab.suspended == true || surface.error != nil, let profile = tab.profile { model.open(text, thread: thread.id, profile: profile) }
-            else { surface.send("Page.navigate", ["url": text]) }
+        if pageTakesAddress { surface.send("Page.navigate", ["url": text]) }
+        else if let profile = tab?.profile ?? newPageProfileID {
+            chosen = nil
+            model.select(nil, in: thread.id)
+            model.open(text, thread: thread.id, profile: profile)
         }
         addressFocused = false
     }
@@ -356,12 +410,13 @@ struct AgentBrowserPanel: View {
         HStack {
             IconMenu {
                 ForEach(model.profiles) { profile in
-                    Button("New page in \(profile.title)", systemImage: "person.crop.circle") {
+                    Button("New page in \(profile.title)", systemImage: profile.id == newPageProfile?.id ? "star.fill" : "person.crop.circle") {
+                        defaultProfile = profile.id
                         chosen = nil
                         model.select(nil, in: thread.id)
                         model.open("about:blank", thread: thread.id, profile: profile.id)
                     }
-                    .tip("Open a new page in \(profile.title)")
+                    .tip(profile.id == newPageProfile?.id ? "Open a new page in \(profile.title), the default for addresses typed with no page open" : "Open a new page in \(profile.title) and make it the default")
                 }
             } label: {
                 Label(tab.map { $0.profileTitle.isEmpty ? ($0.bridge == true ? "Chrome profile" : "Separate agent Chrome") : $0.profileTitle } ?? "Choose Chrome profile", systemImage: "person.crop.circle")
@@ -406,6 +461,22 @@ struct AgentBrowserPanel: View {
             Button("Done") { model.done(tab) }
                 .controlSize(.small)
                 .tip("Tell the agent you've finished here")
+        }
+        .padding(.horizontal, zoomed(10))
+        .padding(.vertical, zoomed(5))
+    }
+
+    /// Chrome's own window over the page, which the picture here can't show.
+    private func chromeSheet(_ sheet: AgentSheet) -> some View {
+        HStack(spacing: zoomed(8)) {
+            Image(systemName: "macwindow").font(.system(size: TypeScale.label)).foregroundStyle(.orange)
+            Text(sheet.moved == true ? "Chrome is asking for something in its own window, like a passkey. It's in the middle of your screen." : "Chrome is asking for something in its own window, like a passkey.")
+                .font(.system(size: TypeScale.label))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button("Show it") { model.showChromeSheet() }
+                .controlSize(.small)
+                .tip("Bring Chrome's window to the front")
         }
         .padding(.horizontal, zoomed(10))
         .padding(.vertical, zoomed(5))

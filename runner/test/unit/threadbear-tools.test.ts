@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FakeAccounts, makeHarness, tick, tmpDir, withCodex } from '../helpers/fakes.ts';
 import { copySessionTranscript, projectDirName } from '../../src/transcripts.ts';
-import { buildThreadbearTools, parseWhen, threadbearMcpServer } from '../../src/threadbear-mcp.ts';
+import { buildThreadbearTools, parseWhen, threadbearMcpServer, type RemoteControl } from '../../src/threadbear-mcp.ts';
+import { Relay, type RelayRow } from '../../src/relay.ts';
+import { FakeClock } from '../../src/clock.ts';
+import { nullLogger } from '../../src/log.ts';
+import type { RemoteThreads } from '../../src/thread-index.ts';
 import { needsFromTool } from '../../src/needs.ts';
 import { CodexTools, type ToolDefinition } from '../../src/adapters/codex/tools.ts';
 import { toolTitle } from '../../src/tools.ts';
@@ -942,6 +946,30 @@ test("Codex's end_turn comes before the final answer: never refused, and the ans
   assert.ok(h.events(thread.id).some((e) => e.type === 'assistant.text' && e.text === 'Looks fine. Nothing needed from you.'));
 });
 
+// Codex's half of the 6 Nov fix: end_turn asked in "Ask before edits".
+test("A Codex thread in ask mode ends its turn and reads without asking, and asks before changing anything", async () => {
+  const h = makeHarness();
+  const { thread } = start(h);
+  const list = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { provider: 'codex', sleep: async () => {} });
+  const asked: string[] = [];
+  const codex = new CodexTools(list as ToolDefinition[], {
+    requestApproval: async (r) => {
+      asked.push(r.name.split('__').at(-1)!);
+      return { decision: 'deny' };
+    },
+    cwd: () => '/tmp',
+    mode: () => 'ask',
+    rules: () => [],
+    addRules: () => {},
+  });
+  const call = (tool: string, args: Record<string, unknown>) => codex.call({ threadId: 'n', turnId: 't', callId: tool, namespace: 'threadbear', tool, arguments: args }, { fromChild: false, signal: new AbortController().signal });
+  assert.ok((await call('end_turn', { needs: 'nothing', summary: ['Checked it.'] })).success);
+  assert.ok((await call('list_threads', {})).success);
+  assert.deepEqual(asked, []);
+  assert.equal((await call('send_message', { id: thread.id, text: 'hi' })).success, false);
+  assert.deepEqual(asked, ['send_message']);
+});
+
 // A Codex thread's tool list is fixed when it starts, so what it was told
 // end_turn takes can be from before One reply changed (1 Nov 2026, thread
 // d8c829e8, refused for leaving out a question its schema never mentioned).
@@ -1377,4 +1405,125 @@ test("one reply: a reply that ends in a What I need from you section gives the c
   s.result('completed');
   await tick();
   assert.equal(h.runner.get(thread.id).needs, 'you');
+});
+
+// ------------------------------------------------------------ other runners' threads
+
+// Another runner's thread, reached through the backend as the Mac app does
+// (relay.ts): list_threads lists and searches it with its runner, read_thread
+// reads its messages, send_message queues a send for that runner. On 6 Nov
+// an M5 thread was told there was no "Rust port" thread when Mike's sidebar
+// showed it on the cloud runner.
+function farRelay(opts: { takes?: boolean } = {}) {
+  const at = (s: number) => new Date(Date.parse('2026-10-26T11:00:00Z') + s * 1000).toISOString();
+  const FAR = 'ba5bb5ec-15bf-4382-9812-2b0fe15f4087';
+  const rows: RelayRow[] = [
+    { seq: 3, role: 'user', text: 'Port the runner to Rust for Linux', turn: 't1', at: at(0) },
+    { seq: 5, role: 'tool', text: 'Ran cargo build', toolKind: 'command', turn: 't1', at: at(2) },
+    { seq: 9, role: 'assistant', text: 'The Linux build runs.', turn: 't1', at: at(10) },
+  ];
+  const calls: { fn: string; args: Record<string, unknown> }[] = [];
+  const clock = new FakeClock();
+  const remote: RemoteThreads = {
+    runners: [{ id: 'cloud', name: 'Cloud', online: true, lastSeenAt: at(0) }],
+    threads: [
+      { runnerId: 'cloud', threadId: FAR, title: 'Rust port for Linux and Windows', cwd: '/root/dev/threadbear', accountId: 'claude-main', provider: 'claude', status: 'idle', needsYou: false, unread: false, preview: 'The Linux build runs.', createdAt: at(0), lastActivityAt: at(10) },
+      { runnerId: 'cloud', threadId: 'aaaa0000-old', title: 'Old cloud thing', cwd: '/root', accountId: 'claude-main', provider: 'claude', status: 'idle', needsYou: false, unread: false, preview: '', createdAt: at(0), lastActivityAt: at(0), archivedAt: at(1) },
+    ],
+  };
+  const relay = new Relay({
+    source: () => ({
+      key: 'owner',
+      post: async (_kind, fn, args) => {
+        calls.push({ fn, args });
+        if (fn === 'relay:remoteThread') return { runnerId: 'cloud', status: 'idle', needs: 'nothing' };
+        if (fn === 'relay:remoteMessages') return { messages: args.beforeSeq ? [] : rows, hasMore: false };
+        if (fn === 'relay:queueCommand') return 'cmd1';
+        return null;
+      },
+      // That runner takes the command at once, or (takes: false) never answers.
+      subscribe: (fn, _args, onUpdate) => {
+        if (fn === 'relay:commandState' && opts.takes !== false) queueMicrotask(() => onUpdate({ state: 'taken' }));
+        return () => undefined;
+      },
+    }),
+    remote: () => remote,
+    subscribed: () => false,
+    publish: () => undefined,
+    clock,
+    log: nullLogger,
+  });
+  const control: RemoteControl = { list: async () => remote, call: (id, method, p) => relay.call(id, method, { threadId: id, ...p }) };
+  return { FAR, calls, control, relay, clock };
+}
+
+function toolsWith(h: ReturnType<typeof makeHarness>, selfId: string, remote?: RemoteControl) {
+  const list = buildThreadbearTools(h.runner, selfId, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { remote: () => remote, sleep: async () => undefined });
+  return async (name: string, args: Record<string, unknown> = {}) => {
+    const r = (await list.find((x) => x.name === name)!.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
+    return { text: r.content.map((c) => c.text).join('\n'), error: Boolean(r.isError) };
+  };
+}
+
+test("another runner's threads: listed with their runner, searched, read and messaged through the backend", async () => {
+  const h = makeHarness();
+  const { thread: me } = start(h, 'Review the YouTube comments');
+  const f = farRelay();
+  const call = toolsWith(h, me.id, f.control);
+
+  const inbox = await call('list_threads');
+  assert.match(inbox.text, /ba5bb5ec {2}Rust port for Linux and Windows {2}\[idle, inbox, on Cloud\]/);
+  assert.match(inbox.text, /Review the YouTube comments/);
+  assert.doesNotMatch(inbox.text, /Old cloud thing/, 'archived stays out of the inbox');
+  // Newest activity first: this thread (just made) is newer than the cloud one.
+  assert.ok(inbox.text.indexOf('Review the YouTube') < inbox.text.indexOf('Rust port'));
+  assert.match((await call('list_threads', { include: ['archived'] })).text, /Old cloud thing {2}\[idle, archived, on Cloud\]/);
+  const found = await call('list_threads', { query: 'rust', include: ['inbox', 'snoozed', 'archived'] });
+  assert.match(found.text, /Rust port .*on Cloud/);
+  assert.doesNotMatch(found.text, /YouTube/);
+
+  const read = await call('read_thread', { threadId: 'ba5bb5ec' });
+  assert.equal(read.error, false, read.text);
+  assert.match(read.text, /title: Rust port for Linux and Windows/);
+  assert.match(read.text, /runner: Cloud/);
+  assert.match(read.text, /User \(.*\):\nPort the runner to Rust for Linux/);
+  assert.match(read.text, /Agent \(.*\):\nThe Linux build runs\./);
+  assert.doesNotMatch(read.text, /cargo build/, 'tool calls left out, as for this runner\'s threads');
+
+  const sent = await call('send_message', { threadId: 'ba5bb5ec', text: 'How far did the Linux port get?' });
+  assert.equal(sent.error, false, sent.text);
+  assert.match(sent.text, /Sent to ba5bb5ec "Rust port for Linux and Windows" on Cloud/);
+  const q = f.calls.find((c) => c.fn === 'relay:queueCommand')!;
+  assert.equal(q.args.threadId, f.FAR);
+  assert.equal(q.args.kind, 'send');
+  assert.match(String((q.args.args as { text: string }).text), /^\[Sent by the agent in the thread "Review the YouTube comments"[\s\S]*How far did the Linux port get\?$/);
+
+  // The tools that change a thread here say where it is, not that it's missing.
+  const moved = await call('update_thread', { threadId: 'ba5bb5ec', title: 'x' });
+  assert.equal(moved.error, true);
+  assert.match(moved.text, /runs on Cloud/);
+});
+
+test("a message another runner hasn't taken yet is said to be queued, not sent", async () => {
+  const h = makeHarness();
+  const { thread: me } = start(h, 'Asker');
+  const f = farRelay({ takes: false });
+  const call = toolsWith(h, me.id, f.control);
+  const sending = call('send_message', { threadId: 'ba5bb5ec', text: 'Hello?' });
+  await tick();
+  f.clock.advance(20_000);
+  const r = await sending;
+  assert.equal(r.error, false, r.text);
+  assert.match(r.text, /^Queued for ba5bb5ec .* on Cloud, which hasn't picked it up yet/);
+});
+
+test("without the backend (sync off, or a runner key) the tools list only this runner's threads", async () => {
+  const h = makeHarness();
+  const { thread: me } = start(h, 'Local only');
+  const call = toolsWith(h, me.id, undefined);
+  assert.doesNotMatch((await call('list_threads', { query: 'rust' })).text, /Rust/);
+  assert.match((await call('read_thread', { threadId: 'ba5bb5ec' })).text, /No thread with id ba5bb5ec/);
+  // And a backend that fails leaves the local list working.
+  const broken = toolsWith(h, me.id, { list: async () => { throw new Error('offline'); }, call: async () => { throw new Error('offline'); } });
+  assert.match((await broken('list_threads')).text, /Local only/);
 });

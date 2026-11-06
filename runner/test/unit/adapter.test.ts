@@ -7,7 +7,8 @@ import type { SessionSink, AdapterOutput, ToolApprovalRequest } from '../../src/
 import { ProcessRegistry } from '../../src/proc.ts';
 import { nullLogger } from '../../src/log.ts';
 import { tmpDir } from '../helpers/fakes.ts';
-import { END_TURN_FULL_NAME, END_TURN_NUDGE, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, oneReplyAlreadyWritten } from '../../src/needs.ts';
+import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS } from '../../src/threadbear-mcp.ts';
+import { END_TURN_FULL_NAME, END_TURN_NUDGE, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, oneReplyAccepted, oneReplyAlreadyWritten } from '../../src/needs.ts';
 
 test('"Always allow" keeps only allow rules, scoped to the session', () => {
   const { updates, rules } = alwaysAllow('Bash', [
@@ -192,6 +193,51 @@ test('Stop hook: says when it sent a turn back for end_turn, so end_turn knows n
   state.close!();
 });
 
+// Thread 1b770c6a (5 Nov 2026): the context was compacted straight after an
+// accepted end_turn, and the summary didn't say a reply was owed, so the agent
+// went back to work and the card's launcher plan was never written.
+test('SessionStart after a compaction reminds the agent of a reply it owes, with the card', async () => {
+  const { state } = start([], {}, { mcpServersFor: () => ({ threadbear: { type: 'sdk', name: 'threadbear' } }), oneReply: () => true });
+  const compacted = () => state.options.hooks.SessionStart[0].hooks[0]({ hook_event_name: 'SessionStart', source: 'compact' });
+  // Nothing owed yet.
+  assert.deepEqual(await compacted(), {});
+  await state.frame!({ type: 'assistant', session_id: 's', message: { id: 'a', role: 'assistant', content: [{ type: 'tool_use', id: 'e1', name: END_TURN_FULL_NAME, input: { needs: 'you', asks: [{ question: 'How should I start the Convex OS launcher?' }] } }] } });
+  await state.options.hooks.PostToolUse[0].hooks[0]({ hook_event_name: 'PostToolUse', tool_name: END_TURN_FULL_NAME });
+  await state.frame!({ type: 'user', session_id: 's', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'e1', content: oneReplyAccepted(true) }] } });
+  const r = await compacted();
+  assert.equal(r.hookSpecificOutput.hookEventName, 'SessionStart');
+  assert.match(r.hookSpecificOutput.additionalContext, /not yet written your reply/);
+  assert.match(r.hookSpecificOutput.additionalContext, /How should I start the Convex OS launcher\?/);
+  // Only a compaction: a resume or a fresh start says nothing.
+  assert.deepEqual(await state.options.hooks.SessionStart[0].hooks[0]({ hook_event_name: 'SessionStart', source: 'resume' }), {});
+  // A Stop that sends the turn back for its reply doesn't end what's owed.
+  await state.options.hooks.Stop[0].hooks[0]({ hook_event_name: 'Stop', stop_hook_active: false });
+  assert.match((await compacted()).hookSpecificOutput.additionalContext, /Convex OS launcher/);
+  // Once the reply is written, nothing is owed.
+  await state.frame!({ type: 'assistant', session_id: 's', message: { id: 'b', role: 'assistant', content: [{ type: 'text', text: 'Here is the plan in full.' }] } });
+  assert.deepEqual(await compacted(), {});
+  state.close!();
+});
+
+// From Codex's review: a refused repeat's card never showed, and a new
+// message from the user takes over from the reply owed to the last one.
+test('SessionStart after a compaction: the accepted card only, and nothing once the user has moved on', async () => {
+  const { session, state } = start([], {}, { mcpServersFor: () => ({ threadbear: { type: 'sdk', name: 'threadbear' } }), oneReply: () => true });
+  const compacted = () => state.options.hooks.SessionStart[0].hooks[0]({ hook_event_name: 'SessionStart', source: 'compact' });
+  const call = (id: string, question: string) => state.frame!({ type: 'assistant', session_id: 's', message: { id: `m${id}`, role: 'assistant', content: [{ type: 'tool_use', id, name: END_TURN_FULL_NAME, input: { asks: [{ question }] } }] } });
+  const answer = (id: string, content: string, is_error = false) => state.frame!({ type: 'user', session_id: 's', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error }] } });
+  await call('e1', 'Approve plan A?');
+  await answer('e1', oneReplyAccepted(true));
+  await call('e2', 'Approve plan B?');
+  await answer('e2', 'Already ended.', true);
+  const r = (await compacted()).hookSpecificOutput.additionalContext;
+  assert.match(r, /plan A/);
+  assert.doesNotMatch(r, /plan B/);
+  session.send({ id: 'turn-2', text: 'Forget A, look at B', images: [] });
+  assert.deepEqual(await compacted(), {});
+  state.close!();
+});
+
 // A session on the older end_turn wrote its message first, and is told so:
 // asking for a reply would get a second that takes the first's place.
 test('Stop hook: no nudge for a reply when end_turn said the message above is it', async () => {
@@ -297,10 +343,62 @@ test("a subagent's approval is asked at once, with no itemId and no diff", async
   state.close!();
 });
 
+// In "Ask before edits" end_turn stopped for an Allow card, so every turn
+// waited on Mike with no reply written yet (6 Nov 2026, thread c3e52aa6).
+test('the threadbear tools that only read or end the turn never ask, in any mode; the rest still do', async () => {
+  for (const mode of ['ask', 'auto'] as const) {
+    const { state, approvals } = start(['Read'], { permissionMode: mode }, { neverAsk: NEVER_ASK_TOOLS, alwaysAsk: ALWAYS_ASK_TOOLS });
+    const call = (name: string) => state.options.canUseTool(name, {}, { signal: new AbortController().signal, toolUseID: `toolu_${name}`, agentID: 'a' });
+    for (const name of ['mcp__threadbear__end_turn', 'mcp__threadbear__read_thread', 'mcp__threadbear__unpin']) {
+      assert.equal((await call(name)).behavior, 'allow', `${name} in ${mode}`);
+    }
+    assert.equal(approvals.length, 0, `nothing asked in ${mode}`);
+    for (const name of ['mcp__threadbear__send_message', 'mcp__threadbear__update_thread', 'mcp__threadbear__create_thread', 'mcp__threadbear__schedule_message', 'mcp__threadbear__delete_thread', 'mcp__threadbear__pin', 'mcp__threadbear__show_panel', 'mcp__threadbear__show_options', 'mcp__threadbear__pocket', 'mcp__threadbear__wait_for_app_restart']) await call(name);
+    assert.deepEqual(approvals.map((a) => a.name.split('__').at(-1)), ['send_message', 'update_thread', 'create_thread', 'schedule_message', 'delete_thread', 'pin', 'show_panel', 'show_options', 'pocket', 'wait_for_app_restart']);
+    // And as allow rules, so the CLI lets them through before its own checks.
+    assert.ok(state.options.allowedTools.includes('Read'));
+    assert.ok(state.options.allowedTools.includes('mcp__threadbear__end_turn'));
+    assert.ok(!state.options.allowedTools.includes('mcp__threadbear__send_message'));
+    state.close!();
+  }
+  for (const name of ALWAYS_ASK_TOOLS) assert.ok(!NEVER_ASK_TOOLS.has(name));
+});
+
 test('each permission mode maps to the SDK mode that enforces it', () => {
   assert.equal(sdkPermissionMode('full'), 'bypassPermissions');
   assert.equal(sdkPermissionMode('ask'), 'default');
   // Auto must reach the SDK as auto: anything else either bypasses the
   // classifier or prompts for everything.
   assert.equal(sdkPermissionMode('auto'), 'auto');
+});
+
+test('Plan first: ExitPlanMode becomes a plan card, and approving it switches the CLI out of plan mode', async () => {
+  assert.equal(sdkPermissionMode('plan'), 'plan');
+  const { fn, state } = fakeQuery();
+  const outputs: AdapterOutput[] = [];
+  const approvals: ToolApprovalRequest[] = [];
+  const sink: SessionSink = {
+    output: (o) => outputs.push(o),
+    requestApproval: async (req) => {
+      approvals.push(req);
+      return { decision: 'allow', mode: 'full' };
+    },
+    requestQuestion: async () => ({ answers: null }),
+    exited: () => {},
+  };
+  const adapter = new ClaudeAdapter({ claudePath: '/nonexistent', registry: new ProcessRegistry(tmpDir(), nullLogger), log: nullLogger, queryFn: fn });
+  const dir = tmpDir();
+  const opts = { cwd: dir, account: { id: 'claude-3', provider: 'claude' as const, title: 'x', configDir: dir }, sessionId: '00000000-0000-0000-0000-000000000002', resume: false, mediaDir: dir, blobsDir: dir, tmpDir: dir };
+  adapter.start({ ...opts, threadId: 't-plan', permissionMode: 'plan' }, sink);
+  assert.equal(state.options.permissionMode, 'plan');
+  const res = await state.options.canUseTool('ExitPlanMode', { plan: '1. Do it' }, { signal: new AbortController().signal, toolUseID: 'toolu_plan' });
+  assert.deepEqual(outputs.find((o) => o.kind === 'planProposed'), { kind: 'planProposed', itemId: 'toolu_plan', text: '1. Do it' });
+  assert.equal(approvals[0].canAlwaysAllow, false);
+  assert.equal(res.behavior, 'allow');
+  assert.deepEqual(res.updatedPermissions, [{ type: 'setMode', mode: 'bypassPermissions', destination: 'session' }]);
+  // Out of plan mode, a later ExitPlanMode is just a tool call.
+  outputs.length = 0;
+  await state.options.canUseTool('ExitPlanMode', { plan: 'again' }, { signal: new AbortController().signal, toolUseID: 'toolu_2' });
+  assert.equal(outputs.filter((o) => o.kind === 'planProposed').length, 0);
+  state.close!();
 });

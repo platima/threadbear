@@ -342,7 +342,7 @@ dashboard panel.
 
 - `convex/schema.ts`: `runners`, `threads`, `messages`, `commands`,
   `projects`, `schedules`, `accounts`, `tokens`, `devices`, `runnerKeys`,
-  `threadTombstones` (docs/protocol.md, "Runner keys").
+  `threadTombstones`, `runnerLogins` (docs/protocol.md, "Runner keys").
 - `convex/sync.ts`: the runner's mutations (`upsertThreads`,
   `removeThreads`, `prune`, `heartbeat`, `bye`, `appendMessages`,
   `setProjects`, `upsertProjects`, `setSchedules`, `setAccounts`, `takeCommand`,
@@ -380,8 +380,11 @@ dashboard panel.
   through the push relay (`docs/push-relay.md`), and registers with it
   once, proving it's this deployment through `/relay/verify` in
   `convex/http.ts` and the `relayChecks` table. Env on both deployments: `APNS_KEY_P8`, `APNS_KEY_ID`,
-  `APNS_TEAM_ID` (Poddle's, copied 28 Oct) and `APNS_TOPIC`
-  (`com.mikecann.threadbear`). `npx convex run push:test '{"body":"hi"}'
+  `APNS_TEAM_ID` (Poddle's key, copied 28 Oct and again on 6 Nov 2026
+  after Poddle's old key was revoked) and `APNS_TOPIC`
+  (`com.mikecann.threadbear`). Each send's outcome goes in the
+  `pushHealth` row (`convex/pushHealth.ts`); while none get through, the
+  owner runner's heartbeat answers `pushFailing` and `tb status` says so. `npx convex run push:test '{"body":"hi"}'
   --prod` sends a test; `npx convex run devices:list --prod` shows the
   phones.
 - `convex/tokens.ts`: the token helpers, and `issue`, `revoke`, `list` to
@@ -671,6 +674,16 @@ it may only hold things back, never clear them: tool output is untrusted and can
 tell the model to answer "clean". Linux has no such model, so a Linux runner has
 the rules and the withhold list, and `tb status` says so.
 
+## Full sync (API 52, 6 Nov 2026)
+
+Tool output, input and diffs for a runner with `sync.full` on (docs/full-convex.md
+step 4; docs/protocol.md "Sync" has the fields). Convex charges a read for the whole
+document, so they're in `eventBodies`, not `messages`: no list ever reads one, and
+each is fetched once, by seq, when someone opens that tool. Writes are the cost, plus
+reading each row again to delete it after 30 days (`pruneBodies`), so about twice what
+comes up. Bumping the rules re-sends nothing; `scrub-stored.mjs` covers this table,
+but it's the one table where a run over everything costs real I/O.
+
 ## The Pocket (API 19)
 
 The phone's deck of cards for when Mike's out (`pocketCards`, the `pocket`
@@ -892,7 +905,20 @@ Measured after API 48 landed (20 minutes of prod logs, 5 Nov, late at night with
 almost no client open, so not comparable with the samples above): `phone:projects`
 37 KB a run, `sync:schedulesSince` one whole read at 178 KB and then little,
 `sync:sharedUsage` still 12 KB a run and the biggest at 78 runs, and about 184 MB/day
-overall. A full day's rate is still to come.
+overall. A full day's rate is still to come. On 6 Nov `sync:sharedUsage` became a
+query every 5 minutes instead of a subscription (each runner's watch re-ran on
+every other runner's login write): 12 runs an hour per runner, about 14 MB a day
+for four runners whatever they write.
+
+Then, API 50 (6 Nov). The daily check's 15-minute samples had
+`sync:upsertProjects` at 55 KB a call, 11 to 16 calls a quarter hour while
+threads were busy: each `update_project` (or a project's thread count moving)
+rewrote the whole row, and 16 KB of the Threadbear project's 17.7 KB is notes,
+so each was about 34 KB read and 17 KB written. Notes now live in
+`projectNotes` (`convex/projectNotes.ts`) and a runner of 50 sends them only
+when they change, so a state update writes the small row alone. An older row's
+notes move out the first time it's written; `phone:project` reads either.
+`phone:projectSearch` and `setProjectIcon` read the smaller rows too.
 
 An estimate for one Mac with the app open, 300 threads, 15 turns and half an
 hour of phone use a day: about 6 MB a day, 185 MB a month, under a fifth of the

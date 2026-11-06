@@ -13,8 +13,10 @@ export function isProvider(v: unknown): v is Provider {
 
 // auto is Claude Code's auto mode: a separate classifier model approves or
 // blocks each action, and asks only when it can't decide. Codex has no such
-// thing, so there it behaves like ask.
-export type PermissionMode = 'full' | 'ask' | 'auto';
+// thing, so there it behaves like ask. plan is "Plan first": the agent
+// reads and plans but changes nothing until Mike approves its plan
+// (docs/protocol.md, "Plan first").
+export type PermissionMode = 'full' | 'ask' | 'auto' | 'plan';
 // 'ultra' is Codex's multi-agent level; Claude never offers it.
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
@@ -168,6 +170,7 @@ export type ThreadSummary = {
   lastActivityAt: string;
   snoozedUntil?: string;
   snoozedUntilRestart?: boolean; // hibernating until the runner next starts
+  snoozedUntilRelease?: true; // with snoozedUntilRestart: until it starts on a new release
   // Hibernated in Mike's words ("Hibernate in words"): what he said, the
   // topic it waits for, and pending while the time is worked out.
   wakeWhen?: { said: string; topic?: string; pending?: true };
@@ -591,7 +594,9 @@ export type CodexTurnUsage = {
 export type ReviewDraft = { pickedId?: string; pickedIds?: string[]; notes: Record<string, string>; reply?: string; none?: true };
 
 // One picture of an option: its first, or another screen or state of it.
-export type ReviewShot = { title?: string; image: ImageRef };
+// media: a video (video/mp4, video/quicktime) or page (text/html) the
+// window plays or shows in place of image, which is then its still.
+export type ReviewShot = { title?: string; image: ImageRef; media?: ImageRef };
 
 export type DesignReview = {
   id: string;
@@ -651,6 +656,10 @@ export type EventBody =
   | { type: 'secret.requested'; approvalId: string; itemId?: string; label: string; reason: string; placeholder?: string }
   | { type: 'approval.resolved'; approvalId: string; decision: ApprovalDecision; message?: string }
   | { type: 'plan.updated'; entries: PlanEntry[] }
+  // "Plan first" (docs/protocol.md): the agent's plan, waiting for Mike,
+  // and what became of it.
+  | { type: 'plan.proposed'; itemId: string; text: string }
+  | { type: 'plan.resolved'; itemId: string; decision: 'go' | 'revise' }
   // wokeBy: the background work that finished and started this turn (docs/protocol.md)
   | { type: 'turn.started'; turnId: string; wokeBy?: { kind: BackgroundKind; description: string }[] }
   | {
@@ -741,6 +750,8 @@ export const PERSISTED_TYPES = new Set<string>([
   'secret.requested',
   'approval.resolved',
   'plan.updated',
+  'plan.proposed',
+  'plan.resolved',
   'turn.started',
   'turn.completed',
   'asks.ticked',
@@ -774,6 +785,9 @@ export type Schedule = {
   model?: string;
   effort?: EffortLevel;
   permissionMode?: PermissionMode;
+  // A shell command run first, in its folder; a run whose check prints
+  // nothing is skipped (experiment scheduleChecks, schedule-check.ts).
+  check?: string;
   paused: boolean;
   createdAt: string;
   updatedAt: string;

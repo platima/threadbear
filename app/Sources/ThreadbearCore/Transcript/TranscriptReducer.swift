@@ -83,6 +83,13 @@ public struct TranscriptModel: Sendable {
     /// decreases, so the rows for items from `n` on are a binary search away.
     private var rowStarts: [Int] = []
     private var planRowForTurn: [String: String] = [:]
+    /// "Plan first": the approved plan card that takes the steps the agent
+    /// then works through (plan.updated), and the turn it does so in (nil
+    /// until it starts: Codex's goes ahead in the next turn). Approval
+    /// requests for a plan card's ExitPlanMode call, which get no row.
+    private var planTakingSteps: String?
+    private var planStepsTurn: String?
+    private var planApprovals: Set<String> = []
     /// Rows of commands Mike ran from a chip (an action.run with no
     /// trigger): left out of the turn's line of work before them, so what
     /// he pressed shows where he pressed it. A hook's run (a trigger) folds
@@ -100,6 +107,9 @@ public struct TranscriptModel: Sendable {
     /// What Mike has written in each card's Something else boxes, by the
     /// card's seq, kept here for the same reason.
     public private(set) var askNotes: [Int: [Int: AskNote]] = [:]
+    /// Other runners' requests for a thread, read by approval id, so a
+    /// rebuild keeps them on their cards.
+    public private(set) var startRequests: [String: StartRequest] = [:]
     /// The follow-ups Mike ticked on each done card, by the card's seq,
     /// kept here for the same reason.
     public private(set) var nextPicks: [Int: Set<Int>] = [:]
@@ -122,6 +132,9 @@ public struct TranscriptModel: Sendable {
     private var completedTurns: Set<String> = []
     /// Turns with a summary from end_turn: their other messages are work.
     private var summarizedTurns: Set<String> = []
+    /// Turns with a One reply final message: like a summary, it's the
+    /// reply, so the turn gets no changes card either.
+    private var repliedTurns: Set<String> = []
     /// Edit and Write tool items per turn, in order, for the changes card.
     private var editsByTurn: [String: [String]] = [:]
     /// The seq each tool row's result came at, by row id: a message written
@@ -390,6 +403,21 @@ public struct TranscriptModel: Sendable {
         return refreshRows()
     }
 
+    /// Another runner's request was read for the card `approvalId`.
+    public mutating func setStartRequest(_ approvalId: String, _ request: StartRequest) -> TranscriptChange {
+        guard startRequests[approvalId] != request else { return TranscriptChange() }
+        startRequests[approvalId] = request
+        let id = "ap:\(approvalId)"
+        guard itemIndex[id] != nil else { return TranscriptChange() }
+        update(id) { content in
+            if case .approval(var item) = content {
+                item.startRequest = request
+                content = .approval(item)
+            }
+        }
+        return refreshRows()
+    }
+
     /// Mike wrote or pasted in the Something else boxes on the card from `seq`.
     public mutating func setAskNotes(_ seq: Int, _ notes: [Int: AskNote]) -> TranscriptChange {
         guard askNotes[seq, default: [:]] != notes else { return TranscriptChange() }
@@ -440,6 +468,9 @@ public struct TranscriptModel: Sendable {
         items = []
         itemIndex = [:]
         planRowForTurn = [:]
+        planTakingSteps = nil
+        planStepsTurn = nil
+        planApprovals = []
         pressedRuns = []
         asksRowForSeq = [:]
         openAsksRow = nil
@@ -451,6 +482,7 @@ public struct TranscriptModel: Sendable {
         hidden = Self.hiddenRanges(events)
         completedTurns = []
         summarizedTurns = []
+        repliedTurns = []
         editsByTurn = [:]
         resultSeqs = [:]
         pendingCards = [:]
@@ -606,6 +638,7 @@ public struct TranscriptModel: Sendable {
 
         case .assistantText(let itemId, let text, _, let narration, _, let final):
             streaming[itemId] = nil
+            if final, let turnId { repliedTurns.insert(turnId) }
             let id = "a:\(itemId)"
             let thought = "r:\(itemId)"
             if itemIndex[id] == nil, let i = itemIndex[thought], case .reasoning(let live) = items[i].content, live.isStreaming {
@@ -757,13 +790,21 @@ public struct TranscriptModel: Sendable {
             }
             noteEdit(id, turnId: turnId)
 
+        case .approvalRequested(let request) where request.name == "ExitPlanMode" && itemIndex["pl:" + (request.itemId ?? "")] != nil:
+            // Claude's plan waiting on its ExitPlanMode call: the plan card
+            // is its card. Still pending, so Return in an empty composer
+            // approves it and the turn reads as waiting on Mike.
+            pendingCards["ap:\(request.approvalId)"] = turnId ?? ""
+            planApprovals.insert(request.approvalId)
+            tailDirty = true
+
         case .approvalRequested(let request):
             let id = "ap:\(request.approvalId)"
             // A subagent's tools have no item id, and no row of their own.
             let toolId = request.itemId.flatMap { $0.isEmpty ? nil : "t:" + $0 }
             if let toolId { approvalForTool[toolId] = id }
             let shown = toolId.map { itemIndex[$0] != nil } ?? false
-            append(TranscriptRow(id: id, seq: seq, turnId: turnId, content: .approval(ApprovalItem(request: request, root: root, toolShown: shown))))
+            append(TranscriptRow(id: id, seq: seq, turnId: turnId, content: .approval(ApprovalItem(request: request, root: root, toolShown: shown, startRequest: startRequests[request.approvalId]))))
             pendingCards[id] = turnId ?? ""
             tailDirty = true
 
@@ -794,6 +835,10 @@ public struct TranscriptModel: Sendable {
             }
 
         case .approvalResolved(let resolution):
+            if planApprovals.remove(resolution.approvalId) != nil {
+                pendingCards["ap:\(resolution.approvalId)"] = nil
+                tailDirty = true
+            }
             for id in ["ap:\(resolution.approvalId)", "q:\(resolution.approvalId)", "s:\(resolution.approvalId)"] where itemIndex[id] != nil {
                 pendingCards[id] = nil
                 tailDirty = true
@@ -814,9 +859,40 @@ public struct TranscriptModel: Sendable {
                 }
             }
 
+        case .planProposed(let itemId, let text):
+            let id = "pl:\(itemId)"
+            planTakingSteps = nil
+            if itemIndex[id] != nil {
+                update(id) { $0 = .planCard(PlanCard(itemId: itemId, text: text)) }
+            } else {
+                append(TranscriptRow(id: id, seq: seq, turnId: turnId, content: .planCard(PlanCard(itemId: itemId, text: text))))
+            }
+
+        case .planResolved(let itemId, let go):
+            let id = "pl:\(itemId)"
+            update(id) { content in
+                if case .planCard(var card) = content {
+                    card.state = go ? .approved : .sentBack
+                    content = .planCard(card)
+                }
+            }
+            if go, itemIndex[id] != nil {
+                planTakingSteps = id
+                planStepsTurn = turnId
+            }
+
         case .planUpdated(let entries):
             let key = turnId ?? "seq\(seq)"
-            if let id = planRowForTurn[key], itemIndex[id] != nil {
+            if let id = planTakingSteps, itemIndex[id] != nil {
+                // The approved plan's own steps: its card becomes the checklist.
+                planRowForTurn[key] = id
+                update(id) { content in
+                    if case .planCard(var card) = content {
+                        card.entries = entries
+                        content = .planCard(card)
+                    }
+                }
+            } else if let id = planRowForTurn[key], itemIndex[id] != nil {
                 update(id) { $0 = .plan(entries) }
             } else {
                 let id = "p:\(seq)"
@@ -826,6 +902,7 @@ public struct TranscriptModel: Sendable {
 
         case .turnStarted(let wokeBy):
             let key = turnId ?? ""
+            if planTakingSteps != nil, planStepsTurn == nil { planStepsTurn = key }
             openTurn = key
             startedTurns.insert(key)
             if let date = Self.date(event.ts) { turnStarts[key] = date }
@@ -842,6 +919,10 @@ public struct TranscriptModel: Sendable {
             finishStreaming()
             let key = completion.turnId.isEmpty ? (turnId ?? "seq\(seq)") : completion.turnId
             completedTurns.insert(key)
+            if planTakingSteps != nil, planStepsTurn == key {
+                planTakingSteps = nil
+                planStepsTurn = nil
+            }
             if let date = Self.date(event.ts) { lastTurnEnd = date }
             if let turnId { completedTurns.insert(turnId) }
             if let open = openTurn, open == key || open == turnId || completion.turnId.isEmpty {
@@ -865,7 +946,7 @@ public struct TranscriptModel: Sendable {
                 // picked there and sent from the composer (Mike, 28 Oct).
                 if completion.outcome == .completed, completion.needs == "you", !completion.asks.isEmpty {
                     let cardId = "ak:\(seq)"
-                    append(TranscriptRow(id: cardId, seq: seq, turnId: turnId ?? completion.turnId, content: .asks(AsksCard(seq: seq, asks: completion.asks, picks: askPicks[seq] ?? [:], notes: askNotes[seq] ?? [:]))))
+                    append(TranscriptRow(id: cardId, seq: seq, turnId: turnId ?? completion.turnId, content: .asks(AsksCard(seq: seq, asks: completion.asks, ticked: Set(completion.asks.indices.filter { completion.asks[$0].ticked }), picks: askPicks[seq] ?? [:], notes: askNotes[seq] ?? [:]))))
                     asksRowForSeq[seq] = cardId
                     openAsksRow = cardId
                 } else if completion.outcome == .completed, completion.needs == "nothing" {
@@ -1146,7 +1227,7 @@ public struct TranscriptModel: Sendable {
         if replies.contains(k) || items[k].id.hasPrefix("rw:") { return true }
         switch items[k].content {
         case .user(let message): return !message.isFromRunner
-        case .error, .footer, .asks, .review, .gap: return true
+        case .error, .footer, .asks, .review, .gap, .planCard: return true
         case .images(_, _, let generated): return generated
         case .tool(let tool): return Self.isTakenEndTurn(tool) || pressedRuns.contains(items[k].id)
         default: return false
@@ -1379,7 +1460,9 @@ public struct TranscriptModel: Sendable {
                         // A turn that ended with a summary has no changes
                         // card: the summary says what changed, and the
                         // edits are still in the folded work (Mike, 30 Oct).
-                        if !stretch.contains(where: summarizedTurns.contains), let card = changedFiles(turns: stretch) {
+                        // One reply's final message counts too: it replaced
+                        // the summary, and the card came back with it (6 Nov).
+                        if !stretch.contains(where: { summarizedTurns.contains($0) || repliedTurns.contains($0) }), let card = changedFiles(turns: stretch) {
                             out.append(derived("cf:" + card.turnId, seq: row.seq, turnId: row.turnId, .changes(card)))
                             starts.append(turn.lowerBound)
                         }
@@ -1467,6 +1550,13 @@ public struct TranscriptModel: Sendable {
 
     /// The files a turn changed, from its Edit and Write calls that didn't
     /// fail, each with its edits' line counts added up.
+    /// Claude's plan mode writes its plan to ~/.claude/plans/<name>.md. That's
+    /// the CLI's own note, shown as the plan card; "Edited 1 file" for it,
+    /// in a turn that changed nothing of the project's, read as a change.
+    static func isPlanFile(_ path: String) -> Bool {
+        path.contains("/.claude/plans/") && path.hasSuffix(".md")
+    }
+
     private func changedFiles(turn: String) -> ChangedFiles? {
         changedFiles(turns: [turn])
     }
@@ -1482,7 +1572,7 @@ public struct TranscriptModel: Sendable {
         for id in ids {
             guard let i = itemIndex[id], case .tool(let tool) = items[i].content, !tool.failed else { continue }
             // Every file a tool changed: a Codex patch can touch several.
-            for diff in tool.effectiveDiffs where !diff.hunks.isEmpty {
+            for diff in tool.effectiveDiffs where !diff.hunks.isEmpty && !Self.isPlanFile(diff.path) {
                 let path = diff.path.isEmpty ? tool.title : diff.path
                 let stats = DiffBuilder.stats(diff)
                 if var file = files[path] {

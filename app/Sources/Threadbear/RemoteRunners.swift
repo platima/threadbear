@@ -49,6 +49,27 @@ extension AppModel {
         for id in gone { forget(id) }
     }
 
+    /// A thread read through Convex has the table's row for a summary,
+    /// and that row has no card (thread-index.ts leaves the asks out, as
+    /// they'd cost a write each). The card still comes, in the relay's
+    /// events, so the transcript draws it, but picking an answer and
+    /// sending it go by the summary's `needs`, `asks` and `asksSeq`
+    /// (Decisions.isOpen), and without them every click on it did nothing
+    /// (Mike, 6 Nov, on a Hetzner thread). So while it's open here they
+    /// come from the card it's showing, in the relay's seqs like the card.
+    func withRelayCard(_ summary: ThreadSummary) -> ThreadSummary {
+        guard summary.isRemote, !directRemoteLink else { return summary }
+        return Decisions.withCard(summary, sessions[summary.id]?.openCard)
+    }
+
+    /// A relayed thread's card came or went (ThreadSession.syncOpenCard).
+    /// Any summary stored over it gets the card too (`threads`' didSet).
+    func relayCardChanged(_ threadId: String) {
+        guard viaRelay(threadId), let thread = threads[threadId] else { return }
+        let next = withRelayCard(thread)
+        if next != thread { threads[threadId] = next }
+    }
+
     func isRemote(_ threadId: String) -> Bool { threads[threadId]?.isRemote == true }
 
     /// Another runner's thread reached through this Mac's runner and Convex
@@ -97,6 +118,15 @@ extension AppModel {
     /// Where a thread's requests go, without connecting: this Mac's runner
     /// for its own threads (and with no thread), the thread's runner while
     /// it's connected, else nil.
+    /// A tool's output on another runner's thread, from Convex: once for each tool, as
+    /// this Mac's runner keeps it, and it arrives as events on the thread.
+    func fetchHeldBody(threadId: String, seq: Int) {
+        guard viaRelay(threadId), let client else { return }
+        Task {
+            _ = try? await client.call("threads.heldBody", .object(["threadId": .string(threadId), "seq": .number(Double(seq))]), as: JSONValue.self)
+        }
+    }
+
     func client(for threadId: String?) -> RPCClient? {
         guard let threadId, !viaRelay(threadId) else { return client }
         return remoteClients.client(for: route(threadId), local: client)

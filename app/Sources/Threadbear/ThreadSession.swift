@@ -76,6 +76,10 @@ final class ThreadSession {
     /// The open card (TranscriptModel.openCard), observed, so the composer
     /// it's drawn in follows its picks and notes and drops it once it closes.
     private(set) var openCard: TranscriptRow?
+    /// Observed by recovery controls outside the AppKit transcript. The
+    /// rows themselves aren't observed, so a refusal arriving after its
+    /// thread summary must still redraw the offer.
+    private(set) var latestCompletion: TurnCompletion?
 
     init(threadId: String, subagentId: String? = nil, app: AppModel) {
         self.threadId = threadId
@@ -507,8 +511,19 @@ final class ThreadSession {
     }
 
     private func syncOpenCard() {
+        if feed.model.openTurn == nil {
+            let latest = feed.model.rows.reversed().lazy.compactMap { row -> TurnCompletion? in
+                if case .footer(let completion) = row.content { return completion }
+                return nil
+            }.first
+            if latest != latestCompletion { latestCompletion = latest }
+        } else if latestCompletion != nil {
+            latestCompletion = nil
+        }
         let card = feed.model.openCard
-        if card != openCard { openCard = card }
+        guard card != openCard else { return }
+        openCard = card
+        app?.relayCardChanged(threadId)
     }
 
     // MARK: Older rows
@@ -643,13 +658,104 @@ final class ThreadSession {
         }
     }
 
+    /// Requests being read for their cards (docs/protocol.md, "Asking
+    /// another runner"), so a card drawn again doesn't ask again.
+    private var startRequestsLoading: Set<String> = []
+
+    /// Reads another runner's request for a thread from this Mac's own
+    /// runner (the only one that can), and puts it on its card.
+    func loadStartRequest(_ approvalId: String) {
+        guard !startRequestsLoading.contains(approvalId), let client = app?.client else { return }
+        startRequestsLoading.insert(approvalId)
+        let threadId = threadId
+        Task { [weak self] in
+            let info: StartRequest
+            do {
+                info = try await client.startRequest(threadId: threadId, approvalId: approvalId)
+            } catch {
+                info = .failed(error.localizedDescription)
+            }
+            // Loaded or not, it may be asked for again: a reload (the direct
+            // link turned on or off) builds the card afresh without it.
+            self?.startRequestsLoading.remove(approvalId)
+            guard let self, self.state == .loaded, !self.rebuilding else { return }
+            let oldStart = self.displayStart
+            let change = self.feed.setStartRequest(approvalId, info)
+            if !change.isEmpty { self.show(change, oldStart: oldStart) }
+        }
+    }
+
+    /// Start it or Don't on another runner's request: this Mac's runner
+    /// starts it and answers the card (requests.answer), never the
+    /// thread's own runner, which may not start threads elsewhere.
+    private func answerStartRequest(approvalId: String, allow: Bool) -> Bool {
+        guard case .approval(let item)? = feed.model.item(id: "ap:" + approvalId)?.content, item.isStartRequest else { return false }
+        // Only what Mike has read can be started: never one still loading
+        // or that failed to load. The fingerprint ties the answer to what
+        // the card showed, so a request filed again under the same id with
+        // other words isn't started on the strength of the old card.
+        guard let client = app?.client else { return true }
+        let shown = item.startRequest
+        if allow, shown == nil || shown?.error != nil || shown?.fingerprint == nil { return true }
+        let threadId = threadId
+        let runnerId = shown?.startsOn?.id
+        let fingerprint = shown?.fingerprint
+        ActivityRecorder.shared.answered(threadId: threadId, decision: allow ? .allow : .deny)
+        startAnswering(approvalId)
+        Task {
+            do {
+                try await client.answerStartRequest(threadId: threadId, approvalId: approvalId, allow: allow, runnerId: allow ? runnerId : nil, fingerprint: fingerprint)
+            } catch {
+                self.stopAnswering(approvalId)
+                app?.show(error)
+            }
+        }
+        return true
+    }
+
+    /// Cards whose answer is on its way. Another runner's thread takes a
+    /// moment or more to hear it (relay.ts waits for that runner to take
+    /// the command), so the card shows a spinner, its buttons stop taking
+    /// clicks, and a second click or Return does nothing. Once the answer
+    /// lands the card turns into its answered line by itself; on a failure
+    /// the buttons come back with the error.
+    private(set) var answering: Set<String> = []
+
+    private func startAnswering(_ approvalId: String) {
+        answering.insert(approvalId)
+        view?.refreshCard(approvalId)
+    }
+
+    private func stopAnswering(_ approvalId: String) {
+        answering.remove(approvalId)
+        view?.refreshCard(approvalId)
+    }
+
     func respond(approvalId: String, decision: ApprovalDecision, answers: [String: String]?, message: String?) {
+        guard !answering.contains(approvalId) else { return }
+        if decision != .answered, answerStartRequest(approvalId: approvalId, allow: decision != .deny) { return }
         guard let client = app?.client(for: threadId) else { return }
         let threadId = threadId
         ActivityRecorder.shared.answered(threadId: threadId, decision: decision)
+        startAnswering(approvalId)
         Task {
             do {
                 try await client.respond(threadId: threadId, approvalId: approvalId, decision: decision, message: message, answers: answers)
+            } catch {
+                self.stopAnswering(approvalId)
+                app?.show(error)
+            }
+        }
+    }
+
+    /// Go ahead on a "Plan first" plan card (docs/protocol.md).
+    func approvePlan(itemId: String) {
+        guard let client = app?.client(for: threadId) else { return }
+        let threadId = threadId
+        ActivityRecorder.shared.answered(threadId: threadId, decision: .allow)
+        Task {
+            do {
+                try await client.approvePlan(threadId: threadId, itemId: itemId)
             } catch {
                 app?.show(error)
             }

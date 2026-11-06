@@ -20,6 +20,7 @@
 import { WebSocketServer } from 'ws';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 // The tour's sample threads, the runner's own (it runs TypeScript as it is).
 import { SAMPLE_THREADS } from '../../../runner/src/samples.ts';
@@ -107,7 +108,8 @@ let accounts = [
   },
   {
     id: 'claude-2', provider: 'claude', title: 'work@example.com', configDir: `${tokenStatsAccounts}/claude-2`,
-    defaultModel: 'claude-fable-5-1', models, email: 'work@example.com', plan: 'Team', note: 'Convex work only', usage: usage(95, 90, { notice: couldntCheck }),
+    defaultModel: 'claude-fable-5-1', models, email: 'work@example.com', plan: 'Team', note: 'Convex work only',
+    usage: usage(95, 90, { notice: couldntCheck, more: [{ kind: 'weekly_model', title: 'Weekly Fable', remainingPercent: 97, resetsAt: hoursFromNow(70) }] }),
   },
   {
     id: 'claude-3', provider: 'claude', title: 'mike+3@example.com', configDir: `${tokenStatsAccounts}/claude-3`,
@@ -173,10 +175,13 @@ function mockUsageStats(days) {
       hours.push([h, total - cacheRead - cacheWrite - output, output, cacheRead, cacheWrite]);
     }
     tokens.push({ accountId: a.id, hours });
-    for (const kind of ['weekly', 'five_hour']) {
-      const w = a.usage?.windows?.find((x) => x.kind === kind);
+    // A model's own week ("Weekly Fable") is charted too, under its title.
+    const charted = (a.usage?.windows ?? []).filter((x) => ['weekly', 'five_hour', 'weekly_model'].includes(x.kind));
+    for (const w of charted) {
+      const kind = w.kind;
       if (!w?.resetsAt) continue;
-      const length = (kind === 'weekly' ? 168 : 5) * HOUR;
+      const week = kind !== 'five_hour';
+      const length = (week ? 168 : 5) * HOUR;
       const reset = Date.parse(w.resetsAt);
       // Walk back from now, one window at a time: each goes from 100 down
       // to where it ended, the current one to what it says now.
@@ -185,7 +190,7 @@ function mockUsageStats(days) {
       let endPct = w.remainingPercent;
       for (let start = reset - length; end > since; start -= length) {
         const from = Math.max(start, since);
-        const steps = Math.max(2, Math.round((end - from) / (kind === 'weekly' ? 3 * HOUR : 20 * 60_000)));
+        const steps = Math.max(2, Math.round((end - from) / (week ? 3 * HOUR : 20 * 60_000)));
         const run = [];
         for (let k = 0; k <= steps; k++) {
           const t = from + ((end - from) * k) / steps;
@@ -194,11 +199,11 @@ function mockUsageStats(days) {
         }
         samples.unshift(...run);
         end = start - 1;
-        endPct = kind === 'weekly' ? 20 + rand() * 40 : 10 + rand() * 60;
+        endPct = week ? 20 + rand() * 40 : 10 + rand() * 60;
         // Only today's 5-hour windows: older ones say nothing more.
         if (kind === 'five_hour' && end < now - 15 * HOUR) break;
       }
-      limits.push({ accountId: a.id, kind, samples });
+      limits.push({ accountId: a.id, kind, ...(kind === 'weekly_model' ? { title: w.title } : {}), samples });
     }
   }
   return { generatedAt: iso(), ready: true, tokens, limits };
@@ -978,6 +983,41 @@ async function dispatch(client, method, p) {
       if (p.question) return { answer: `About "${sel}": ${p.question} That's the mock runner's answer to a follow-up.`, model: 'mock' };
       return { answer: `**${sel}** is what the agent called this step. It means the smallest piece to move first, so the rest can follow.\n\n- It's in \`runner/src/explain.ts\`\n- Nothing here goes into the thread`, model: 'mock' };
     }
+    case 'threads.commands': {
+      // The palette's list (docs/protocol.md, "Slash commands"): Threadbear's
+      // own, the CLI's, then skills, as a real Claude thread lists them.
+      const t = need(p.threadId);
+      const codex = t.summary.provider === 'codex';
+      const own = [
+        { name: 'model', description: "Switch this thread's model", argumentHint: '[model]', source: 'threadbear' },
+        { name: 'effort', description: "Set this thread's effort level", argumentHint: '[low|medium|high|xhigh|max]', source: 'threadbear' },
+      ];
+      const cli = codex
+        ? [
+            { name: 'compact', description: 'Summarise the conversation so far to free up context', source: 'cli' },
+            { name: 'review', description: 'Review the uncommitted changes, or what you describe', argumentHint: '[instructions]', source: 'cli' },
+            { name: 'clear', description: 'Start a fresh session in this thread (the transcript stays)', source: 'threadbear' },
+            { name: 'status', description: "The model, effort, context used and the login's limits", source: 'threadbear' },
+          ]
+        : [
+            { name: 'clear', description: 'Clear conversation history and free up context', source: 'cli' },
+            { name: 'compact', description: 'Clear conversation history but keep a summary in context', argumentHint: '<optional custom summarization instructions>', source: 'cli' },
+            { name: 'context', description: 'Show current context usage', source: 'cli' },
+            { name: 'cost', description: 'Show the total cost and duration of the current session', source: 'cli', scope: 'system', aliases: ['usage', 'stats'] },
+            { name: 'config', description: 'Open config panel', source: 'cli' },
+            { name: 'init', description: 'Initialize a new CLAUDE.md file with codebase documentation', source: 'cli' },
+          ];
+      const skills = [
+        { name: 'code-review', description: 'Review the current diff, or a PR number, branch or path, for correctness bugs, at the effort level given first.', argumentHint: '[low|medium|high] [target]', source: 'skill', scope: 'user', path: `${os.homedir()}/.claude/skills/code-review/SKILL.md` },
+        { name: 'computercub', description: "Drive Mac apps and the parts of Chrome extensions can't reach.", source: 'skill' },
+        { name: 'cloudflare', description: 'Cloudflare platform: Workers, Pages, KV, D1, R2 and the rest.', source: 'skill' },
+        { name: 'claude-api', description: 'Model ids, pricing, params and the Anthropic SDK.', source: 'skill' },
+        { name: 'deslop', description: 'A second-pass cleanup over AI-written code using the repo style guide.', source: 'skill', scope: 'project', path: `${t.summary.cwd}/.claude/skills/deslop/SKILL.md` },
+        { name: 'delegate', description: 'Get answers from other labs and models, and run consensus panels.', source: 'skill' },
+        { name: 'ship', description: 'Drive a branch to merge-ready: PR, checks, bot comments.', source: 'skill' },
+      ];
+      return { commands: [...own, ...cli, ...skills] };
+    }
     case 'threads.highlights': {
       const t = need(p.threadId);
       return highlights.get(t.summary.id) ?? { highlights: [], edited: [] };
@@ -1324,6 +1364,16 @@ async function fakeTurn(threadId, text, images, turnId = 'turn_' + crypto.random
   persist(threadId, { type: 'turn.started', turnId }, turnId);
   setStatus(threadId, 'running');
 
+  // A provider refusal for checking the recovery offer, without sending
+  // anything to a real model. Codex's continuation runs normally.
+  if (t.summary.provider !== 'codex' && /mock refusal/i.test(text)) {
+    const error = "API Error: Opus 5.5's safeguards flagged this message. Claude Code can't respond to this message with Opus 5.5.\n\nTry rephrasing the request in a new session or change your model.\n\nDetails: [reasoning_extraction]";
+    persist(threadId, { type: 'error', message: error }, turnId);
+    persist(threadId, { type: 'turn.completed', turnId, outcome: 'failed', durationMs: 851, error }, turnId);
+    t.interrupt = undefined;
+    setStatus(threadId, 'error');
+    return;
+  }
   // Say "signed out" for a turn refused by the login, as Claude Code's
   // expired OAuth session does: the error row and errorKind auth, which
   // gets the thread its Sign in… line.

@@ -19,6 +19,7 @@ struct HighlightsView: View {
     @State private var allLinks = false
     @State private var allCommits = false
     @State private var allSubagents = false
+    @State private var allStarted = false
 
     var body: some View {
         if app.highlightsUnsupported {
@@ -26,7 +27,7 @@ struct HighlightsView: View {
         } else if let fetched = app.highlights[thread.id] {
             let sections = HighlightSections.build(fetched)
             let projects = HighlightProjects.build(thread: thread, project: app.project)
-            if sections.isEmpty && openAsks == nil && projects.isEmpty && toolPanels.isEmpty && schedules.isEmpty && thread.subagents.isEmpty {
+            if sections.isEmpty && openAsks == nil && projects.isEmpty && toolPanels.isEmpty && schedules.isEmpty && thread.subagents.isEmpty && startedThreads.isEmpty {
                 PaneNote(text: "Nothing here yet. Files, links and commits from this thread show up here as it works.")
             } else {
                 ScrollView {
@@ -130,6 +131,17 @@ struct HighlightsView: View {
                 if subagents.more > 0 { showAll(all.count) { allSubagents = true } }
             }
         }
+        // The threads it handed work to, or is waiting on, with where each
+        // is up to (StartedThreadRows says why it's here).
+        let started = startedThreads
+        if !started.isEmpty {
+            SectionHeading(title: "Threads it started", icon: "pawprint", fold: fold(HighlightFold.startedThreads, count: started.count))
+            if !isFolded(HighlightFold.startedThreads) {
+                let shown = HighlightSections.capped(started, limit: HighlightSections.subagentLimit, showAll: allStarted)
+                ForEach(shown.shown) { startedRow($0) }
+                if shown.more > 0 { showAll(started.count) { allStarted = true } }
+            }
+        }
         if !sections.pinned.isEmpty {
             SectionHeading(title: "Pinned", icon: "pin", fold: fold(HighlightFold.pinned, count: sections.pinned.count))
             if !isFolded(HighlightFold.pinned) {
@@ -205,6 +217,29 @@ struct HighlightsView: View {
             app.selectSubagent(threadId: thread.id, subagentId: subagent.id)
         }
         .tip("\(SubagentRows.statusText(subagent)). Click to read its transcript.")
+    }
+
+    private var startedThreads: [StartedThreadRows.Row] {
+        StartedThreadRows.rows(for: thread, in: app.threads, now: app.now)
+    }
+
+    /// Opens the thread itself, as a thread chip in a reply does.
+    private func startedRow(_ row: StartedThreadRows.Row) -> some View {
+        let color: Color? = switch row.state {
+        case .needsYou: Color.accentColor
+        case .failed: Color(nsColor: Theme.failed)
+        default: nil
+        }
+        return PaneRow(icon: StartedThreadRows.icon(row.state), iconColor: color, title: row.thread.title,
+                       detail: StartedThreadRows.detail(row, now: app.now),
+                       titleTruncation: .tail, detailTruncation: .tail) {
+            app.openThread(row.thread.id)
+        }
+        .tip("Open this thread")
+        .iconContextMenu {
+            Button("Open", systemImage: "arrow.up.forward") { app.openThread(row.thread.id) }
+            Button("Open in New Panel", systemImage: "rectangle.split.2x1") { app.openThreadInPanel(row.thread.id) }
+        }
     }
 
     /// The open card's seq, when the thread has asks on it.
@@ -573,6 +608,9 @@ struct PreviewBody: View {
 
     var body: some View {
         switch preview.target {
+        case .page(let url) where url.isFileURL:
+            LocalPagePreview(url: url, opened: preview.opened)
+                .id(url)
         case .page(let url):
             WebPanel(url: url)
         case .remote(_, let failed):
@@ -611,12 +649,69 @@ struct PreviewBody: View {
         if !FileManager.default.fileExists(atPath: path) {
             PaneNote(text: "This file isn't there any more.")
         } else if PreviewRules.viewer(forPath: path) == .web {
-            WebPanel(url: URL(fileURLWithPath: path))
+            LocalPagePreview(url: URL(fileURLWithPath: path), opened: preview.opened)
+                .id(path)
         } else if TextFileView.shows(path) {
             TextFileView(url: URL(fileURLWithPath: path), opened: preview.opened, editing: preview.editing)
                 .id(path)
         } else {
             QuickLookView(url: URL(fileURLWithPath: path), opened: preview.opened)
+        }
+    }
+}
+
+/// A local HTML file in the pane. Its scripts are off (WebPanelPool,
+/// Daybreak finding 6), so a page that draws itself would show as empty
+/// boxes with nothing to say why. One with scripts gets a bar over it
+/// asking: Run them reloads it in a view of its own with JavaScript on and
+/// every other guard kept, for those exact bytes only, remembered until the
+/// file changes (PreviewScriptConsent). Mike asked for it on 6 Nov 2026.
+struct LocalPagePreview: View {
+    let url: URL
+    let opened: Int
+    /// What the scan found, for the file it was of: the pane keeps this
+    /// view (and its state) when another file opens in it, so nothing here
+    /// counts unless it's this file's (Codex review: a page allowed first
+    /// handed its digest to the next file with the same bytes).
+    @State private var scan: (path: String, scripts: Bool, digest: String, allowed: Bool)?
+
+    private var current: (scripts: Bool, digest: String, allowed: Bool)? {
+        guard let scan, scan.path == url.path else { return nil }
+        return (scan.scripts, scan.digest, scan.allowed)
+    }
+
+    static let explanation = "Pages open here with their scripts off, as a script could read the files the page names. Run them turns them on for this version of the page, still with no network and nothing read but what it names. If the file changes, you'll be asked again."
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let scan = current, scan.scripts, !scan.allowed {
+                HStack(spacing: zoomed(6)) {
+                    Text("This page has scripts")
+                        .font(.system(size: TypeScale.small))
+                        .foregroundStyle(.secondary)
+                    InfoTip(Self.explanation)
+                    Spacer(minLength: 0)
+                    Button("Run them") {
+                        PreviewScriptConsent().allow(path: url.path, digest: scan.digest)
+                        self.scan?.allowed = true
+                    }
+                    .controlSize(.small)
+                    .tip("Reload this page with its scripts on")
+                }
+                .padding(.horizontal, zoomed(10))
+                .padding(.vertical, zoomed(6))
+                Divider()
+            }
+            WebPanel(url: url, scriptsFor: current.flatMap { $0.allowed ? $0.digest : nil })
+        }
+        .task(id: "\(url) \(opened)") {
+            let path = url.path
+            let found = await Task.detached(priority: .utility) {
+                LocalPreviewSite.scan(atPath: path)
+            }.value
+            // A scan for the page before can finish after this one's.
+            if Task.isCancelled { return }
+            scan = found.map { (path, $0.scripts, $0.digest, $0.scripts && PreviewScriptConsent().allows(path: path, digest: $0.digest)) }
         }
     }
 }

@@ -10,8 +10,9 @@ import { threadFields, views } from './schema';
 import { checkPhoneToken, hasLiveKey, runnerStatsRows, watchRunnersFor } from './lib';
 import { API_VERSION } from './version';
 import { imagesFrom, phoneImage, replyImagesFrom } from './share';
-import { runnerName } from './sync';
+import { eventBodyAnswer, readEventBody, runnerName } from './sync';
 import { HEADS_MARK } from './projectHeads';
+import { notesOf } from './projectNotes';
 
 // A runner not heard from for this long is offline, and a command with no
 // runnerId goes to the main one still online (mainRunner).
@@ -236,6 +237,45 @@ export const threadRow = query({
   },
 });
 
+// One tool's output, input and diffs, when someone opens it (API 52), from a runner
+// with full sync on: never a live query, and never on a shared page. Null: it's kept
+// on the runner. Old phones never ask.
+export const eventBody = query({
+  args: { token: v.string(), threadId: v.string(), seq: v.number() },
+  returns: eventBodyAnswer,
+  handler: async (ctx, { token, threadId, seq }) => {
+    await checkPhoneToken(ctx, token);
+    return readEventBody(ctx, threadId, seq);
+  },
+});
+
+// Asks the thread's runner to upload one picture a tool handed back, for a day
+// (API 52). It checks the picture is that tool's, in that thread's media folder.
+export const requestPicture = mutation({
+  args: { token: v.string(), threadId: v.string(), seq: v.number(), index: v.number() },
+  returns: v.id('commands'),
+  handler: async (ctx, { token, threadId, seq, index }) => {
+    await checkPhoneToken(ctx, token);
+    if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(index) || seq < 0 || index < 0 || index > 100) throw new ConvexError({ kind: 'invalid', message: 'no such picture' });
+    const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
+    if (!t) throw new ConvexError({ kind: 'notFound', message: 'no such thread' });
+    return queue(ctx, t.runnerId, 'picture', threadId, { seq, index });
+  },
+});
+
+// That picture, once it's up.
+export const heldPicture = query({
+  args: { token: v.string(), threadId: v.string(), seq: v.number(), index: v.number() },
+  returns: v.union(v.null(), v.object({ url: v.string(), mediaType: v.string(), width: v.optional(v.number()), height: v.optional(v.number()) })),
+  handler: async (ctx, { token, threadId, seq, index }) => {
+    await checkPhoneToken(ctx, token);
+    const img = await ctx.db.query('heldPictures').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).eq('seq', seq).eq('index', index)).first();
+    const url = img ? await ctx.storage.getUrl(img.storageId) : null;
+    if (!img || !url) return null;
+    return { url, mediaType: img.mediaType, ...(img.width ? { width: img.width } : {}), ...(img.height ? { height: img.height } : {}) };
+  },
+});
+
 // A page of a thread's messages, newest first in the reading but returned
 // oldest first: the newest `limit` with no beforeSeq (live, so new messages
 // arrive by themselves), or the `limit` before beforeSeq. Tool rows (one line
@@ -380,7 +420,7 @@ export const project = query({
     const p = await ctx.db.query('projects').withIndex('by_runner_id', (q) => q.eq('runnerId', runnerId).eq('id', id)).unique();
     if (!p) return null;
     const { icon: _icon, ...rest } = strip(p);
-    return { ...rest, ...(await iconOf(ctx, p)) };
+    return { ...rest, notes: await notesOf(ctx, p), ...(await iconOf(ctx, p)) };
   },
 });
 
@@ -770,6 +810,6 @@ async function commandImages(ctx: { storage: { getUrl(id: Id<'_storage'>): Promi
   return { images: out };
 }
 
-async function queue(ctx: { db: QueryCtx['db'] & { insert: any } }, runnerId: string, kind: 'send' | 'respond' | 'update' | 'create' | 'page' | 'share' | 'quickAsk' | 'schedule', threadId: string | undefined, args: Record<string, unknown>) {
+async function queue(ctx: { db: QueryCtx['db'] & { insert: any } }, runnerId: string, kind: 'send' | 'respond' | 'update' | 'create' | 'page' | 'share' | 'quickAsk' | 'schedule' | 'picture', threadId: string | undefined, args: Record<string, unknown>) {
   return ctx.db.insert('commands', { runnerId, ...(threadId ? { threadId } : {}), kind, args, state: 'pending', createdAt: Date.now() });
 }

@@ -24,6 +24,7 @@ import { atomicWriteFileSync, isDirectory, readJsonSync } from './fsutil.ts';
 import { tildePath } from './platform.ts';
 import { expandHome } from './config.ts';
 import { fileHash, removeIcons, storeIcon } from './project-icons.ts';
+import { trimEndOf } from './linear-text.ts';
 import type { TaskBoards } from './notion-tasks.ts';
 
 // What projects.json holds for each: the counts are worked out from the
@@ -719,7 +720,7 @@ export function checkLinks(links: unknown): ProjectLink[] {
 
 // The same page, give or take a trailing slash.
 function sameUrl(a: string, b: string): boolean {
-  const norm = (u: string) => u.trim().replace(/\/+$/, '').toLowerCase();
+  const norm = (u: string) => trimEndOf(u.trim(), '/').toLowerCase();
   return norm(a) === norm(b);
 }
 

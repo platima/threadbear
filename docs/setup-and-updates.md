@@ -123,7 +123,10 @@ lists the changes since the last tag, which is what the app shows.
 **Signed, because it's code that runs as you.** Setup pins Mike's public key
 (`scripts/release-signers`) into the data folder. The runner ignores any release tag that
 doesn't verify against that pinned copy, so a change to the key in the repo (or a hijacked
-GitHub account) can't push code onto everyone's Mac.
+GitHub account) can't push code onto everyone's Mac. Only an SSH signature by that key
+counts (a PGP or X.509 one never does, whatever gpg would say), a release name keeps the
+tag it first verified with, and the bring-in thread merges the commit id that was checked,
+not a ref name a later fetch could move.
 
 - **Your own changes ship as they do today.** Commit to `main` (or ask a thread to) and
   the runner and the app rebuild themselves.
@@ -135,6 +138,14 @@ GitHub account) can't push code onto everyone's Mac.
   (docs/bringing-in-updates.md is its brief). Asking is the default (Mike, 29 Oct),
   because a merge can quietly undo something you changed on purpose. Merging by
   itself when nothing clashes and the checks pass could be a setting later.
+- **A thread every 5 days, not a nag** (Mike, 6 Nov). Rather than a banner
+  or a badge, the runner starts the Bring Them In thread itself every 5 days
+  when there's a release waiting (`runner/src/bring-in.ts`). It merges and
+  runs the checks before it asks, so it reaches the inbox as one decision.
+  Never more than one: a newer release goes to the open thread. A commit of
+  Mike's with an `Important: <why>` trailer (a security or data fix) starts
+  one straight away. Settings › General › Updates from Mike changes how
+  often (a number of days, only important ones, or never).
 - **Merging by intent, not just by text.** Git does most of a merge. For the rest,
   the merge thread reads why each side changed (your commits since the last release
   you brought in, and Mike's in the release) and puts your change back onto Mike's new

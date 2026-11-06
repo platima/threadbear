@@ -4,6 +4,7 @@
 // the agent that did the work is the one that knows.
 
 import type { Ask, AskLink, NeedsWho, PersistedEvent } from './protocol.ts';
+import { hasLineBreak, replaceLinks } from './linear-text.ts';
 
 export type Needs = { needs: NeedsWho; asks?: Ask[]; next?: string[] };
 
@@ -213,14 +214,27 @@ function clipText(v: unknown, max: number): string | undefined {
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, '')}…`;
 }
 
+// These read a model's reply, which content it read can steer, so none of
+// them may backtrack: no two runs of whitespace side by side with only
+// optional marks between, and a line's rest taken with `[\s\S]*`, which
+// can't fail, rather than `.*$`, which a lone \r or U+2028 made fail after
+// trying every split. "What I need from you" then a few thousand spaces and
+// a full stop took minutes to hours (Gautam's scan, F26). headingOf and
+// itemOf say no where `.*$` did, so the answers are the same.
+//
 // The heading starts a line, in bold or as a # heading (a plain mention in
 // a sentence isn't one), with a colon either side of the ** or none.
 // Text after it on the same line ("**What I need from you:** nothing right
 // now") is the section's first line.
-const HEADING = /^\s*(#{1,6}\s+)?(\*\*)?\s*What I need from you\s*:?\s*(\*\*)?\s*:?\s*(.*)$/i;
+const HEADING = /^\s*(#{1,6}\s+)?(?:(\*\*)\s*)?What I need from you\s*:?\s*(\*\*)?\s*:?\s*([\s\S]*)/i;
 // Without a heading, a closing "Nothing needed from you right now" says it.
-const NOTHING_LINE = /(?:^|[.!]\s+|\band\s+)\**\s*nothing (?:else )?(?:is )?needed from you\b/i;
-const ITEM = /^(\s*)(\d{1,2}[.)]|[-*•])\s+(.*)$/;
+const NOTHING_LINE = /(?:^\**\s*|[.!]\s+(?:\*+\s*)?|\band\s+(?:\*+\s*)?)nothing (?:else )?(?:is )?needed from you\b/i;
+const ITEM = /^(\s*)(\d{1,2}[.)]|[-*•])\s+([\s\S]*)/;
+const headingOf = (line: string) => noBreakInRest(HEADING.exec(line), 4);
+const itemOf = (line: string) => noBreakInRest(ITEM.exec(line), 3);
+function noBreakInRest(m: RegExpExecArray | null, rest: number): RegExpExecArray | null {
+  return m && !hasLineBreak(m[rest]) ? m : null;
+}
 const NOTHING = /\bnothing\b(?:[^.\n]{0,40}\b(?:needed|from you|for you to do)\b|\s+(?:right now|for now|yet)\b)/i;
 // How far from the end the heading may be: agents sometimes quote it
 // earlier in a message, and the real one closes it.
@@ -232,7 +246,7 @@ export function needsFromText(text: string): Needs | undefined {
   let at = -1;
   let first = '';
   for (let i = lines.length - 1; i >= 0 && i >= lines.length - NEAR_END_LINES; i--) {
-    const m = HEADING.exec(lines[i]);
+    const m = headingOf(lines[i]);
     if (m && ((m[2] && m[3]) || (m[1] && !m[2]))) {
       at = i;
       first = m[4].trim();
@@ -255,7 +269,7 @@ export function needsFromText(text: string): Needs | undefined {
   let top: { indent: number; numbered: boolean } | undefined;
   for (const line of body) {
     if (/^\s*```/.test(line)) inFence = !inFence;
-    const m = inFence ? null : ITEM.exec(line);
+    const m = inFence ? null : itemOf(line);
     if (m) {
       const kind = { indent: m[1].length, numbered: /\d/.test(m[2]) };
       top ??= kind;
@@ -299,7 +313,7 @@ function nextFromList(lines: string[]): string[] {
   let inFence = false;
   for (const line of lines) {
     if (/^\s*```/.test(line)) inFence = !inFence;
-    const m = inFence ? null : ITEM.exec(line);
+    const m = inFence ? null : itemOf(line);
     if (m && (!items.length || m[1].length === 0)) items.push(m[3]);
     else if (m || (items.length && /^\s{2,}\S/.test(line))) items[items.length - 1] += ` ${line.trim()}`;
     else if (!line.trim()) continue;
@@ -312,9 +326,11 @@ function nextFromList(lines: string[]): string[] {
 // card: "**Check your next call:** confirm Bruce used Nemotron on it. Its
 // service is untested." becomes "Check your next call: confirm Bruce used
 // Nemotron on it". Only the first sentence, as the rest says why.
+const NEXT_LINK = { titleStopsAtNewline: false, titleMin: 1, titleMax: Infinity, targetStopsAtSpace: false, targetMin: 0 };
 function nextFrom(item: string): string {
-  const t = item
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+  // A link's text: replaceLinks is `/\[([^\]]+)\]\([^)]*\)/g` read once,
+  // as that was quadratic on a long run of "[" in a model's reply.
+  const t = replaceLinks(item, NEXT_LINK, (title) => title)
     .replace(/\*\*(.+?)\*\*/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
@@ -411,7 +427,7 @@ const NEXT_ROW =
 
 // Hibernating itself, in every form's description (snoozeFromTool).
 const END_TURN_SNOOZE =
-  'snooze hibernates this thread once the turn is over, with needs "nothing" only, until a time ("2h", "1d", "tomorrow", an ISO time with its offset, or "restart") or words saying when ("when the phone arrives"). Use it when the user asks for this thread to be snoozed or hibernated, or when the rest waits on a message (one wakes it), until it should have come; waitFor names threads it waits on, which wake it when they finish. ';
+  'snooze hibernates this thread once the turn is over, with needs "nothing" only, until a time ("2h", "1d", "tomorrow", an ISO time with its offset, "restart", or "release" for a new release) or words saying when ("when the phone arrives"). Use it when the user asks for this thread to be snoozed or hibernated, or when the rest waits on a message (one wakes it), until it should have come; waitFor names threads it waits on, which wake it when they finish. ';
 
 // Handing a step over, in every form's description. This used to say to offer
 // "Can you do it?" when the agent could plausibly do the step itself, which told
@@ -458,13 +474,24 @@ export function triedFirstNudged(events: PersistedEvent[]): boolean {
   return events.slice(start).some((e) => e.type === 'tool.result' && typeof e.text === 'string' && e.text.startsWith(TRY_FIRST_NUDGE));
 }
 
+// A change only Mike can judge, left as a soft line at the end of a done
+// reply. On 6 Nov 2026 (thread 524cd997) two turns in a row put Whisper
+// dictation on his phone with needs "nothing" and ended "I haven't heard how
+// Whisper does on the phone yet. If it's slow or mishears things, tell me",
+// while he was in the middle of trying it; he asked why it wasn't in Needs
+// you. Waiting for something to turn up later by itself stays "nothing".
+// Replays: ~/dev/me/misc/end-turn-eval/needs-you.
+export const ONLY_THEY_CAN_TRY =
+  'When only the user can tell whether what you made works (their voice, their phone, how it feels to use) and nobody has tried it yet, trying it is an ask, with needs "you" ("Dictate a sentence on your phone and tell me what it typed"), not an "if it\'s off, tell me" line at the end of your reply. Something that will only show up later by itself (the next thread that hits it) is no ask. ';
+
 // What to put in it, the same for both providers.
 const END_TURN_ASKS =
   'needs "nothing" when the work is finished (or still going by itself) and nothing waits on the user. ' +
   'needs "you" when it does: an approval, a decision, a key, something to look at, a question. Give one ask per thing they have to do, most blocking first. ' +
+  ONLY_THEY_CAN_TRY +
   'The asks are your "What I need from you" list: the user reads and answers them in a card under your message, each drawn as one paragraph of message text, its action then its why, with its buttons under it. So don\'t also list them in your message. ' +
   'Write each ask the way you would in that list, so it makes sense on its own to someone who has forgotten everything: action is its first sentence, the thing to do or the question ("Next time you leave the room, take your phone and leave the laptop idle on power."); why carries on the same paragraph with what it is about and what you want back, in a sentence or two ("It should lock within a minute of you going. Tell me whether it did, and I\'ll tune the Bluetooth cutoff."). Say where in it when it matters (System Settings › Bluetooth), and name things rather than places (not "Slack #channel", but "Your Slack draft to Emily names the automation guy Hayden; he is Pete"). When one ask is several questions or choices, end its why with them as a short markdown list, one per line, rather than running them together. ' +
-  'Give links whenever there is somewhere to go to do it or judge it: the page to log in on, the Slack message (its permalink), the PR, the preview, the file or screenshot to look at, the project to open (a path opens in its own app, e.g. a .tandem file in Tandem), or review:<id> for a show_options review in this thread (its window, to compare and pick). Each is a button on the ask, so title it as the action ("Open login page", "Open the Slack message", "Open Short 4 in Tandem"). ' +
+  'Give links whenever there is somewhere to go to do it or judge it: the page to log in on, the Slack message (its permalink), the PR, the preview, the file or screenshot to look at, the project to open (a path opens in its own app, e.g. a .key file in Keynote), or review:<id> for a show_options review in this thread (its window, to compare and pick). Each is a button on the ask, so title it as the action ("Open login page", "Open the Slack message", "Open Short 4 in Tandem"). ' +
   // Mike, 29 Oct: an ask said "Look at the screenshots in Highlights" in
   // plain words over a "See the tab" button for the same screenshot.
   'The paragraph is markdown, so where action or why names the thing a link opens, make those words a link to the same url ("Look at [the pairing screenshot](/Users/you/shots/pair.png) and say whether to land it."): the user can hover them for a peek or click them, and the button stays as the next step. ' +
@@ -550,6 +577,7 @@ const ONE_REPLY_REPLY =
 // (~/dev/me/misc/end-turn-eval/v3, "trim") before landing.
 const ONE_REPLY_FIELDS =
   TRY_IT_FIRST +
+  ONLY_THEY_CAN_TRY +
   'next is only for when nothing is needed: up to 3 follow-ups that really came up and that you\'d tell the user are worth doing; usually none, and never something you\'d call optional or low priority. ' +
   NEXT_ROW +
   'If you leave sub-agents running, the thread stays under Running and your asks don\'t reach the user\'s inbox until the sub-agents finish and you\'ve ended a later turn, so don\'t leave one waiting on the user. ' +
@@ -649,6 +677,19 @@ export const ONE_REPLY_WRITE_NUDGE =
   'Write your reply now, as ordinary text: the user sees only what you write after end_turn, with the card under it. ' +
   "Don't repeat the questions or answers on the card.";
 
+// What a compaction between an accepted one-reply end_turn and its reply
+// adds after the summary (adapter.ts, onCompact), with the card's
+// questions, as the summary may not have them.
+export function owedReplyAfterCompact(questions: string[]): string {
+  const card = questions.length ? ` The card under it asks: ${questions.map((q) => `"${q}"`).join(', ')}.` : '';
+  return (
+    'Before this conversation was compacted you called end_turn, it was accepted, and you had not yet written your reply.' +
+    card +
+    " Write the reply now, as ordinary text, before any tool call: it's the only text the user sees from that turn. " +
+    'Nothing you wrote before end_turn reached them, so whatever the card is about (a plan, a draft, the options) goes in it in full. Then stop.'
+  );
+}
+
 // A reply that ends in a "What I need from you" section, or a "Nothing
 // needed from you" line, comes apart into the reply above it and what the
 // section says (needsFromText). With one reply, Sonnet wrote the section
@@ -656,12 +697,14 @@ export const ONE_REPLY_WRITE_NUDGE =
 // so a turn whose end_turn has no asks or follow-ups takes its card from
 // here, and the reply loses the section the card now shows. The heading
 // may be a line on its own with no bold or #, as Sonnet wrote it.
-const BARE_HEADING = /^\s*(?:#{1,6}\s+)?(?:\*\*)?\s*What I need from you\s*:?\s*(?:\*\*)?\s*:?\s*$/i;
+// Each optional mark after it takes the whitespace before it, so no two
+// runs of whitespace meet (that was O(n^4) on a run of spaces, F26).
+const BARE_HEADING = /^\s*(?:#{1,6}\s+)?(?:\*\*\s*)?What I need from you(?:\s*:)?(?:\s*\*\*)?(?:\s*:)?\s*$/i;
 export function splitReplySection(reply: string): { reply: string; needs?: Needs } {
   const lines = reply.replace(/\r\n/g, '\n').split('\n');
   const from = Math.max(0, lines.length - NEAR_END_LINES);
   for (let i = lines.length - 1; i >= from; i--) {
-    const m = HEADING.exec(lines[i]);
+    const m = headingOf(lines[i]);
     const heading = BARE_HEADING.test(lines[i]) || (m && ((m[2] && m[3]) || (m[1] && !m[2])));
     if (!heading) continue;
     const section = lines.slice(i);
@@ -702,7 +745,7 @@ function proseAfterList(lines: string[]): string {
   let inFence = false;
   for (const [i, line] of lines.entries()) {
     if (/^\s*```/.test(line)) inFence = !inFence;
-    if (!inFence && ITEM.test(line)) seen = inItem = true;
+    if (!inFence && itemOf(line)) seen = inItem = true;
     else if (!line.trim()) inItem = false;
     else if (seen && !inItem && !inFence && !/^\s{2,}\S/.test(line)) return lines.slice(i).join('\n').trimEnd();
   }

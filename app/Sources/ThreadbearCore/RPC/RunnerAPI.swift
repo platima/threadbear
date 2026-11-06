@@ -120,6 +120,13 @@ public extension RPCClient {
         try await call("threads.highlights", .object(["threadId": .string(threadId)]), as: ThreadHighlights.self)
     }
 
+    /// The slash commands the thread can run, for the composer's palette
+    /// (docs/protocol.md, "Slash commands"). The first ask for a folder
+    /// starts a CLI to list them, which takes a second or two.
+    func threadCommands(threadId: String) async throws -> [SlashCommand] {
+        try await call("threads.commands", .object(["threadId": .string(threadId)]), as: SlashCommandList.self, timeout: .seconds(30)).commands
+    }
+
     /// Asks the small model about words selected in the thread (see
     /// "Explain"). The pool's CLI can take a few seconds to start.
     func explain(_ session: ExplainSession, threadId: String, turn index: Int) async throws -> ExplainResult {
@@ -222,6 +229,26 @@ public extension RPCClient {
         if let message { params["message"] = .string(message) }
         if let answers { params["answers"] = .object(answers.mapValues { .string($0) }) }
         _ = try await call("approvals.respond", .object(params), as: EmptyResult.self)
+    }
+
+    /// Another runner's request for a new thread, as it was filed
+    /// (docs/protocol.md, "Asking another runner"). Only this Mac's own
+    /// runner, with the owner key, can read and answer it.
+    func startRequest(threadId: String, approvalId: String) async throws -> StartRequest {
+        try await call("requests.get", .object(["threadId": .string(threadId), "approvalId": .string(approvalId)]), as: StartRequest.self)
+    }
+
+    /// Starts it (on `runnerId`) or says no, then answers its card.
+    func answerStartRequest(threadId: String, approvalId: String, allow: Bool, runnerId: String?, fingerprint: String?) async throws {
+        var params: [String: JSONValue] = ["threadId": .string(threadId), "approvalId": .string(approvalId), "allow": .bool(allow)]
+        if let runnerId { params["runnerId"] = .string(runnerId) }
+        if let fingerprint { params["fingerprint"] = .string(fingerprint) }
+        _ = try await call("requests.answer", .object(params), as: JSONValue.self)
+    }
+
+    /// Go ahead on a "Plan first" plan (docs/protocol.md, "Plan first").
+    func approvePlan(threadId: String, itemId: String) async throws {
+        _ = try await call("plans.approve", .object(["threadId": .string(threadId), "itemId": .string(itemId)]), as: EmptyResult.self)
     }
 
     /// Answers a `secret.requested` card (docs/protocol.md, "Secrets").

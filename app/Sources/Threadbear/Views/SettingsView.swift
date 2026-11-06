@@ -27,6 +27,9 @@ struct SettingsView: View {
             DevicesSettings()
                 .tabItem { Label("Phone & browser", systemImage: "iphone") }
                 .tag(SettingsTab.devices)
+            KeyboardSettings()
+                .tabItem { Label("Keyboard", systemImage: "keyboard") }
+                .tag(SettingsTab.keyboard)
         }
         .frame(width: 540)
         .background(SettingsWindowFinder())
@@ -108,6 +111,22 @@ private struct GeneralSettings: View {
                                 ask: "read it with tb activity and tell you what's in it.") {
                     Toggle("Keep an activity log", isOn: $activityLog)
                         .tip("Note what you click and open in this app")
+                }
+
+                // Only on someone's fork: Mike's own copy has nothing to
+                // bring in (its upstream check is off).
+                if settings.bringInSupported, let upstream = app.runnerUpdates?.upstream, upstream.state != "off" {
+                    SettingsSection("Updates from Mike",
+                                    about: "When Mike has a release your copy doesn't have, Threadbear starts a thread that merges it in and runs the checks, then asks you before it lands. Never more than one at a time. A release Mike marks important doesn't wait.",
+                                    ask: "bring in Mike's latest release now, or change how often this happens.") {
+                        Picker("Bring them in", selection: Binding(get: { settings.bringIn },
+                                                                   set: { app.updateSettings(SettingsUpdate(bringIn: $0)) })) {
+                            ForEach(SettingsText.bringInChoices(current: settings.bringIn), id: \.value) { choice in
+                                Text(choice.title).tag(choice.value)
+                            }
+                        }
+                        .tip("How often a thread starts to bring in Mike's new releases")
+                    }
                 }
 
                 SettingsSection("Runner",

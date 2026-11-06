@@ -122,6 +122,13 @@ export function claudeCommands(cwd: string, home: string = os.homedir()): Claude
       return `${hashName(dir, f)} ${h}`;
     })
     .sort();
+  // Joined with newlines, and still only one way to read it: stableJson
+  // escapes every newline, and a named path is a piece of a command split
+  // on whitespace (namedScripts), so it holds no space or newline, and
+  // each line is that path, a space and 64 hex. (Patch trust's version 2
+  // joined paths that could hold newlines, and was fooled: Gautam's scan,
+  // 6 Nov. Moving this to its JSON form too would ask about every
+  // folder's Claude settings again for nothing.)
   const hash = sha256(Buffer.from(['threadbear-claude-1', stableJson(parts), ...lines].join('\n')));
   return { files, named, hash, read: shas };
 }
@@ -213,6 +220,58 @@ function namedScripts(parts: unknown, dir: string): string[] {
       const target = path.resolve(dir, raw);
       if (!isInside(target, dir) || !isFile(target)) continue;
       out.add(target);
+      if (out.size >= MAX_NAMED) return [...out];
+    }
+  }
+  return [...out];
+}
+
+// Every path a Claude Code settings file's commands name (hooks, a status
+// line, a key helper and the rest): absolute, from `~`, `$HOME`,
+// `$CLAUDE_CONFIG_DIR` (`dir`) or `$CLAUDE_PROJECT_DIR` (`cwd`), or
+// relative to `dir` and to `cwd`, the session's folder, where hooks run;
+// there or not. They
+// run unasked in every session on that login, so an edit of one outside
+// Full access asks (code-writes.ts). A file that isn't plain JSON names
+// nothing it can tell, so its own name (code-writes.ts) is what's guarded.
+// Every string in a settings file's parts that run something: the
+// commands, for code-writes to follow as a shell would (commandFiles).
+export function settingsCommands(file: string): string[] {
+  const read = readJson(file);
+  if (!read?.ok) return [];
+  const strings: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === 'string') strings.push(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (isObject(v)) Object.values(v).forEach(walk);
+  };
+  walk(commandParts(read.value));
+  return strings.slice(0, MAX_NAMED);
+}
+
+export function settingsNamedPaths(file: string, dir: string, home: string = os.homedir(), cwd?: string): string[] {
+  const read = readJson(file);
+  if (!read?.ok) return [];
+  const strings: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === 'string') strings.push(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (isObject(v)) Object.values(v).forEach(walk);
+  };
+  walk(commandParts(read.value));
+  const out = new Set<string>();
+  for (const s of strings) {
+    let text = s.replace(/\$\{?CLAUDE_CONFIG_DIR\}?/g, dir).replace(/\$\{?HOME\}?/g, home);
+    if (cwd) text = text.replace(/\$\{?CLAUDE_PROJECT_DIR\}?/g, cwd);
+    // Quotes out first: `"$CLAUDE_PROJECT_DIR"/x.sh` is one path.
+    for (const raw of text.replace(/["'`]/g, '').split(/[\s;&|()<>=]+/)) {
+      if (!raw.includes('/') || raw.includes('$')) continue;
+      if (raw.startsWith('~/')) out.add(path.join(home, raw.slice(2)));
+      else {
+        out.add(path.resolve(dir, raw));
+        // A hook runs in the session's folder, so `./x.sh` is there too.
+        if (cwd && !path.isAbsolute(raw)) out.add(path.resolve(cwd, raw));
+      }
       if (out.size >= MAX_NAMED) return [...out];
     }
   }

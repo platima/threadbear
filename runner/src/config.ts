@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { readSandbox, type SandboxConfig } from './sandbox.ts';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -87,6 +88,8 @@ export type Config = {
   tokenTally?: boolean;
   accountNotes: Record<string, string>;
   poolFolders?: Record<string, string[]>;
+  // Folders whose threads run their CLI in a container (sandbox.ts).
+  sandbox?: SandboxConfig;
   // runner.json's pools as written (pools.ts readPools checks each);
   // absent means the built-in ones. pools.save replaces it.
   pools?: unknown[];
@@ -111,7 +114,7 @@ export type Config = {
   // The Convex mirror (src/sync.ts): the project's URL, whether it's on,
   // the name the phone shows for this runner and its id (made once).
   // THREADBEAR_SYNC=off turns it off for tests and dev runners.
-  sync: { enabled: boolean; url?: string; name?: string; runnerId?: string; icon?: string; rpcUrl?: string; pastedPictures?: boolean };
+  sync: { enabled: boolean; url?: string; name?: string; runnerId?: string; icon?: string; rpcUrl?: string; pastedPictures?: boolean; full?: boolean };
   // The silent on-device secret check (src/secret-check.ts): off unless asked.
   secretCheck?: boolean;
   // Mike's Connectors gateway's base URL (connectors.ts), for the app's
@@ -147,18 +150,32 @@ export type RunnerJson = {
   cliUpdates?: Partial<CliUpdatesConfig>;
   accountNotes?: Record<string, string>;
   poolFolders?: Record<string, string[]>;
+  sandbox?: unknown;
   pools?: unknown[];
   followMain?: boolean;
+  // An ssh host that ./check.sh sends the repo's checks to, so suites and
+  // the app's test windows stay off this Mac (scripts/check-remote.sh).
+  // Only check.sh reads it; the runner itself doesn't.
+  checkHost?: string;
   bulletReplies?: boolean;
   oneReply?: boolean;
-  releases?: { publish?: boolean; signingKey?: string };
+  // bringIn: how often a fork's runner starts a thread to bring in Mike's
+  // releases (bring-in.ts): every so many days, 'important' or 'off'.
+  releases?: { publish?: boolean; signingKey?: string; bringIn?: number | 'important' | 'off' };
   models?: { pool?: string | null; privateFolders?: string[] };
   // icon: an SF Symbol for this runner in lists (machine.ts works one out).
   // rpcUrl: how a Mac app reaches this runner over the tailnet (step 6 part 2).
+  // full: true sends tool output to your Convex deployment as well, scrubbed first
+  // (docs/full-convex.md). Off unless you say so.
   // pastedPictures: false keeps pictures you paste off your Convex deployment
   // (docs/on-your-mac.md).
-  sync?: { enabled?: boolean; url?: string; name?: string; runnerId?: string; icon?: string; rpcUrl?: string; pastedPictures?: boolean };
+  sync?: { enabled?: boolean; url?: string; name?: string; runnerId?: string; icon?: string; rpcUrl?: string; pastedPictures?: boolean; full?: boolean };
   secretCheck?: { enabled?: boolean };
+  // Days after a thread is archived that housekeeping clears its pictures
+  // (housekeeping.ts). Absent: they're kept. Mike's runners set 30.
+  archivedMediaDays?: number;
+  // Features still being tried out, each off unless it says (experiments.ts).
+  experiments?: Record<string, boolean>;
   // The gateway, when it isn't the `connectors` MCP server in
   // ~/.claude.json; url "" or enabled: false turns the panel's polling off.
   connectors?: { url?: string; enabled?: boolean; headersHelper?: string };
@@ -262,6 +279,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tokenTally: env.THREADBEAR_TOKEN_TALLY !== 'off',
     accountNotes: stringMap(json.accountNotes) ?? { ...DEFAULT_ACCOUNT_NOTES },
     poolFolders: folderMap(json.poolFolders) ?? { ...DEFAULT_POOL_FOLDERS },
+    ...((sb) => (sb ? { sandbox: sb } : {}))(readSandbox(json.sandbox, expandHome)),
     ...(Array.isArray(json.pools) && json.pools.length ? { pools: json.pools } : {}),
     sync: syncConfig(json.sync, env),
     secretCheck: json.secretCheck?.enabled === true,
@@ -294,6 +312,7 @@ function syncConfig(raw: RunnerJson['sync'], env: NodeJS.ProcessEnv): Config['sy
   const rpcUrl = nonEmpty(raw?.rpcUrl);
   if (rpcUrl) out.rpcUrl = rpcUrl;
   if (raw?.pastedPictures === false) out.pastedPictures = false;
+  if (raw?.full === true) out.full = true;
   return out;
 }
 

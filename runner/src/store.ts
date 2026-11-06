@@ -50,24 +50,39 @@ export type ThreadRecord = {
   modelInUse?: string; // full id the CLI ran the last turn on
   effortInUse?: EffortLevel; // the level the CLI reported for the last turn
   permissionMode: PermissionMode;
+  // "Plan first": the mode approving the plan goes back to, and the plan
+  // waiting for Mike (its plan.proposed itemId).
+  modeBeforePlan?: PermissionMode;
+  openPlan?: string;
   status: ThreadStatus;
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;
   snoozedUntil?: string;
   snoozedUntilRestart?: boolean; // snoozedUntil is UNTIL_RESTART; start() wakes it
+  untilRelease?: string; // with snoozedUntilRestart: only a start on another release wakes it
   wakeWhen?: WakeWhen; // hibernated in Mike's words (wake-when.ts)
   // Hibernating until these threads finish (end_turn's waitFor,
   // runner/hibernation.ts): each counts once it has finished (with no new
   // work since), been archived or been deleted.
   // `until`: waits for something in particular, which the librarian
   // judges from its looks at that thread (met), not for any finish.
-  waitingOn?: { threadId: string; title: string; until?: string; done?: { at: string; how: 'finished' | 'met' | 'archived' | 'deleted'; reply?: string; why?: string } }[];
+  // `review`: the thread is a review of this one's change (runner/lab-review.ts).
+  waitingOn?: { threadId: string; title: string; until?: string; review?: true; done?: { at: string; how: 'finished' | 'met' | 'archived' | 'deleted'; reply?: string; why?: string } }[];
   // Its last finished turn (nothing needed, nothing left running) and that
   // turn's reply, for threads waiting on it, including on a runner it
   // moves to (runner/hibernation.ts, reconcileWaits). Cleared by any new
   // work (a message, a turn its CLI opens), so no clock is compared.
   finished?: { at: string; reply?: string };
+  // Review by another lab (runner/lab-review.ts): reviewOf is set on a
+  // review thread (the thread whose change it checks), which never gets a
+  // review of its own; labReviews counts the reviews since Mike last wrote.
+  reviewOf?: string;
+  labReviews?: number;
+  // A review a draining, restarting or stopping runner couldn't start (it
+  // makes no threads), for the runner that adopts or loads this one to start.
+  // `seq`: where that turn's events end, which its diff is read back from.
+  labReviewOwed?: { turnId: string; seq?: number; reply?: string };
   snoozedAt?: string; // when it was last put away, for how long it slept; may be stale once awake
   woke?: { at: string; since?: string }; // woke by itself and not looked at yet (since = snoozedAt)
   archivedAt?: string;

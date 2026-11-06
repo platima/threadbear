@@ -2,6 +2,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import type { Duplex } from 'node:stream';
+import { awakeTimeout, type AwakeTimer } from './awake-timer.ts';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Runner, Notification, CliControl } from './runner.ts';
 import type { Logger } from './log.ts';
@@ -18,7 +19,7 @@ type Conn = {
   subs: Set<string>;
   client?: string;
   browserPanel?: boolean;
-  authTimer?: NodeJS.Timeout;
+  authTimer?: AwakeTimer;
   // This connection's auth.challenge nonce (docs/protocol.md, "Auth").
   challenge?: string;
 };
@@ -59,8 +60,10 @@ const THREAD_METHODS = new Set([
   'threads.delete',
   'threads.events',
   'threads.subscribe',
+  'threads.heldBody',
   'threads.markSeen',
   'threads.highlights',
+  'threads.commands',
   'threads.explain',
   'threads.hibernateWhen',
   'threads.removeHighlight',
@@ -69,6 +72,7 @@ const THREAD_METHODS = new Set([
   'threads.tickAsk',
   'threads.share',
   'approvals.respond',
+  'plans.approve',
   'secrets.answer',
   'panels.render',
   'panels.convexKey',
@@ -179,7 +183,7 @@ export class RpcServer {
   async close(): Promise<void> {
     this.unlisten();
     for (const c of this.conns) {
-      clearTimeout(c.authTimer);
+      c.authTimer?.clear();
       c.ws.close(1001, 'runner stopping');
     }
     // wss.close waits for every client to answer the close, and ws gives a
@@ -260,7 +264,7 @@ export class RpcServer {
   // (ws 8.x; rpc.test.ts fails if a ws update moves it).
   private unlock(conn: Conn): void {
     conn.authed = true;
-    clearTimeout(conn.authTimer);
+    conn.authTimer?.clear();
     conn.challenge = undefined;
     const receiver = (conn.ws as unknown as { _receiver?: { _maxPayload?: unknown } })._receiver;
     if (receiver && typeof receiver._maxPayload === 'number') receiver._maxPayload = MAX_PAYLOAD;
@@ -272,7 +276,7 @@ export class RpcServer {
   // client that ignores it for 30 s. It counts as waiting until it's gone,
   // so refused sockets can't pile up past the cap.
   private refuseConn(conn: Conn): void {
-    clearTimeout(conn.authTimer);
+    conn.authTimer?.clear();
     conn.ws.close(4401, 'unauthorized');
     setTimeout(() => conn.ws.terminate(), 1000).unref();
   }
@@ -290,10 +294,11 @@ export class RpcServer {
     if (headerAuthed) {
       this.unlock(conn);
     } else {
-      conn.authTimer = setTimeout(() => {
+      // Awake time only, as in client.ts: a stalled runner mustn't drop
+      // a client whose proof is already waiting in the socket.
+      conn.authTimer = awakeTimeout(this.opts.authTimeoutMs ?? AUTH_TIMEOUT_MS, () => {
         if (!conn.authed) this.refuseConn(conn);
-      }, this.opts.authTimeoutMs ?? AUTH_TIMEOUT_MS);
-      conn.authTimer.unref();
+      });
       conn.challenge = newNonce();
       this.send(conn, { jsonrpc: '2.0', method: 'auth.challenge', params: { version: AUTH_VERSION, nonce: conn.challenge, port: this.channel().port } });
     }
@@ -306,7 +311,7 @@ export class RpcServer {
       this.onMessage(conn, data.toString());
     });
     ws.on('close', () => {
-      clearTimeout(conn.authTimer);
+      conn.authTimer?.clear();
       this.conns.delete(conn);
     });
     // A protocol error (a frame over the limit, bad UTF-8): ws closes with
@@ -314,7 +319,7 @@ export class RpcServer {
     // off now; it stays counted (against the pending cap, if it hadn't
     // authenticated) until its 'close'.
     ws.on('error', () => {
-      clearTimeout(conn.authTimer);
+      conn.authTimer?.clear();
       ws.terminate();
     });
   }
@@ -623,6 +628,8 @@ export class RpcServer {
         }
         return r.explain({ threadId: reqString(p, 'threadId'), selection, message: p.message === undefined ? undefined : reqString(p, 'message'), question, earlier });
       }
+      case 'threads.commands':
+        return r.threadCommands(reqString(p, 'threadId'));
       case 'threads.hibernateWhen':
         return r.hibernateWhen({ threadId: reqString(p, 'threadId'), said: reqString(p, 'said') });
       case 'threads.removeHighlight':
@@ -659,6 +666,8 @@ export class RpcServer {
           answers,
         });
       }
+      case 'plans.approve':
+        return r.approvePlan({ threadId: reqString(p, 'threadId'), itemId: reqString(p, 'itemId') });
       case 'secrets.answer': {
         // docs/protocol.md, "Secrets". Nothing here logs params, and the
         // errors below never quote them.
@@ -809,7 +818,7 @@ function optStartedBy(p: Record<string, unknown>): { startedBy?: ThreadStartedBy
 function optMode(p: Record<string, unknown>): PermissionMode | undefined {
   const v = p.permissionMode;
   if (v === undefined || v === null) return undefined;
-  if (v !== 'full' && v !== 'ask' && v !== 'auto') throw bad('permissionMode must be "full", "ask" or "auto"');
+  if (v !== 'full' && v !== 'ask' && v !== 'auto' && v !== 'plan') throw bad('permissionMode must be "full", "ask", "auto" or "plan"');
   return v;
 }
 

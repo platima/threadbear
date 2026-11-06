@@ -3,7 +3,15 @@
 # what failed and the end of the log for each step that failed, and a
 # nonzero exit if any did.
 #
-#   ./check.sh [--quick | --app] [--all] [--e2e] [--shots DIR]
+#   ./check.sh [--quick | --app] [--all] [--e2e] [--shots DIR] [--local]
+#
+# With a check host set (THREADBEAR_CHECK_HOST, or "checkHost" in the
+# runner's runner.json, an ssh host such as "tinker-desk"), the checks run
+# on that Mac instead (scripts/check-remote.sh), so test suites and the
+# app's test windows stay off this one. If it can't be reached they run
+# here. --e2e always runs here, as it needs this Mac's claude login.
+#   --local       run here even with a check host set (narrow it down too:
+#                 one test file, or swift test --filter)
 #
 #   (no options)  runner typecheck, unit tests and deploy tests, then the
 #                 app's swift build and swift test, and BearDock's tests
@@ -11,6 +19,10 @@
 #   --app         the app's swift build and swift test only, for a change
 #                 that doesn't touch runner/
 #   --all         don't skip the dock and deploy tests (below)
+#
+# When up to 8 of the runner's unit test files fail, those run again on
+# their own, one at a time, and a pass then counts: the step's line lists
+# the tests that needed it (runner_unit_tests, below, says why).
 #
 # The deploy tests (a few minutes) only run when something they cover
 # changed from main: runner/scripts/, launch.mjs, the launcher or the tests
@@ -40,6 +52,8 @@ APP_ONLY=0
 ALL=0
 E2E=0
 SHOTS=""
+LOCAL=0
+ARGS=("$@")
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,6 +61,7 @@ while [ $# -gt 0 ]; do
     --app) APP_ONLY=1 ;;
     --all) ALL=1 ;;
     --e2e) E2E=1 ;;
+    --local) LOCAL=1 ;;
     --shots)
       [ $# -ge 2 ] || { echo "--shots needs a folder" >&2; exit 2; }
       case "$2" in /*) SHOTS="$2" ;; *) SHOTS="$PWD/$2" ;; esac
@@ -60,6 +75,27 @@ done
 if [ "$QUICK" = 1 ] && [ "$APP_ONLY" = 1 ]; then
   echo "--quick is the runner's checks and --app the app's; pick one (or neither for both)." >&2
   exit 2
+fi
+
+# The check host: THREADBEAR_CHECK_HOST (set and empty means none), or
+# runner.json's checkHost. Read before the THREADBEAR_* names go below.
+if [ "$LOCAL" = 0 ] && [ "$E2E" = 0 ]; then
+  if [ -n "${THREADBEAR_CHECK_HOST+set}" ]; then
+    CHECK_HOST="$THREADBEAR_CHECK_HOST"
+  else
+    RUNNER_JSON="${THREADBEAR_HOME:-$HOME/Library/Application Support/Threadbear}/runner.json"
+    CHECK_HOST="$( [ -x "$NODE" ] && [ -f "$RUNNER_JSON" ] && "$NODE" -e '
+      try { const h = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).checkHost; if (typeof h === "string") console.log(h) } catch {}' "$RUNNER_JSON")"
+  fi
+  if [ -n "$CHECK_HOST" ]; then
+    "$ROOT/scripts/check-remote.sh" "$CHECK_HOST" ${ARGS[@]+"${ARGS[@]}"}
+    code=$?
+    [ "$code" = 255 ] || exit "$code"
+    echo "So the checks run on this Mac instead, at low priority."
+    exec taskpolicy -b "$0" --local ${ARGS[@]+"${ARGS[@]}"}
+  fi
+elif [ "$E2E" = 1 ] && [ "$LOCAL" = 0 ]; then
+  echo "--e2e runs on this Mac, which has the claude login it needs."
 fi
 
 if [ ! -x "$NODE" ]; then
@@ -82,10 +118,16 @@ export THREADBEAR_SYNC=off
 
 # What this checkout changes from main: committed since they parted, plus
 # anything uncommitted or untracked. Empty on main itself.
+if [ -n "${THREADBEAR_CHECK_CHANGED_FILE:-}" ]; then
+  # On a check host: worked out on the Mac that sent the copy, which has
+  # no .git (scripts/check-remote.sh).
+  CHANGED="$(cat "$THREADBEAR_CHECK_CHANGED_FILE")"
+else
 CHANGED="$( {
   base="$(git -C "$ROOT" merge-base HEAD main 2>/dev/null)" && git -C "$ROOT" diff --name-only "$base"
   git -C "$ROOT" ls-files --others --exclude-standard
 } 2>/dev/null | sort -u)"
+fi
 
 # needed <regex>: whether a step whose inputs match it should run.
 needed() {
@@ -115,6 +157,47 @@ step() {
   fi
 }
 
+# The runner's unit tests, as `npm test` runs them (runner/package.json),
+# plus a reporter that writes the files with a failure. Plenty of them
+# start real processes with real timeouts, and on a loaded machine those
+# fail with nothing wrong: six did at once, taking 13 to 145 s, while other
+# threads built the app on the M5 (6 Nov). So when a few files failed, just
+# those run again, one file at a time; passing then counts, but the step
+# says which tests needed it, so one that keeps turning up gets fixed. A
+# test that fails on its own as well still fails the step.
+RERUN_MAX_FILES=8
+runner_unit_tests() {
+  local name="runner unit tests" dir="$ROOT/runner"
+  local log="$LOGS/runner-unit-tests.log" list="$LOGS/runner-unit-tests.failed"
+  local start=$SECONDS
+  local run=(node --test --test-timeout=300000 --test-force-exit --test-reporter=spec)
+  if (cd "$dir" && "${run[@]}" --test-reporter-destination=stdout \
+      --test-reporter=./test/helpers/failed-files-reporter.mjs --test-reporter-destination="$list" \
+      "test/unit/**/*.test.ts") >"$log" 2>&1; then
+    printf 'ok    %-20s %4ss\n' "$name" "$((SECONDS - start))"
+    return
+  fi
+  local files=() f
+  [ -f "$list" ] && while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <"$list"
+  if [ "${#files[@]}" -ge 1 ] && [ "${#files[@]}" -le "$RERUN_MAX_FILES" ]; then
+    local relog="$LOGS/runner-unit-tests-again.log"
+    if (cd "$dir" && "${run[@]}" --test-concurrency=1 "${files[@]}") >"$relog" 2>&1; then
+      printf 'ok    %-20s %4ss  (passed on a second run of the files that failed:)\n' "$name" "$((SECONDS - start))"
+      # The tests that failed the first time: the spec reporter's ✖ lines,
+      # once each (its summary at the end repeats them).
+      sed -E $'s/\x1b\\[[0-9;]*[A-Za-z]//g' "$log" | grep -E '^[[:space:]]*✖ ' | grep -v '✖ failing tests:' | sed -E 's/^[[:space:]]*/        /' | sort -u | head -n 12
+      return
+    fi
+    printf 'FAIL  %-20s %4ss  %s (failed again on its own; the whole run: %s)\n' "$name" "$((SECONDS - start))" "$relog" "$log"
+    FAILED="$FAILED$name|$relog
+"
+    return
+  fi
+  printf 'FAIL  %-20s %4ss  %s\n' "$name" "$((SECONDS - start))" "$log"
+  FAILED="$FAILED$name|$log
+"
+}
+
 if [ "$APP_ONLY" = 0 ]; then
   if [ ! -d "$ROOT/runner/node_modules" ]; then
     step "runner packages" "$ROOT/runner" npm ci --no-audit --no-fund
@@ -131,7 +214,7 @@ if [ "$APP_ONLY" = 0 ]; then
   step "convex typecheck" "$ROOT" npm run convex:typecheck
   step "web typecheck" "$ROOT" npm run web:typecheck
   step "web tests" "$ROOT" npm run web:test
-  step "runner unit tests" "$ROOT/runner" npm test
+  runner_unit_tests
   if [ "$QUICK" = 0 ]; then
     if needed '^runner/(scripts/|launch\.mjs$|launcher/|test/deploy/)'; then
       step "runner deploy tests" "$ROOT/runner" bash test/deploy/run.sh
