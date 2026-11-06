@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Threadbear MSI (silent-install oriented; no UI suite - use msiexec /qn or /qb).
+  Threadbear MSI (silent-install oriented; no UI suite: use msiexec /qn or /qb).
 
-  Build: wix build threadbear.wxs -arch x64 -d Version=x.y.z -d StageDir=<build\stage-x64> -o ..\dist\threadbear-vx.y.z-msi-win-x64.msi
+  Build: wix build threadbear.wxs -arch x64 -d Version=x.y.z -d StageDir=<build\stage-x64> -d Publisher=<name> -o ..\dist\threadbear-vx.y.z-msi-win-x64.msi
   Windows on Arm: -arch arm64 with the arm64 stage folder, output
   threadbear-vx.y.z-msi-win-arm64.msi (build-installers.ps1 -Arch arm64). Both
   share the UpgradeCode, so either architecture's MSI upgrades the other in
@@ -14,8 +14,23 @@
 
   The runner's logon task is per user, so the MSI does not create it for a
   deployment: each person is asked the first time they open the app (or uses
-  the runner switch of Threadbear.exe themselves). Removing the product
-  removes the task of the user who removes it.
+  the runner switch of Threadbear.exe themselves). Upgrading ends the task so its
+  files can be replaced and starts it again afterwards (it does nothing for
+  someone who has no task). Removing the product removes the task of the user
+  who removes it.
+
+  The setup exe (threadbear.iss) installs to the same default folder under a
+  different identity, so each refuses to install while the other's copy is
+  there. This one checks for the setup exe's uninstall entry (its AppId,
+  below) or, for a per-user copy, its uninstaller in the default folder, and
+  says to remove that copy first. The AppId and this package's UpgradeCode
+  are each repeated in threadbear.iss; keep the pairs in step.
+
+  Launch conditions (all skipped when removing or repairing):
+    Windows 10 version 1809 or later (the same floor as the setup exe; read
+    from the registry, as the service's own VersionNT is not reliable),
+    Microsoft Edge WebView2 present (msiexec ... SKIPWEBVIEW2CHECK=1 skips it,
+    for a machine where it is delivered separately), and no setup-exe copy.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <?ifndef Publisher ?>
@@ -24,6 +39,8 @@
   <?ifndef StageDir ?>
     <?define StageDir = ..\build\stage-x64 ?>
   <?endif ?>
+  <?define InnoUninstallKey = Software\Microsoft\Windows\CurrentVersion\Uninstall\{3F6A9D52-8B1E-4C47-A5D0-72E9C41B6F38}_is1 ?>
+  <?define WebView2Clients = Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5} ?>
   <Package Name="Threadbear"
            Manufacturer="$(var.Publisher)"
            Version="$(var.Version)"
@@ -45,6 +62,63 @@
     <Property Id="ARPPRODUCTICON" Value="ThreadbearIcon" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/platima/threadbear" />
+    <!-- Shown as the comment in the older Programs and Features list. There is no
+         install dialog to say this in. -->
+    <Property Id="ARPCOMMENTS" Value="Needs Git for Windows and Claude Code (signed in with claude auth login), which this package does not install." />
+
+    <!-- ===================== Launch conditions ===================== -->
+    <!-- The setup exe's own uninstall entry, system-wide (HKLM, either view),
+         and, for a per-user copy, the uninstaller it leaves in its default
+         folder (the folder this package would install to too). Not an HKCU
+         search: tried, and the Windows Installer service does not see the
+         user's HKCU for a per-user package (a key made for the test came back
+         "not found"), whereas a file search and [LocalAppDataFolder] work. A
+         setup-exe copy in a folder the person chose is not found; it does not
+         share this package's folder. -->
+    <Property Id="INNO_COPY_USER" Secure="yes">
+      <DirectorySearch Id="InnoUserFolder" Path="[LocalAppDataFolder]Programs\Threadbear" Depth="0">
+        <FileSearch Name="unins000.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="INNO_COPY_MACHINE" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="$(var.InnoUninstallKey)" Name="UninstallString" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="INNO_COPY_MACHINE32" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="$(var.InnoUninstallKey)" Name="UninstallString" Type="raw" Bitness="always32" />
+    </Property>
+    <Launch Condition="Installed OR NOT (INNO_COPY_USER OR INNO_COPY_MACHINE OR INNO_COPY_MACHINE32)"
+            Message="Threadbear is already installed from the setup program (the .exe). Remove that copy first (Settings, Apps, Installed apps), then run this installer again." />
+
+    <!-- Windows 10 version 1809 (build 17763) or later, which is also the setup
+         exe's floor. Not VersionNT or WindowsBuild: the Windows Installer
+         service tells a package it is running on Windows 8.1 (VersionNT 603,
+         WindowsBuild 9600) on a current Windows 11, so a condition on them
+         refuses every install. The build number in the registry is the real one. -->
+    <Property Id="WINDOWS_BUILD" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Bitness="always64" />
+    </Property>
+    <Launch Condition="Installed OR NOT WINDOWS_BUILD OR WINDOWS_BUILD &gt;= 17763"
+            Message="Threadbear needs Windows 10 version 1809 or later, or Windows 11." />
+
+    <!-- Microsoft Edge WebView2, which the window is drawn with: recorded in the
+         machine's registry (the 32-bit view, where the evergreen runtime
+         registers, and the 64-bit one) or the user's. A version of 0.0.0.0 means
+         it was removed. -->
+    <Property Id="WEBVIEW2_MACHINE" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\WOW6432Node\$(var.WebView2Clients)" Name="pv" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="WEBVIEW2_MACHINE64" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\$(var.WebView2Clients)" Name="pv" Type="raw" Bitness="always64" />
+    </Property>
+    <!-- A runtime installed for one user only has no key the service can see
+         (see above), so its program is looked for in the folder it goes to. -->
+    <Property Id="WEBVIEW2_USER" Secure="yes">
+      <DirectorySearch Id="WebView2UserFolder" Path="[LocalAppDataFolder]Microsoft\EdgeWebView\Application" Depth="1">
+        <FileSearch Name="msedgewebview2.exe" />
+      </DirectorySearch>
+    </Property>
+    <Launch Condition="Installed OR SKIPWEBVIEW2CHECK OR (WEBVIEW2_MACHINE AND WEBVIEW2_MACHINE &lt;&gt; &quot;0.0.0.0&quot;) OR (WEBVIEW2_MACHINE64 AND WEBVIEW2_MACHINE64 &lt;&gt; &quot;0.0.0.0&quot;) OR WEBVIEW2_USER"
+            Message="Threadbear needs Microsoft Edge WebView2, which this PC does not seem to have. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and run this installer again." />
 
     <!-- ============================ Files ============================ -->
     <!-- The whole staged folder, harvested with its directory layout. -->
@@ -60,12 +134,12 @@
         <Shortcut Id="ThreadbearShortcut" Name="Threadbear"
                   Target="[INSTALLFOLDER]Threadbear.exe"
                   WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKMU" Key="Software\Platima\Threadbear"
+        <RegistryValue Root="HKMU" Key="Software\$(var.Publisher)\Threadbear"
                        Name="startmenu" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </StandardDirectory>
 
-    <!-- ====================== Stopping a running copy ====================== -->
+    <!-- ================= Stopping and starting the runner ================= -->
     <!-- The app has no window to close and the runner keeps its files open, so
          both are asked to stop through their own routes (the quit and stop
          switches) before files change. Return="ignore": on a first install
@@ -79,11 +153,22 @@
     <CustomAction Id="RemoveRunnerTask" Directory="INSTALLFOLDER"
                   ExeCommand="&quot;[INSTALLFOLDER]Threadbear.exe&quot; --runner --uninstall"
                   Execute="immediate" Return="ignore" />
+    <!-- StopRunner ended the task for the upgrade; this starts it again once the
+         files are in place. It does nothing when no task is registered (a first
+         install, or someone who said no), prints a line and exits 0. Deferred and
+         impersonating, so it runs as the person installing (the task is theirs,
+         and a system-wide install runs this script elevated), and Return="ignore"
+         so a failure never fails the install. -->
+    <CustomAction Id="StartRunner" Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]Threadbear.exe&quot; --runner --start"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
     <InstallExecuteSequence>
       <Custom Action="QuitApp" After="CostFinalize" />
       <Custom Action="StopRunner" After="QuitApp" />
       <!-- Only for a removal, not for the removal half of an upgrade. -->
       <Custom Action="RemoveRunnerTask" After="StopRunner" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <!-- Last, after the files: not on a removal. -->
+      <Custom Action="StartRunner" Before="InstallFinalize" Condition="NOT (REMOVE=&quot;ALL&quot;)" />
     </InstallExecuteSequence>
   </Package>
 </Wix>
