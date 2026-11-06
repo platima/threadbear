@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ACCOUNTS, FakeAccounts, makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
+import { SHELL, shPath } from '../helpers/platform.ts';
 import { loadPatchSet } from '../../src/patches.ts';
 import { PatchTrust } from '../../src/patch-trust.ts';
 import { ClaudeAdapter } from '../../src/adapters/claude/adapter.ts';
@@ -49,7 +50,7 @@ async function settle(h: ReturnType<typeof makeHarness>, threadId: string) {
 }
 
 function harness(root: string, home = tmpDir()) {
-  return makeHarness(home, {}, { panelsRoot: root, actionShell: ['/bin/sh', '-c'], actionTimeoutMs: 20_000, patchTrust: new PatchTrust({ file: path.join(home, 'patch-trust.json'), claudeHome: root }) });
+  return makeHarness(home, {}, { panelsRoot: root, actionShell: SHELL, actionTimeoutMs: 20_000, patchTrust: new PatchTrust({ file: path.join(home, 'patch-trust.json'), claudeHome: root }) });
 }
 
 // The CLI's successful Write, as the adapter passes it on: the call, the
@@ -424,7 +425,7 @@ test("Codex review, round 2: the runner's data dir, a link to a patch not there 
   // A home patch (root is home here) whose hook runs a script from the
   // thread's folder, and one naming an absolute script that isn't there.
   const missing = path.join(tmpDir(), 'on-end.sh');
-  put(path.join(root, '.threadbear', 'patches', 'mine.ts'), `export default { hooks: [{ title: 'Lint', on: 'turn.end', run: "sh ./scripts/lint.sh" }, { title: 'End', on: 'turn.end', run: ${JSON.stringify(missing)} }] };\n`);
+  put(path.join(root, '.threadbear', 'patches', 'mine.ts'), `export default { hooks: [{ title: 'Lint', on: 'turn.end', run: "sh ./scripts/lint.sh" }, { title: 'End', on: 'turn.end', run: ${JSON.stringify(shPath(missing))} }] };\n`);
   put(path.join(project, 'scripts', 'lint.sh'), '#!/bin/sh\ntrue\n');
   const h = makeHarness(home, {}, {
     panelsRoot: root,

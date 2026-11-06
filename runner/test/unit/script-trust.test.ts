@@ -10,7 +10,7 @@ import { tmpDir } from '../helpers/fakes.ts';
 import { findWorktreePatch, loadPatchSet } from '../../src/patches.ts';
 import { namedPaths, patchHash, PatchTrust, scanModule } from '../../src/patch-trust.ts';
 import { reachOf } from '../../src/script-trust.ts';
-import { IS_WINDOWS, escapeRegExp } from '../helpers/platform.ts';
+import { IS_WINDOWS } from '../helpers/platform.ts';
 
 let n = 0;
 // A repo (a .git folder is enough for its top) with a patch and files.
@@ -369,6 +369,6 @@ test("an action command worked out in code that runs a file the hash didn't cove
   const trust = new PatchTrust();
   trust.trustCurrent([file]);
   const set = await load(folder, trust);
-  assert.match(set.patches[0].error ?? '', new RegExp(`^Not run: its action "Deploy" runs ${escapeRegExp(path.join('scripts', 'deploy.mjs'))}, which patch trust didn't hash`));
+  assert.match(set.patches[0].error ?? '', /^Not run: its action "Deploy" runs scripts\/deploy\.mjs, which patch trust didn't hash/);
   assert.equal(set.actions.length, 0);
 });

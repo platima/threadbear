@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeHarness, tmpDir } from '../helpers/fakes.ts';
 import { checkSummary } from '../helpers/protocol-check.ts';
+import { skipOnWindows } from '../helpers/platform.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import type { PersistedEvent } from '../../src/protocol.ts';
 import { commitsIn, emptyHighlights, linksIn, observe, openTargets, pinItem, pushedBranches, remove, unpin, upsert, view, HIGHLIGHTS_KEPT } from '../../src/highlights.ts';
@@ -197,7 +198,7 @@ test('a quiet commit shown with git log --oneline, and a quiet push', () => {
   assert.deepEqual(view(state).highlights.map((h) => [h.id, h.title, h.branch, h.pushed]), [['commit:456680b', 'Find one episode', 'single-episode', true]]);
 });
 
-test('pageHasScripts: handlers and javascript: links count, and a FIFO never blocks', async () => {
+test('pageHasScripts: handlers and javascript: links count', async () => {
   const { pageHasScripts } = await import('../../src/runner/highlights.ts');
   const dir = tmpDir();
   const page = (name: string, html: string) => (fs.writeFileSync(path.join(dir, name), html), path.join(dir, name));
@@ -206,6 +207,11 @@ test('pageHasScripts: handlers and javascript: links count, and a FIFO never blo
   assert.equal(pageHasScripts(page('b.htm', '<a href="javascript:go()">go</a>')), true);
   assert.equal(pageHasScripts(page('c.html', '<p>Just words, once = twice</p>')), false);
   assert.equal(pageHasScripts(page('d.md', '<script>x</script>')), false, 'only pages');
+});
+
+test('pageHasScripts: a FIFO never blocks', skipOnWindows('Windows has no FIFOs to make'), async () => {
+  const { pageHasScripts } = await import('../../src/runner/highlights.ts');
+  const dir = tmpDir();
   const { execFileSync } = await import('node:child_process');
   execFileSync('mkfifo', [path.join(dir, 'pipe.html')]);
   assert.equal(pageHasScripts(path.join(dir, 'pipe.html')), false);

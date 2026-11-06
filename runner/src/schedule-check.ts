@@ -23,6 +23,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { atomicWriteFileSync } from './fsutil.ts';
+import { IS_WINDOWS } from './platform.ts';
+import { killGroup } from './proc.ts';
+import { plainShell } from './system-tools.ts';
 
 export const CHECK_TIMEOUT_MS = 60_000;
 export const CHECK_OUTPUT_CHARS = 8000;
@@ -130,12 +133,15 @@ export function runCheck(p: { command: string; cwd: string; home: string; schedu
       clearTimeout(timer);
       resolve(r);
     };
-    const child = spawn('/bin/sh', ['-c', p.command], {
+    // sh -c, or Git Bash on Windows.
+    const [shell, ...shellArgs] = plainShell();
+    const child = spawn(shell, [...shellArgs, p.command], {
       cwd: fs.existsSync(p.cwd) ? p.cwd : undefined,
       env: { ...process.env, THREADBEAR_SCHEDULE_ID: p.scheduleId, THREADBEAR_CHECK_STATE: state },
       stdio: ['ignore', 'pipe', 'pipe'],
-      // Its own process group, so a timeout stops whatever it started too.
-      detached: true,
+      // Its own process group, so a timeout stops whatever it started too
+      // (Windows stops the whole tree with taskkill instead).
+      detached: !IS_WINDOWS,
     });
     const take = (b: Buffer) => {
       // Keep the end: the last lines of a long output say the most.
@@ -144,11 +150,7 @@ export function runCheck(p: { command: string; cwd: string; home: string; schedu
     child.stdout?.on('data', take);
     child.stderr?.on('data', take);
     const timer = setTimeout(() => {
-      try {
-        if (child.pid) process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        child.kill('SIGKILL');
-      }
+      if (child.pid && !killGroup(child.pid, 'SIGKILL')) child.kill('SIGKILL');
       finish({ ok: false, output: clip(out), why: `it took longer than ${Math.round((p.timeoutMs ?? CHECK_TIMEOUT_MS) / 1000)} seconds` });
     }, p.timeoutMs ?? CHECK_TIMEOUT_MS);
     child.on('error', (e) => finish({ ok: false, output: clip(out), why: e.message }));

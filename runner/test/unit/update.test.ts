@@ -10,6 +10,7 @@ import { nullLogger } from '../../src/log.ts';
 import { CHECK_INTERVAL_MS, FIRST_CHECK_MS, SOON_MS, RunnerUpdater, launcherDiffers, launchAgentBehind, launcherSourcesHash, appOfExecutable, updateDir, watchMainRef, decideUpdate, failedAlready, releaseTreeAt, syncClone, updateFilePath, type UpdateDeps } from '../../src/update.ts';
 import type { ReleaseJson } from '../../src/release.ts';
 import { patiently } from '../helpers/patience.ts';
+import { skipOnWindows } from '../helpers/platform.ts';
 import { linkDir } from '../../src/platform.ts';
 
 const running = { id: 'r1', tree: 'a+b+c+d' };
@@ -406,11 +407,14 @@ test('launcherDiffers: only when both files are there and differ', () => {
   assert.equal(launcherDiffers(a, b), true);
 });
 
-test('launcherSourcesHash matches what build-launcher.sh records', () => {
+test('launcherSourcesHash matches what build-launcher.sh records', skipOnWindows("build-launcher.sh builds the Mac launcher app, and hashes with shasum, which Git Bash doesn't have on its path"), () => {
   const launcher = path.join(import.meta.dirname, '..', '..', 'launcher');
   const r = spawnSync('bash', [path.join(launcher, 'build-launcher.sh'), '--hash'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(launcherSourcesHash(launcher), r.stdout.trim());
+});
+
+test('launcherSourcesHash is undefined where the launcher sources are not all there', () => {
   assert.equal(launcherSourcesHash(tmpDir('tb-no-launcher-')), undefined);
 });
 

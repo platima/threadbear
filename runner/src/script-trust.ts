@@ -34,6 +34,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { IS_WINDOWS, slashes } from './platform.ts';
 
 export type ScriptReach = { files: string[]; missing: string[]; problem?: string };
 
@@ -621,7 +622,7 @@ class Reach {
 
   private rel(file: string): string {
     const r = path.relative(this.o.top, file);
-    return r && !r.startsWith('..') ? r : file;
+    return r && !r.startsWith('..') ? slashes(r) : file;
   }
 
   private fail(ctx: Ctx | undefined, line: number | undefined, what: string): void {
@@ -974,7 +975,8 @@ class Reach {
     if (this.problem) return;
     // A path: the repo's file runs (followed), or a program outside it,
     // treated by its name (/bin/sh is sh).
-    if (name.includes('/')) {
+    // On Windows a quoted `C:\repo\evil.sh` is a path too, though it has no /.
+    if (name.includes('/') || (IS_WINDOWS && name.includes('\\'))) {
       const targets = this.abs(name, ctx);
       if (!targets) return this.fail(ctx, line, `runs ${name} after a cd patch trust couldn't follow (${ctx.lost}), so it can't tell which file that is.`);
       const inRepo = targets.filter((t) => this.inRepo(t));
@@ -1850,15 +1852,31 @@ function realOrNearest(p: string): string {
 // (`sh /dev/stdin < ./steps.txt`), which isn't the path it was given.
 const INPUT_PATH = /^\/(dev\/(stdin|tty|fd\/\d+)|proc\/(self|thread-self|\d+)\/fd\/\d+)$/;
 
+// A Windows path as Git Bash names it: forward slashes, and the drive
+// dropped, as Windows reads /dev/stdin as C:\dev\stdin and path.normalize
+// makes it \dev\stdin. (A real C:\dev\stdin is refused too: fails closed.)
+function asBashPath(p: string): string {
+  return path.posix.normalize(p.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, ''));
+}
+
 // Whether running or sourcing `p` reads what to run from the process's
 // input: one of those paths, or anything there that isn't a plain file
 // (a link to one, in the repo or not, a fifo, a device).
 function readsInput(p: string): boolean {
-  if (INPUT_PATH.test(path.normalize(p))) return true;
+  if (INPUT_PATH.test(IS_WINDOWS ? asBashPath(p) : path.normalize(p))) return true;
   try {
-    if (INPUT_PATH.test(fs.realpathSync(p))) return true;
+    if (INPUT_PATH.test(IS_WINDOWS ? asBashPath(fs.realpathSync(p)) : fs.realpathSync(p))) return true;
   } catch {
     // not there, or a link to nowhere
+  }
+  // A link to /dev/stdin made on Windows points nowhere (C:\dev\stdin), but
+  // Git Bash, which runs the script, has a /dev/stdin to read.
+  if (IS_WINDOWS) {
+    try {
+      if (fs.lstatSync(p).isSymbolicLink() && INPUT_PATH.test(asBashPath(fs.readlinkSync(p)))) return true;
+    } catch {
+      // not there
+    }
   }
   let st: fs.Stats;
   try {

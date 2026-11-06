@@ -53,6 +53,7 @@ import { fileURLToPath } from 'node:url';
 import { parseSync } from 'oxc-parser';
 import { atomicWriteFileSync } from './fsutil.ts';
 import { claudeCommands } from './claude-trust.ts';
+import { slashes } from './platform.ts';
 import { looksRunnable, MAX_READ_BYTES, reachOf, reachOfCommand, Reads } from './script-trust.ts';
 
 export type TrustVerdict =
@@ -865,7 +866,7 @@ export function unhashedFiles(command: string, folder: string, files: string[]):
   const real = realpath(folder);
   const top = repoTop(real);
   const reach = reachOfCommand(command, 'the action', { folder: real, top, scanJs: scriptScan, resolveImport: resolveHelper, namedPaths });
-  return reach.files.filter((f) => !files.includes(f) && !PICTURES.includes(path.extname(f).toLowerCase())).map((f) => path.relative(real, f));
+  return reach.files.filter((f) => !files.includes(f) && !PICTURES.includes(path.extname(f).toLowerCase())).map((f) => slashes(path.relative(real, f)));
 }
 
 // The files a shell command run in `folder` reaches, as patch trust
@@ -895,9 +896,9 @@ export function liveCommandProblem(command: string, folder: string, files: strin
   const top = repoTop(real);
   const reach = reachOfCommand(command, `\`${command.length > 80 ? command.slice(0, 80) + '...' : command}\``, { folder: real, top, scanJs: scriptScan, resolveImport: resolveHelper, namedPaths });
   const missed = reach.files.find((f) => !files.includes(f) && !PICTURES.includes(path.extname(f).toLowerCase()));
-  if (missed) return `runs ${path.relative(real, missed)}, which patch trust didn't hash: write the command in the patch as plain text, so trusting the patch covers what it runs.`;
+  if (missed) return `runs ${slashes(path.relative(real, missed))}, which patch trust didn't hash: write the command in the patch as plain text, so trusting the patch covers what it runs.`;
   const stuck = reach.files.find((f) => Object.hasOwn(blocked, f) && blocked[f]);
-  if (stuck) return `runs ${path.relative(real, stuck)}, and patch trust can't follow everything that runs: ${blocked[stuck]}`;
+  if (stuck) return `runs ${slashes(path.relative(real, stuck))}, and patch trust can't follow everything that runs: ${blocked[stuck]}`;
   if (reach.problem) return reach.problem;
   return undefined;
 }
