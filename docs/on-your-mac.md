@@ -194,6 +194,7 @@ File references are where to look.
 | Convex (the Convex panel) | yours | Only for a thread in a Convex project, when its Convex panel opens: the runner's Convex CLI asks api.convex.dev for the project's deployments and a deploy key, the runner asks the deployment whether a kept key still works (`/api/check_admin_key`), and the panel loads Convex's embedded dashboard (dashboard-embedded.convex.dev) with that key. Sign in to Convex goes to auth.convex.dev. (`runner/src/convex-keys.ts`) |
 | Your other Macs, over ssh | yours | Only when you run `tb runner add <name> --ssh <host>` or `tb runner check --ssh <host>` on your first Mac: it reads that Mac's Threadbear `runner.json`, writes its id and the deployment's address there if it hasn't them, writes its new key into that Mac's `secrets/convex-key`, and looks whether that Mac has a deploy key, Convex panel keys or a Convex login (names only, never a key), through your own ssh setup with agent and port forwarding off (`runner/src/runner-keys.ts`). `tb runner audit` asks this Mac's runner for its threads' last seqs and your deployment for what the main key made. `tb runner rotate-owner` sets env vars on your deployment with your deploy key, and, if you give it a Convex team access token for that run (`CONVEX_TEAM_TOKEN`, never kept), asks api.convex.dev for the deployment's deploy keys (their names and dates) before it rotates. |
 | GitHub | Mike's repo | Release tags fetched every 6 hours; the fork at setup |
+| GitHub (the Windows app) | the fork's | Only the installed Windows app (see "On Windows"): `api.github.com/repos/<the fork>/releases/latest` once a day, to say in its rail when a newer release is out. A plain request: GitHub sees the PC's address and the app's user agent, and nothing else is sent. Settings, "This app", turns it off. |
 | downloads.claude.ai, registry.npmjs.org | Anthropic, npm | CLI version checks and installs; `npm ci` |
 | Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `labReview` experiment on (off by default), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one. After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
 | Mike's push relay | Mike's | Only when a paired iPhone gets a notification. It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
@@ -289,71 +290,120 @@ with these differences. All of it is in `runner/src/platform.ts`,
 said otherwise.
 
 - **Installed by `runner/scripts/install-windows.mjs`:** a Task Scheduler task,
-  "Threadbear Runner", for the current user at logon (no admin rights,
-  hidden, restarted if it fails), which runs
-  `conhost.exe --headless node scripts/windows-run.mjs`; that script keeps the
+  "Threadbear Runner (<your Windows user name>)" (one made by an earlier
+  version under the plain name is replaced), for the current user at logon (no
+  admin rights, hidden, restarted if it fails, which stops when a runner says
+  another is already using the data folder), which runs
+  `conhost.exe --headless node scripts/windows-run.mjs`. That script keeps the
   runner running from the checkout (or from the installed copy, with the
-  `node.exe` that comes in it). It also writes `tb.cmd` to
-  `%LOCALAPPDATA%\Threadbear\bin` and adds the folder to the user's PATH. The
-  PATH is read from the registry unexpanded and written back as an expandable
-  string through PowerShell, so the rest of it is left as it was, and it is only
-  written when the folder has to be added or taken off. `--uninstall` removes
-  the task, the file and the PATH entry; `--stop` ends the task but leaves it
-  registered; `--installed` says whether it is.
+  `node.exe` that comes in it), waits longer between tries when the runner keeps
+  failing, and keeps its own log to about 2 MB. The task is made from an XML
+  file that sits in `%TEMP%` as `threadbear-task-<pid>.xml` for a moment. It
+  also writes `tb.cmd` to `%LOCALAPPDATA%\Threadbear\bin` (spelling the path
+  with `%LOCALAPPDATA%` or `%APPDATA%` where it can, so an accented profile
+  name isn't in the file, and switching the console's code page for the length
+  of the run where it can't) and adds the folder to the user's PATH. The PATH is
+  read from the registry unexpanded, through PowerShell, and written back as an
+  expandable string, so the rest of it is left as it was, and it is only
+  written when the folder has to be added or taken off; to make Windows tell
+  open programs, it sets and clears the user variable `THREADBEAR_PATH_CHANGED`
+  for an instant. `--uninstall` removes the task, the file and the PATH entry;
+  `--stop` ends the task but leaves it registered; `--start` runs it if it is
+  registered and not already running; `--installed` says whether it is.
 - **Where things are:** the data folder is `%APPDATA%\Threadbear` (the Mac's
   layout inside it), the runner's log is
   `%LOCALAPPDATA%\Threadbear\Logs\threadbear-runner.log`, and the supervisor's
-  is `runner-supervisor.log` beside it. NTFS gives these the profile's own
-  permissions, so the 0600 and 0700 modes are not set.
-- **Programs it runs:** `claude.exe` (from `~\.local\bin`), `git`, Git for
-  Windows' `bash.exe` for patch commands and checks (only from the places Git
-  installs to, or `CLAUDE_CODE_GIT_BASH_PATH`), `taskkill /T /F` on a process
-  it started and still has recorded (only when its recorded start time matches,
-  so a reused number is never stopped), `powershell.exe` to read a process's
-  start time, and `rundll32.exe url.dll,FileProtocolHandler` to open a web
-  page. Every child is started with its console window hidden.
+  is `runner-supervisor.log` beside it, with `runner-supervisor.log.1` once it
+  has passed 2 MB. `%APPDATA%` is the roaming folder: on a PC with a roaming
+  profile or folder redirection it may be copied to a server, and the runner's
+  token and secrets are in it. NTFS gives these files the profile's own
+  permissions, so the 0600 and 0700 modes are not set; when `THREADBEAR_HOME`
+  is outside the profile the runner says so at startup, as another user of the
+  PC may be able to read a folder on another drive.
+- **Programs it runs:** `claude.exe` (from `~\.local\bin`; `claude update` on the
+  same hourly schedule as on a Mac, which `cliUpdates` in `runner.json` can
+  change or turn off), `git`, Git for Windows' `bash.exe` for patch commands and
+  checks (found through `CLAUDE_CODE_GIT_BASH_PATH`, the places Git installs
+  to, the Git folder of a `git.exe` on the PATH, or Git's `InstallPath` in the
+  registry, which it only reads with `reg.exe query`; with none, those commands
+  print that Git for Windows is needed and run nothing), `schtasks.exe` and
+  `conhost.exe` for the task, `cmd.exe` for `tb.cmd`, `taskkill /T /F` on a
+  process it started and still has recorded (only when its recorded start time
+  matches, or the child it started hasn't exited, so a reused number is not
+  stopped), `powershell.exe`
+  to read a process's start time and the PATH, and
+  `rundll32.exe url.dll,FileProtocolHandler` to open a web page. Every child is
+  started with its console window hidden.
 - **The desktop app** (`desktop/src-tauri/`, a Tauri shell) opens a window and
   a tray icon (closing the window keeps it in the tray; Quit in the tray menu
-  ends it), keeps one copy running, and remembers the window's place. It starts
-  `node desktop/bridge/bridge.ts` on a free loopback port and stops it on
-  quitting. The page it shows may pick a folder, show a toast and open a link
-  in your browser, and nothing else (`capabilities/default.json`).
+  ends it), keeps one copy running, and remembers the window's place (under
+  `%APPDATA%\dev.threadbear.desktop`; the page's own storage is under
+  `%LOCALAPPDATA%\dev.threadbear.desktop`, both Tauri's standard places). It
+  starts `node desktop/bridge/bridge.ts` on a loopback port and stops it on
+  quitting; if the app is killed, the bridge notices and exits by itself. The
+  page it shows may pick a folder, show a toast and open an `http`, `https` or
+  `mailto` link in your browser, and nothing else (`capabilities/default.json`).
 - **The desktop bridge** (`desktop/bridge/bridge.ts`) listens on `127.0.0.1`
-  only (a free port when the shell starts it, else 5185), serves the built page and passes its WebSocket to
-  the runner, reading `secrets\runner-token` itself so the page never holds the
-  token. Any program on the PC can reach a loopback port, so it refuses a WebSocket or
-  upload without the key made for that launch, and one from any origin but its own. Pictures pasted
-  into the composer are saved briefly under `%TEMP%\threadbear-uploads` and
-  imported by the runner.
-- **Installers** (`installer/`, built by `.github/workflows/release.yml`): a
-  setup exe (Inno Setup), an MSI (WiX) and a zip, for x64 and arm64. They put
-  the app in `%LOCALAPPDATA%\Programs\Threadbear` (or Program Files for a
-  system-wide install): `Threadbear.exe`, a pinned `node\node.exe` (its
-  SHA-256 is checked at build time, `installer/node.json`), the runner's
-  source and its production packages, the bridge and built UI, and the guide.
-  They add a Start menu entry and an entry in Add/Remove Programs
-  (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall` and `App Paths`,
-  or `HKLM` for system-wide), and nothing else: no service, no PATH change, no
-  file association. An installer replacing a running copy first asks the app to
-  quit (`Threadbear.exe --quit`) and ends the runner's task
-  (`--runner --stop`); uninstalling runs `--runner --uninstall`. A release is
-  signed (Azure Artifact Signing) when its repository has the signing
-  variables, and says so in the workflow log when it isn't.
+  only. The shell gives it one fixed port per Windows user (50000 to 59999,
+  chosen from the user name), so the page keeps the same address and its saved
+  settings between launches, and a free port instead when that one is taken
+  (that launch starts afresh and says so in Settings). It serves the built page
+  and passes its WebSocket to the runner, reading `secrets\runner-token` itself
+  so the page never holds the token. Any program on the PC can reach a loopback
+  port, so it refuses a WebSocket or upload without the key made for that
+  launch, and one from any origin but its own (also the vite dev server's, when
+  started for development). It sends a Content-Security-Policy that lets the
+  page talk only to itself and to `api.github.com` (the update check), and
+  shows a remote picture in a message as its description, not as a download.
+  Pictures pasted into the composer are saved briefly under
+  `%TEMP%\threadbear-uploads` and imported by the runner.
+- **Installers** (`installer/`, built by `.github/workflows/installers.yml`
+  from `release.yml`): a setup exe (Inno Setup), an MSI (WiX) and a zip, for
+  x64 and arm64. They put the app in `%LOCALAPPDATA%\Programs\Threadbear` (or
+  Program Files for a system-wide install): `Threadbear.exe`, a pinned
+  `node\node.exe` (its SHA-256 is checked at build time, `installer/node.json`),
+  the runner's source and its production packages, the bridge and built UI, the
+  guide and a few of the docs the guide points at, `README-WINDOWS.txt` and
+  `THIRD-PARTY-NOTICES.txt`. They add a Start menu entry (the setup exe also
+  one for the notices, and a desktop shortcut if asked) and an entry in
+  Add/Remove Programs (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall`
+  and `App Paths`, or `HKLM` for system-wide; the MSI also
+  `Software\<publisher>\Threadbear`), and nothing else: no service, no PATH
+  change, no file association. An installer replacing a running copy first asks
+  the app to quit (`Threadbear.exe --quit`) and ends the runner's task
+  (`--runner --stop`), and starts the task again afterwards (`--runner
+  --start`) if it is registered; uninstalling does the same quit and stop, then
+  runs `--runner --uninstall`. Each installer refuses while a copy from the
+  other kind is installed (it reads `HKLM` registry keys and looks for the setup
+  exe's uninstaller in `%LOCALAPPDATA%\Programs\Threadbear`; the MSI also reads
+  `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion` for the Windows build and
+  the registry and `%LOCALAPPDATA%\Microsoft\EdgeWebView` for WebView2). The packages are unsigned unless the fork has set up
+  Azure Artifact Signing, and the release notes of an unsigned one say so.
 - **The runner's task is offered, not assumed:** the first time the installed
   app opens, it asks once whether to start the runner when you sign in to
   Windows, and sets that task up (the item above) if you say yes. "No thanks"
   is remembered in `%LOCALAPPDATA%\Threadbear\declined-runner-task`; the tray
-  menu's "Start the runner at sign-in..." asks again. `Threadbear.exe
-  --runner [--installed | --stop | --status | --uninstall | --dry-run]` runs
-  the same script from a terminal or an installer.
+  menu's "Start the runner at sign-in..." asks again. Each time the app opens
+  with the task registered it runs `--runner --start`, so the runner comes back
+  after an update. `Threadbear.exe --runner [--installed | --start | --stop |
+  --status | --uninstall | --dry-run]` runs the same script from a terminal or
+  an installer (its answer prints to the terminal that started it; an unknown
+  flag is refused).
 - **The update check** (`desktop/src/core/updates.ts`): the installed app asks
   `api.github.com/repos/<the fork>/releases/latest` once a day (a plain
   request, so GitHub sees the PC's address and the app's user agent, and
   nothing else is sent), keeps the answer in the page's local storage, and
-  shows a link to the release in the rail if it is newer. It downloads
-  nothing. Settings, "This app", turns it off. A page opened in an ordinary
+  shows a link to the release in the rail if it is newer, once it has checked
+  that the link is a release page of that repository. It downloads nothing.
+  Settings, "This app", turns it off, and an off switch it can't read counts as
+  off. When the page is on a temporary address (the fixed port was taken) it
+  doesn't check by itself, as it can't tell what you chose. A failed check
+  waits an hour, then longer, before trying again. A page opened in an ordinary
   browser never asks.
 - **Not on Windows:** Threadbear installing or updating Codex (a `codex.exe` on
   the PATH is used if there is one), runner releases and handovers (there is no
-  `current` link or `launch.mjs` supervision), `lsof` and `ps` checks, the idle
-  check, the screen-dialog and secret checks, BrowserBear and ComputerCub.
+  `current` link or `launch.mjs` supervision), `lsof` and `ps` checks (so a CLI
+  stuck in a file call isn't spotted, and idle threads whose quiet background
+  shells are stuck aren't nudged), the idle check, the screen-dialog and secret
+  checks, docker sandboxes, stopping a crashed CLI's leftover tool commands
+  (`taskkill /T` needs the parent alive), BrowserBear and ComputerCub.

@@ -176,14 +176,38 @@ SHA-256 of each:
   `msiexec /i <file> /qn` (add `ALLUSERS=1` for every user of the PC).
 - `portable-win-x64.zip`: unzip it anywhere and run `Threadbear.exe`.
 
+To check a download, compare its SHA-256 with `CHECKSUMS.txt`. On Linux or in
+Git Bash, `sha256sum -c --ignore-missing CHECKSUMS.txt` in the folder that has
+the files. In PowerShell:
+
+```powershell
+Get-Content CHECKSUMS.txt | ForEach-Object { $h, $n = $_ -split '  ', 2; if (Test-Path $n) { "$((Get-FileHash $n -Algorithm SHA256).Hash -eq $h)  $n" } }
+```
+
+A package is signed only when its fork has set up signing (docs/forking.md).
+When it isn't, the release notes say so, and Windows SmartScreen warns on the
+first run. Pre-release versions (`v0.2.0-rc.1`) are marked as pre-releases, so
+they are never the "latest release" that the app's update check follows.
+
 Node comes inside every package. They still need Git for Windows (patch
-commands and project checks run in its bash) and Claude Code with its native
-installer. **Ask** them to run `claude auth login` in a terminal and sign in:
-a runner started by a task has no other login to use. The first time the app
-opens it offers to start the runner when they sign in to Windows, which adds
-the Task Scheduler task described under "On Windows" in docs/on-your-mac.md.
-They can say no and use `Threadbear.exe --runner` later. Uninstalling removes
-the task and `tb`, and leaves their data in `%APPDATA%\Threadbear`.
+commands and project checks run in its bash; without it those say so and do
+nothing, and `CLAUDE_CODE_GIT_BASH_PATH` points the runner at a bash in an
+unusual place) and Claude Code with its native installer. **Ask** them to run
+`claude auth login` in a terminal and sign in: a runner started by a task has
+no other login to use. The first time the app opens it offers to start the
+runner when they sign in to Windows, which adds the Task Scheduler task
+described under "On Windows" in docs/on-your-mac.md. They can say no and use
+`Threadbear.exe --runner` later. Each time the app opens it also starts that
+task if it is registered and not running, so the runner comes back after an
+update. Uninstalling removes the task and `tb`, and leaves their data in
+`%APPDATA%\Threadbear`.
+
+The setup exe and the MSI are alternatives: each refuses to install while a
+copy from the other is there (the MSI sees a setup-exe copy in its default
+folder, `%LOCALAPPDATA%\Programs\Threadbear`, or a system-wide one, but not one
+the person put somewhere else), so remove one before using the other. The
+arm64 packages are built by the same workflow but have not been seen running
+on an Arm PC yet.
 
 **From a checkout,** to work on it or to build the packages:
 
@@ -194,11 +218,12 @@ the task and `tb`, and leaves their data in `%APPDATA%\Threadbear`.
    `desktop/`.
 3. **Install:** `node runner/scripts/install-windows.mjs --dry-run`, show
    them what it prints, and run it without `--dry-run` once they agree. It
-   registers a Task Scheduler task, "Threadbear Runner", that starts at logon
-   (this user, no admin rights), writes `tb.cmd` to
-   `%LOCALAPPDATA%\Threadbear\bin` and adds that folder to their PATH.
-   `--status`, `--stop` and `--uninstall` do what they say. docs/on-your-mac.md
-   lists everything it leaves.
+   registers a Task Scheduler task, "Threadbear Runner (<their Windows user
+   name>)", that starts at logon (this user, no admin rights), writes `tb.cmd`
+   to `%LOCALAPPDATA%\Threadbear\bin` and adds that folder to their PATH.
+   `--status`, `--start`, `--stop` and `--uninstall` do what they say (`--start`
+   runs the task only if it is registered and not already running). An
+   unknown flag is refused. docs/on-your-mac.md lists everything it leaves.
 4. **The window:** the app is a small Rust shell (Tauri) around a TypeScript
    UI. It needs Rust (`rustup`, the MSVC toolchain) and the Visual Studio
    C++ build tools (the "Desktop development with C++" workload) to build.
@@ -210,21 +235,35 @@ the task and `tb`, and leaves their data in `%APPDATA%\Threadbear`.
    launch. Without the shell, `npm run build` and `node bridge/bridge.ts`
    print an address with a `#key=` to open in a browser.
 5. **Packages:** `pwsh installer/build-installers.ps1 -Arch x64` builds the
-   three files into `dist/` (unsigned unless `-SignCmd` is given). It needs
-   Inno Setup 6 (`winget install JRSoftware.InnoSetup`) and WiX 6
-   (`dotnet tool install --global wix --version 6.0.2`). Releases are made by
-   `installer/release.sh v<version>`, which tags and lets the release workflow
-   build, sign and publish them; `gh workflow run release.yml -f version=v<version>`
-   rehearses one and publishes nothing. docs/forking.md lists what to change in
-   a fork (the publisher, the signing variables, the repository the update
-   check asks).
+   three files into `dist/` (unsigned unless `-SignCmd`, a `.ps1` or a
+   program, is given). It needs the shell built as above, Rust (the licence
+   notices list the shell's crates), Inno Setup 6
+   (`winget install JRSoftware.InnoSetup`) and WiX 6
+   (`dotnet tool install --global wix --version 6.0.2`). `-StageOnly` stops
+   after assembling the tree in `build/stage-<arch>`, and `-FromStage <dir>`
+   packages and signs an existing one without running npm or cargo, which is
+   how the release workflow keeps the signing identity away from install
+   scripts. Releases are made by `installer/release.sh v<version>`, which tags
+   and lets the release workflow build, sign and publish them, as a draft that
+   is made public only when every package and `CHECKSUMS.txt` are there.
+   To rehearse one without publishing anything: the workflow file has to be on
+   the fork's default branch first (GitHub only lists a workflow that is
+   there), Actions has to be enabled on the fork, and then
+   `gh workflow run release.yml --ref <branch> -f version=v<version>`
+   (add `-f sign=true` to rehearse signing too). docs/forking.md lists what to
+   change in a fork (the publisher, the signing variables, the repository the
+   update check asks).
 6. **Updates:** the runner doesn't follow `main` on Windows. After a
    `git pull`, restart it from the Runners page, or end and run the task with
-   `node runner/scripts/install-windows.mjs --stop` and then `--status`. An
-   installed copy is updated by installing the next release over it, and the
-   app says in its rail when one is out (Settings, "This app", turns that off).
+   `node runner/scripts/install-windows.mjs --stop` and then `--start`
+   (`--status` only says whether it is registered and running). An installed
+   copy is updated by installing the next release over it, and the app says in
+   its rail when one is out (Settings, "This app", turns that off).
 
 What's left out on Windows: everything that needs a Mac (the iOS simulator,
 Xcode, BrowserBear, ComputerCub, dialogs on the screen), Threadbear installing
-or updating Codex for them, runner releases and handovers, and the idle check
-the Mac uses to hold back restarts.
+or updating Codex for them, runner releases and handovers, the idle check the
+Mac uses to hold back restarts, spotting a CLI stuck in a file call and
+nudging idle threads whose quiet background shells are stuck, docker
+sandboxes, stopping a crashed CLI's leftover tool commands, and BMP, TIFF and
+HEIC pictures (the Mac converts them with `sips`).

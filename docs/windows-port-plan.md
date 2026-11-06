@@ -1,7 +1,9 @@
 # Porting Threadbear to Windows (and Linux): scope and plan
 
-Scoped 6 Nov 2026. Nothing here is built. The numbers for tokens and time are
-estimates, and the section "How the estimates were worked out" says how.
+Scoped 6 Nov 2026. The sections down to "Decisions needed from you" are the
+scope as it was first written, before anything was built; the run log after
+them says what was built and what was found. The numbers for tokens and time
+are estimates, and the section "How the estimates were worked out" says how.
 
 ## Short answer
 
@@ -447,16 +449,18 @@ Done on 6 Nov 2026, in the same branch.
   switches (`--runner --installed`, `--stop`, `--dry-run`, `--quit`) from the
   staged copy, using its bundled Node; the arm64 package fetch (npm gives the
   arm64 native packages).
-- **Not checked:** an arm64 build (it needs the MSVC arm64 tools and the Rust
-  target, and the workflow does it), the workflows on GitHub (nothing is pushed,
-  so none has run), signing with a real Azure account, SmartScreen, the
-  missing-WebView2 message, and the first-run dialog and the tray menu item
-  (not clicked, to leave the desktop alone).
-- **Release pipeline**, from npad's: `windows.yml` (runner tests and desktop
-  checks, also called first by a release), `installers.yml` (one job per
-  architecture, optional Azure Artifact Signing through OIDC), `release.yml`
-  (`v*.*.*` tags, a dry run with `-f version=`, create release, build,
-  validate, `CHECKSUMS.txt`, final notes). The version is
+- **Not checked** (at that point; the review below says what changed): an
+  arm64 build (it needs the MSVC arm64 tools and the Rust target, and the
+  workflow does it), the workflows on GitHub (nothing was pushed, so none had
+  run), signing with a real Azure account, SmartScreen, the missing-WebView2
+  message, and the first-run dialog and the tray menu item (not clicked, to
+  leave the desktop alone).
+- **Release pipeline**, from npad's (as first written; the review below
+  changed the order): `windows.yml` (runner tests and desktop checks, also
+  called first by a release), `installers.yml` (builds the packages, optional
+  Azure Artifact Signing through OIDC), `release.yml` (`v*.*.*` tags, a dry run
+  with `-f version=`, validate, `CHECKSUMS.txt`, a draft release made public
+  last). The version is
   `desktop/package.json`, kept the same as `Cargo.toml`, `Cargo.lock` and
   `tauri.conf.json` by `desktop/scripts/version.mjs`, and a tag has to equal it.
   `installer/release.sh` checks all that, the changelog's Highlights and the
@@ -475,6 +479,118 @@ Done on 6 Nov 2026, in the same branch.
   wants the ID-based one), and Entra matches the owner case-sensitively in
   lower case. With none of it set a release still builds, unsigned.
 
+### The adversarial review, and what it changed (6 Nov 2026, later)
+
+The branch was pushed to the fork, and its first `windows` run failed. Six
+reviewers then each read one area for what was wrong, not for what was right:
+the runner's Windows code, whether the runner-only PR would change anything on
+a Mac or Linux, the desktop app and shell, the CI and release set-up, the
+installers, and the docs and method. Five agents fixed what held up, each one
+reproducing a problem before fixing it and adding a test that fails without the
+fix. What the review found, and what was done:
+
+- **The CI run was red, and it was a product bug.** GitHub's runners spell TEMP
+  as `C:\Users\RUNNER~1\...` (8.3 short form) while git and
+  `fs.realpathSync.native` say `C:\Users\runneradmin\...`, and JS
+  `fs.realpathSync` keeps the short form, so one folder compared as two: 17
+  tests failed (worktree trust, a worktree's subfolder, patch trust). It was
+  invisible here because this profile has no short name. The runner now compares
+  paths through `realPathSync` in `platform.ts`; the test helper does too.
+- **Trust holes.** A trusted patch could run a changed script when it named the
+  script as `/c/Users/...`, an 8.3 name, `//localhost/C$/...` or `//?/C:/...`,
+  or ran it through `npm.cmd`, `node.exe -e`, `powershell.exe`, `cmd /c x.bat`
+  or `py`: the hash did not cover it. The ctime cache could be fooled on NTFS.
+  A write to `x.ts::$DATA` skipped the "runs as code" check. All closed.
+- **A missing Git Bash made every check pass.** `cmd.exe -c "..."` prints a
+  banner and exits 0. Now the commands say Git for Windows is needed and fail.
+- **Network paths.** Assistant text could make the runner read an SMB path
+  (NTLM leak). Refused.
+- **The single-instance lock failed open** when PowerShell could not give a
+  start time, so two runners could share one data folder.
+- **macOS and Linux were changed** by one kill-fallback condition (the
+  SIGKILL follow-up) and by `core.autocrlf=false` on the update clone, against
+  "nothing changes". Both are Windows-only now.
+- **The desktop app** lost all its saved settings on every launch (the window's
+  address, hence its local storage, changed each time; that included the update
+  check's off switch), its external links were refused by a missing permission
+  scope, a malformed request ended the bridge, it reconnected twice a second
+  while the runner was down, sent no content security policy (a remote picture
+  in agent output could carry data out), ended silently on a setup failure, and
+  could leave the bridge running after a crash.
+- **The installers** left the runner stopped after an upgrade, shared one folder
+  between the setup exe and the MSI without either knowing, corrupted
+  non-ASCII PATH entries and `tb.cmd`, stripped licence files, left out
+  `docs/protocol.md` (so an installed runner's agents never got the patches
+  instruction), and the setup exe's uninstaller did not quit the app.
+- **The release flow** published before it had a file to publish, so a failed
+  arm64 build left a public x64-only release that the update check would offer;
+  the signing identity was in the same job as `npm ci`; actions and the signing
+  client were unpinned; checksums came from an unauthenticated `curl`.
+- **The docs and the method.** "None fail" was only true here. 122 of the 179
+  skipped tests said "Codex is not supported on Windows", which was false. The
+  update-check off switch, the dropping of pictures and "links that open" were
+  claimed but did not work. The Android scope left out most of what Google
+  asks of a new app.
+
+After the fixes (this machine, Windows 11, Node 24): the runner suite is 1,957
+tests, 1,892 pass, none fail, 65 are skipped (down from 179) across 125 files,
+in about a minute; the desktop has 52 tests (it had 9); `tsc` and `cargo check`
+are clean. With TEMP on a real 8.3 alias the 17 CI failures pass. One other
+test fails in that setup, `reviews.test.ts` "a shot can be a video or an HTML
+page", and only there: Node's `mkdtemp` on Windows refuses a folder whose path
+is over about 240 characters (it worked at 230 and failed at 240 when tried),
+and the alias's long form in a deep scratch folder was longer than that. It
+passes with the normal TEMP and a real data folder's paths are far shorter. The
+real proof of the 8.3 fix is the next run on GitHub.
+
+The installers were then run, not just compiled, and that found two faults the
+agent that wrote them could not have: the MSI's new "Windows 10 1809 or later"
+condition used `VersionNT`, which the Windows Installer service reports as 603
+(Windows 8.1) on this Windows 11, so it refused every install; and its check
+for a setup-exe copy read `HKEY_CURRENT_USER`, which the service does not
+resolve to the user's hive for a per-user package (a key made for the test was
+"not found"), so the MSI installed straight over a setup-exe copy. The MSI now
+reads the build number from the registry and looks for the setup exe's
+uninstaller in its default folder (a file search does work), and a probe MSI
+confirmed both. In a run on this machine, with the user's PATH value unchanged
+(same hash before and after): the setup exe installs, upgrades over itself and
+uninstalls; the MSI installs, upgrades over itself and uninstalls; each refuses
+with its message while the other's copy is present (the MSI only for a setup-exe
+copy in the default folder); `Threadbear.exe --runner --installed`, `--start`,
+`--dry-run` and a bad flag give the right answers and exit codes (their output
+reaches a redirected file; a terminal prompt returns before a GUI-subsystem
+program has printed).
+
+Still unproven, and said so where the docs claim it: an arm64 build, the three
+workflows end to end (they only ran partly, and only `windows.yml` has run at
+all), real Azure signing and SmartScreen, the installers' action that restarts
+a registered runner task and the uninstaller's quit of a running app (the
+installers were run for real, into folders of their own, and are covered
+below, but with no task registered and no app running), a click on a link, a
+dropped picture or a setup-failure dialog in the real window, Windows 10, and anything on
+macOS or Linux (the runner changes were read there, and run on Linux under WSL
+for the kill fix and for one test helper only).
+
+Left alone on purpose: `handover.ts` can't recognise a runner on Windows
+(dormant, as handovers are off), each CLI spawn blocks the event loop for about
+200 ms while PowerShell is asked for a start time, `-lc` costs about 410 ms a
+command against 45 ms for `-c`, the task XML pins `process.execPath` (an nvm
+upgrade breaks it), a clean CLI exit leaves its stragglers (`taskkill /T` needs
+the parent, so it wants a Job Object), the staged tree ships `esbuild.exe` and
+prettier though only convex's CLI may need them, an unzipped portable copy can
+reach MAX_PATH in a deep folder, and a local build embeds the builder's cargo
+path in `Threadbear.exe` (use `--remap-path-prefix`; CI builds embed the
+runner's, not a person's).
+
+A decision for the user: the package redistributes the Claude Agent SDK
+(`@anthropic-ai/claude-agent-sdk`, about 4 MB without its 283 MB native
+binary), whose own licence says "All rights reserved" and defers to Anthropic's
+legal terms, which say that offering Claude Code in a product is subject to the
+Commercial Terms. The package keeps the licence files with it and nothing more
+has been decided. The alternative is to install the SDK from npm on the user's
+machine at first run (it needs npm or a tarball step and a network), or to ask
+Anthropic.
+
 ## Upstream pull requests
 
 Scoped on 6 Nov 2026, against `mikecann/threadbear` at `d488512`. Nothing is
@@ -491,9 +607,9 @@ control has a tooltip.
 
 | PR | What | Size | Stands alone | Status |
 |---|---|---|---|---|
-| 1. Runner: run on Windows | `runner/src` (25 files, mostly small branches behind `IS_WINDOWS`), the Task Scheduler install, the unit tests made to run on Windows, the `windows` CI job | 82 files, +1,151 -263 | Yes | Cut as the local branch `pr/windows-runner` (`ea4b296`) on `d488512`: typecheck clean, 1,883 tests, 0 fail on Windows. Not run on a Mac |
-| 2. Desktop app for Windows | `desktop/`: the UI, the bridge, the Tauri shell (a window, tray, toasts) | 98 files, about 18.7k lines, mostly UI | Needs 1 (the bridge imports `runner/src/platform.ts`) | Built and checked. Raise it with Mike before a PR: it is a second UI for him to look after |
-| 3. Windows packages and releases | `installer/`, `installers.yml`, `release.yml`, the version script, the update check | 11 files, about 1.3k lines | Needs 2 | Mostly belongs in the fork: the publisher, the two product GUIDs, the signing set-up and the update check's repository are the maintainer's own (docs/forking.md lists them). Offer it only if he wants Windows downloads from his repo |
+| 1. Runner: run on Windows | `runner/src` (25 files, mostly small branches behind `IS_WINDOWS`), the Task Scheduler install, the unit tests made to run on Windows, the `windows` CI job | First cut: 82 files, +1,151 -263 | Yes | **Out of date, and to be cut again before anything is sent.** The first cut is the local branch `pr/windows-runner` (`ea4b296`) on `d488512`, from before the review fixes. Upstream is now 48 commits on (`efc0c9e`) and a merge conflicts in `claude-trust.ts`, `patch-trust.ts`, `schedule-check.ts` and `claude-trust.test.ts`: upstream now JSON-quotes a path that has a backslash in the trust hash input, which the Windows hashing has to be reconciled with. The fork branch has the fixes and passes here (1,957 tests, none fail); the cut has to take the same fixes, be merged with upstream, and be run again on Windows. Not run on a Mac |
+| 2. Desktop app for Windows | `desktop/`: the UI, the bridge, the Tauri shell (a window, tray, toasts) | 97 files, about 18.7k lines before the review (8.2k of it lockfiles), mostly UI | Needs 1 (the bridge imports `runner/src/platform.ts`) | Built and checked, except in a real window: nobody has clicked a link, dropped a picture or seen the setup-failure dialog. Raise it with Mike before a PR: it is a second UI for him to look after |
+| 3. Windows packages and releases | `installer/`, `installers.yml`, `release.yml`, the version script, the update check | 15 files, about 1.6k lines before the review | Needs 2 | Mostly belongs in the fork: the publisher, the two product GUIDs, the signing set-up and the update check's repository are the maintainer's own (docs/forking.md lists them). Offer it only if he wants Windows downloads from his repo |
 
 The docs are cut with the PR they describe: the "On Windows" section of
 `docs/on-your-mac.md` grows a bullet per PR, `docs/forking.md` gets a row per
@@ -502,13 +618,28 @@ release steps with PR 3. This plan document stays in the fork.
 
 What Mike should know before PR 1:
 
-- Every change is either behind `IS_WINDOWS` or a helper in `platform.ts`, so
-  macOS and Linux should run exactly as before, but that was read, not run.
+- Every change is meant to be behind `IS_WINDOWS` or a helper in
+  `platform.ts`, so macOS and Linux run exactly as before, but that was read,
+  not run, and the first cut was not clean: one kill-fallback condition and a
+  `git clone` argument changed for every platform, and the cut carried a
+  repo-wide `.gitattributes` (`* text=auto eol=lf`). The first two are fixed in
+  the fork branch; the third should be said out loud to Mike or left out.
   `./check.sh` on a Mac is the real test, and I'd ask him to run it.
-- It touches 25 files in `runner/src`, including the patch-trust code. The one
-  change there that isn't Windows-only is a message wording: file names in
+- It touches about 30 files in `runner/src`, including the patch-trust code. The
+  one change there that isn't Windows-only is a message wording: file names in
   patch-trust messages now use forward slashes (a no-op where the separator is
   already `/`).
+- The `windows` workflow runs on a push to `main`, and upstream now holds its
+  daily release tag until every workflow's latest run on that commit has passed
+  (`ciVerdict` in `upstream.ts`). A red or flaky Windows run would hold Mike's
+  macOS releases. Give it a path filter (`runner/**`), or make it manual, or
+  tell him and let him decide.
+- The first cut had no docs. AGENTS.md wants `docs/on-your-mac.md` to list
+  what is installed or run in the background (a logon task, `tb.cmd`, a PATH
+  change, `powershell.exe`, `taskkill`, `rundll32`), a row in
+  `docs/forking.md`, and `docs/protocol.md` fixed where it says the data folder
+  is under `~/Library` and a picture path is "on this Mac". Several comments in
+  it point at `docs/windows-port-plan.md`, which stays in the fork.
 - On Windows the patch hash is built from native separators, so a hash made there
   differs from one made on a Mac for the same patch. Trust is per machine, so it
   doesn't matter yet; `claude-trust.ts` already uses forward slashes and
@@ -520,36 +651,46 @@ What Mike should know before PR 1:
 A note the user could send Mike, in their own words:
 
 > G'day Mike. I've been porting Threadbear to Windows with Claude Code, mainly
-> for my own use. The runner runs there now, with all 97 unit test files passing
-> on a Windows CI job, and I've built a Windows desktop app (Tauri around a React
-> UI) and installers on top. The first piece is a branch against your main that
-> only touches the runner, 82 files, nearly all small branches behind a
-> Windows check, and I'd like to send it as a PR if you're happy for me to. I
-> haven't run it on a Mac, so a `./check.sh` from you would be the real test.
-> The desktop app is a bigger thing and I'd only send it if you want it in the
-> repo. Let me know either way.
+> for my own use. The runner runs there now (all the unit tests pass on my
+> Windows machine, and I'm getting the Windows CI job green), and I've built a
+> Windows desktop app (Tauri around a React UI) and installers on top. The first
+> piece would be a PR against your main that only touches the runner, mostly
+> small branches behind a Windows check, plus a Windows CI job. A few things you
+> should know: I haven't run it on a Mac, so a `./check.sh` from you would be
+> the real test; it adds a `windows` workflow, and your release logic waits for
+> every workflow, so I'd scope it to `runner/**` unless you'd rather have it
+> run on everything; and it touches the patch-trust code, so I'd want your eyes
+> on that part. The desktop app is a bigger thing and I'd only send it if you
+> want it in the repo. Let me know either way.
+>
+> (To be sent only once the Windows job is green on the fork, the PR is cut
+> again on your current main, and the user has said yes. The counts in it
+> should be checked against that run.)
 
 ## Android
 
 Mike has only made an iPhone app, and the user is on Android, so an Android
 client is the next thing to scope. Nothing here is built.
 
-What the iPhone app is: 108 Swift files, about 17k lines. `ThreadbearKit` (the
+What the iPhone app is: 117 Swift files, about 15.9k lines without the tests
+(19.7k with them). `ThreadbearKit` (the
 models, the Convex transport, the inbox sections, the turn folding, Markdown
 blocks, pairing, the push key) is about 5k of it, tests aside. The rest is SwiftUI screens, a
 notification service extension that opens the sealed push, and `QuickAsk` (voice
 in and out, about 26 files). It talks only to the phone API in `convex/phone.ts`
 (docs/convex-backend.md, section 6), never to a runner. `web/` is a React client
 of the same API with the same inbox and thread logic in TypeScript (`sections.ts`,
-`turns.ts`), already laid out for a phone (the rail becomes a tab bar), and
-`desktop/` already reuses it.
+`turns.ts`), already laid out for a phone (the rail becomes a tab bar), about
+4.5k lines. `desktop/` shares some of its code, but it speaks the runner's
+protocol through a loopback bridge, which a phone cannot reach, so only `web/`
+is the starting point for an Android client.
 
 Three ways to do it:
 
 | | What | Reuse | Effort | Catches |
 |---|---|---|---|---|
 | A. Web app on the phone | An installable web app (PWA) of `web/` | All of it | Days | A phone token lives in the browser; Web Push needs a service worker and the sealed message opened with WebCrypto; no Play Store listing that works for everyone, since each person's site is a different origin |
-| **B. Tauri 2 Android** (recommended) | The `web/` and `desktop/` UI built into an Android app by Tauri's mobile target, with a Kotlin plugin for Firebase push and the Keystore | About 90% of the UI, and the Rust/Tauri toolchain already here | MVP in 1 to 2 weeks | One more shell to keep, a WebView's feel rather than native, and the deployment address must be set at pairing, not at build time |
+| **B. Tauri 2 Android** (recommended) | The `web/` UI built into an Android app by Tauri's mobile target, with a Kotlin plugin for Firebase push and the Keystore | Most of `web/` (its Convex client, inbox and turn logic, and screens), and the Rust/Tauri toolchain already here; the pairing, push and camera parts are new | A sideloadable MVP in 1 to 2 weeks; a Play listing takes longer (below) | One more shell to keep, a WebView's feel rather than native, and the deployment address must be set at pairing, not at build time |
 | C. Native Kotlin and Compose | Port `ThreadbearKit` and the screens | Only the design | 6 to 10 weeks | A third copy of the inbox and turn logic to keep in step with Swift and TypeScript |
 
 **B in outline.** Pairing as the iPhone does it (a link or QR from the Mac or
@@ -560,11 +701,22 @@ done card, the composer with photos and the camera, and notifications.
 **Notifications are the real work.** The iPhone gets a notification sealed with
 a 32-byte key only that phone and its backend hold (AES-256-GCM), sent through
 Apple by the push relay (docs/push-relay.md). Android needs the same through
-Firebase Cloud Messaging: a second sender next to `convex/push.ts` and `relay/`
-(a platform field on `phone:registerDevice`, which is a change to Mike's backend
-and the protocol document, so it is an upstream PR of its own), a Kotlin service
-that opens the sealed message with a key held in the Android Keystore, and a
-Firebase project. The relay holds the sending key, so whoever publishes the app
+Firebase Cloud Messaging: a second sender next to `convex/push.ts` and `relay/`,
+a Kotlin service that opens the sealed message, and a Firebase project. The
+backend change is more than a field. `phone:registerDevice` takes an
+`apnsToken` and an `environment` that is `sandbox` or `production`, the
+`devices` table is indexed by `apnsToken`, the relay's `/send` takes a
+`deviceToken` and an `environment`, and `push.ts` talks to one `PUSH_RELAY_URL`.
+Android needs a platform on the device, routing to a second relay (or a second
+kind of send), a second `relayInstall`, and a change to the API version, the
+protocol document and the contract tests: an upstream PR of its own, and a
+change to Mike's backend. The phone already makes its own 32-byte push key and
+sends it with `registerDevice`, so on Android the key is generated by the app,
+sent the same way and kept wrapped by a Keystore key (a non-exportable Keystore
+key cannot itself be the shared key). Tauri's notification plugin only shows
+local notifications, so the receiving side is a Kotlin `FirebaseMessagingService`
+(with its manifest entry and Gradle setup) that has to work without the
+WebView running. The relay holds the sending key, so whoever publishes the app
 owns it: the user's Firebase project would send for everyone who installs their
 build, or each person runs their own relay as the doc already allows for Apple. A
 backend with no relay key at all gets no phone notifications.
@@ -577,11 +729,28 @@ project and its `google-services.json`, and for Play a developer account ($25
 once) and an upload key kept somewhere safe. Signing and the Play listing are
 the user's to do; the build can produce a signed `.aab` once the key exists.
 
+**What the first draft of this scope left out** (check each against Google's
+current rules when the time comes, as they change): Play's required target API
+level for new apps; for a new personal developer account, a closed test with a
+set number of testers over a set number of days before production access, which
+makes "MVP in 1 to 2 weeks" a sideload figure, not a Play one; Google's
+identity checks for the account and its developer verification for apps
+installed outside Play; the Data safety form and a privacy policy; reviewer
+access for an app that is useless without a paired backend; the notification
+permission an app has to ask for on Android 13 and later; Doze and the
+battery limits some makers add, which delay or drop pushes; and registering
+again when Firebase changes the device's token (`onNewToken`). Pairing needs no
+App Links: the iPhone pairs through a `threadbear://` link, so Android needs an
+intent filter for it or a QR scanner in the app.
+
 **Estimate for B**, on the same footing as the table above: MVP (pair, inbox,
-thread, composer, photos, push) 8 to 12k lines, 1 to 2 weeks, 0.25 to 0.5M
-output tokens, 40 to 90M in all. For scale, this packaging round moved the
-weekly allowance by about one point, and the whole of M0 to M3 by about two,
-so the MVP is probably 2 to 5 points; that is a guess. Phase 2: a share target
+thread, composer, photos, push) 8 to 12k lines (new code, not counting what
+`web/` already has), 1 to 2 weeks, 0.25 to 0.5M output tokens, 40 to 90M in all.
+That method put M0 to M2 at 4 to 7 weeks, and they took about a day, so it
+overstates the time that code takes and says nothing about Google's waiting
+periods. For scale, this packaging round moved the weekly allowance by about
+one point, and the whole of M0 to M3 by about two, so the MVP is probably 2 to
+5 points; that is a guess. Phase 2: a share target
 (send a link or picture to a new thread), home-screen widget, and voice (Android's
 speech recognition in place of QuickAsk): another 1 to 2 weeks.
 
