@@ -1,7 +1,7 @@
 // Replays the sanitised Codex captures (test/fixtures/codex/, made by
 // scripts/sanitize-codex-recording.ts) through CodexNormalizer, the way the
 // adapter feeds it, and checks what comes out.
-import { test } from 'node:test';
+import { codexTest as test } from '../helpers/platform.ts';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';

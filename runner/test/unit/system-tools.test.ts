@@ -50,7 +50,7 @@ test('every absolute tool path in src is known to work, or be kept off, on Linux
   const unknown: string[] = [];
   for (const file of sources(SRC)) {
     const rel = path.relative(SRC, file);
-    fs.readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+    fs.readFileSync(file, 'utf8').split(/\r?\n/).forEach((line, i) => {
       // Comments name paths too (Codex's `/bin/zsh -lc` wrapper); only code runs them.
       const code = line.replace(/^\s*\/\/.*$/, '').replace(/\s\/\/\s.*$/, '');
       for (const m of code.matchAll(/['"`](\/(?:usr\/)?(?:local\/)?(?:s?bin|libexec)\/[\w.-]+)/g)) {
@@ -76,6 +76,7 @@ test("the login shell: zsh on a Mac; on Linux, $SHELL if it's POSIX-style, else 
 });
 
 test('the lsof and login shell this machine picks are really there', () => {
-  assert.ok(fs.existsSync(lsofPath()), `no lsof at ${lsofPath()}`);
+  // Handovers between runners need lsof, which Windows hasn't got.
+  if (process.platform !== 'win32') assert.ok(fs.existsSync(lsofPath()), `no lsof at ${lsofPath()}`);
   assert.ok(fs.existsSync(loginShell()[0]), `no shell at ${loginShell()[0]}`);
 });

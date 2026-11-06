@@ -9,6 +9,7 @@ import { nullLogger } from '../../src/log.ts';
 import { CHECK_INTERVAL_MS, FIRST_CHECK_MS, SOON_MS, RunnerUpdater, launcherDiffers, launchAgentBehind, launcherSourcesHash, appOfExecutable, updateDir, watchMainRef, decideUpdate, failedAlready, releaseTreeAt, syncClone, updateFilePath, type UpdateDeps } from '../../src/update.ts';
 import type { ReleaseJson } from '../../src/release.ts';
 import { patiently } from '../helpers/patience.ts';
+import { linkDir } from '../../src/platform.ts';
 
 const running = { id: 'r1', tree: 'a+b+c+d' };
 const none = { pendingRestart: false, crashedTrees: new Set<string>() };
@@ -130,7 +131,7 @@ function harness(releaseExtra: Partial<ReleaseJson> = {}, depsExtra: Partial<Upd
   const checkout = tmpDir('tb-update-checkout-');
   fs.mkdirSync(path.join(checkout, '.git'));
   fs.mkdirSync(path.join(home, 'runner', 'releases', 'r1'), { recursive: true });
-  fs.symlinkSync(path.join('releases', 'r1'), path.join(home, 'runner', 'current'));
+  linkDir(path.join('releases', 'r1'), path.join(home, 'runner', 'current'));
   fs.writeFileSync(path.join(home, 'runner', 'state.json'), JSON.stringify({ current: 'r1', previous: null, lastGood: 'r1', boots: [] }));
   const release: ReleaseJson = { id: 'r1', commit: 'c1', dirty: false, builtAt: '2026-10-27T00:00:00Z', node: '24', checkout, prefix: 'runner/', tree: 'a+b+c+d', ...releaseExtra };
   const h: Omit<Harness, 'u'> = {
@@ -173,8 +174,8 @@ function harness(releaseExtra: Partial<ReleaseJson> = {}, depsExtra: Partial<Upd
       if (h.deployResult.ok) {
         // As deploy.mjs would: a new release, current pointing at it.
         fs.mkdirSync(path.join(home, 'runner', 'releases', h.deployResult.id), { recursive: true });
-        fs.rmSync(path.join(home, 'runner', 'current'));
-        fs.symlinkSync(path.join('releases', h.deployResult.id), path.join(home, 'runner', 'current'));
+        fs.rmSync(path.join(home, 'runner', 'current'), { recursive: true }); // the link, not what it points at
+        linkDir(path.join('releases', h.deployResult.id), path.join(home, 'runner', 'current'));
       }
       return h.deployResult;
     },

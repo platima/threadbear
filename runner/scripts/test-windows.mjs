@@ -41,6 +41,8 @@ const named = args.filter((a) => !a.startsWith('--'));
 const files = named.length ? named : all.filter((f) => known.has(f) === wantKnown);
 
 console.log(`${wantKnown ? 'known-failing' : 'expected-to-pass'}: ${files.length} files`);
+// node --test with no files would run whatever it finds in the folder.
+if (!files.length) process.exit(0);
 const r = spawnSync(
   process.execPath,
   ['--test', '--test-reporter=spec', '--test-timeout=15000', '--test-force-exit', ...files.map((f) => path.join(unit, f))],

@@ -1,4 +1,5 @@
-import { test, after } from 'node:test';
+import { after } from 'node:test';
+import { codexTest as test } from '../helpers/platform.ts';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

@@ -154,6 +154,8 @@ test('trust is per folder in the patch trust file, a worktree counts as its main
   const main = path.join(root, 'app');
   fs.mkdirSync(main);
   git(main, 'init', '-q', '-b', 'main');
+  // The checkout in the worktree must read the same bytes as main, whatever git's system settings say about line endings.
+  git(main, 'config', 'core.autocrlf', 'false');
   const { script } = hooked(main);
   git(main, 'add', '-A');
   git(main, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'first');
@@ -216,7 +218,7 @@ test("runner: a Claude thread in a folder with untrusted hooks starts without th
 
   const s = h.adapter.last;
   assert.deepEqual(s.opts.untrustedProjectSettings, { permissions: { allow: ['Bash(npm test)'] } });
-  assert.ok(h.events(thread.id).some((e) => e.type === 'system.note' && /Skipped this folder's Claude Code hooks, commands and environment settings \(\.claude\/settings\.json\): you haven't trusted them yet/.test(e.text)));
+  assert.ok(h.events(thread.id).some((e) => e.type === 'system.note' && /Skipped this folder's Claude Code hooks, commands and environment settings \(\.claude[\\/]settings\.json\): you haven't trusted them yet/.test(e.text)));
   let t = h.runner.get(thread.id);
   assert.deepEqual(checkSummary(t), []);
   const waiting = t.patches?.find((p) => p.id === CLAUDE_PATCH_ID);

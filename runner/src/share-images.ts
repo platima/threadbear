@@ -8,6 +8,7 @@ import path from 'node:path';
 import type { PersistedEvent } from './protocol.ts';
 import { absolute } from './highlights.ts';
 import { sniffImage, sniffVideo } from './media.ts';
+import { IS_WINDOWS } from './platform.ts';
 
 // A picture bigger than this stays on the Mac.
 export const SHARE_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -48,11 +49,13 @@ export function localImagePath(src: string, home = os.homedir(), typeOf = imageT
   if (p.startsWith('file://')) {
     try {
       p = decodeURIComponent(new URL(p).pathname);
+      // file:///C:/x/y.png has the drive after the slash.
+      if (IS_WINDOWS && /^\/[A-Za-z]:/.test(p)) p = p.slice(1);
     } catch {
       return undefined;
     }
   } else if (p.startsWith('~/')) p = home + p.slice(1);
-  if (!p.startsWith('/') || p.includes('\0')) return undefined;
+  if (!path.isAbsolute(p) || p.includes('\0')) return undefined;
   return typeOf(p) ? p : undefined;
 }
 
@@ -198,7 +201,7 @@ export function replyImagesInEvent(e: PersistedEvent, cwd: string | undefined, h
   if (e.type !== 'tool.call' || e.name !== PIN_TOOL || typeof e.input.path !== 'string') return [];
   // The pin tool takes a path relative to the thread's folder.
   const raw = e.input.path.trim();
-  if (!raw || (!raw.startsWith('/') && !raw.startsWith('~') && !cwd)) return [];
+  if (!raw || (!path.isAbsolute(raw) && !raw.startsWith('~') && !cwd)) return [];
   const file = absolute(raw, cwd ?? '/', home);
   return replyMediaType(file) ? [{ seq: e.seq, path: file, pinned: true }] : [];
 }

@@ -8,13 +8,17 @@ import { acquireLock } from '../../src/lock.ts';
 import { nullLogger } from '../../src/log.ts';
 import { tmpDir } from '../helpers/fakes.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
+import { IS_WINDOWS, NO_SIGNALS_ON_WINDOWS, skipOnWindows } from '../helpers/platform.ts';
+import { pathToFileURL } from 'node:url';
 
 const RUNNER_DIR = path.join(import.meta.dirname, '..', '..');
 
 // A detached process (its own group). With ignoreTerm, SIGTERM does nothing.
+// Windows has no groups and no SIGTERM to ignore (it ends the process
+// outright), so a node child that waits stands in there.
 function group(ignoreTerm = false): ChildProcess {
   const script = ignoreTerm ? 'trap "" TERM; sleep 60' : 'sleep 60';
-  const c = spawn('/bin/bash', ['-c', script], { detached: true, stdio: 'ignore' });
+  const c = IS_WINDOWS ? spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }) : spawn('/bin/bash', ['-c', script], { detached: true, stdio: 'ignore' });
   c.unref();
   return c;
 }
@@ -44,7 +48,7 @@ test('the startup sweep waits until old groups are gone, and leaves a recycled p
     const t0 = Date.now();
     assert.equal(await reg.sweepOrphans(300), 1);
     assert.equal(groupAlive(stubborn.pid!), false, 'gone by the time the sweep returns');
-    assert.ok(Date.now() - t0 >= 300, 'it ignored SIGTERM, so it took a SIGKILL');
+    if (!IS_WINDOWS) assert.ok(Date.now() - t0 >= 300, 'it ignored SIGTERM, so it took a SIGKILL');
     assert.equal(groupAlive(other.pid!), true, 'the recycled pid was not touched');
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(run, 'children.json'), 'utf8')), []);
   } finally {
@@ -53,7 +57,7 @@ test('the startup sweep waits until old groups are gone, and leaves a recycled p
   }
 });
 
-test("a CLI that dies hard has its tool commands' process groups stopped too", async () => {
+test("a CLI that dies hard has its tool commands' process groups stopped too", NO_SIGNALS_ON_WINDOWS, async () => {
   const run = tmpDir();
   const reg = new ProcessRegistry(run, nullLogger);
   const spawnCli = groupSpawner(reg, nullLogger, () => {});
@@ -78,7 +82,7 @@ test("a CLI that dies hard has its tool commands' process groups stopped too", a
 
 test('only one runner holds the data dir lock; a dead or recycled holder is taken over', async () => {
   const run = tmpDir();
-  const holder = spawn(process.execPath, ['--input-type=module', '-e', `import { acquireLock } from ${JSON.stringify(path.join(RUNNER_DIR, 'src', 'lock.ts'))}; acquireLock(process.argv[1]); console.log('held'); setInterval(() => {}, 1000);`, run], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', `import { acquireLock } from ${JSON.stringify(pathToFileURL(path.join(RUNNER_DIR, 'src', 'lock.ts')).href)}; acquireLock(process.argv[1]); console.log('held'); setInterval(() => {}, 1000);`, run], { stdio: ['ignore', 'pipe', 'inherit'] });
   try {
     await new Promise((r) => holder.stdout!.once('data', r));
     const second = acquireLock(run);
@@ -99,7 +103,7 @@ test('only one runner holds the data dir lock; a dead or recycled holder is take
   }
 });
 
-test('a lock with no start time still counts while a runner under launch.mjs holds it', async () => {
+test('a lock with no start time still counts while a runner under launch.mjs holds it', skipOnWindows('A runner on Windows always writes its start time, and it tells a runner from another program by that, not by its command line'), async () => {
   const run = tmpDir();
   // A release runs as `node <home>/runner/launch.mjs`, not main.ts.
   const script = path.join(tmpDir(), 'launch.mjs');

@@ -239,7 +239,7 @@ export async function syncClone(checkout: string, prefix: string, dir: string): 
   if (!fs.existsSync(path.join(dir, '.git'))) {
     await fs.promises.rm(dir, { recursive: true, force: true });
     await fs.promises.mkdir(path.dirname(dir), { recursive: true });
-    await gitAsync(path.dirname(dir), ['clone', '-q', '--no-checkout', checkout, dir]);
+    await gitAsync(path.dirname(dir), ['clone', '-q', '--no-checkout', '-c', 'core.autocrlf=false', checkout, dir]);
   }
   await gitAsync(dir, ['fetch', '-q', checkout, 'refs/heads/main']);
   await gitAsync(dir, ['checkout', '-q', '-B', 'main', 'FETCH_HEAD']);

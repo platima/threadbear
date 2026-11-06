@@ -293,4 +293,8 @@ export function makeHarness(home = tmpDir(), cfgExtra: Partial<Config> = {}, dep
 // Lets promise callbacks (deliver(), interrupt().catch) run.
 export async function tick(n = 3): Promise<void> {
   for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r));
+  // A file read finishes on the thread pool, and how many loop turns that
+  // takes is the platform's business: on Windows a count that was enough on
+  // a Mac isn't, so it also gives the pool a moment.
+  if (process.platform === 'win32') await new Promise((r) => setTimeout(r, n * 3));
 }

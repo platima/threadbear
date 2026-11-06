@@ -108,7 +108,7 @@ export function claudeCommands(cwd: string, home: string = os.homedir()): Claude
     if (read === undefined) continue;
     const found = read.ok ? mcpCommandParts(read.value) : { unreadable: read.text };
     if (!found) continue;
-    parts[path.relative(dir, file)] = found;
+    parts[hashName(dir, file)] = found;
     files.push(file);
     shas[file] = read.sha256;
   }
@@ -119,7 +119,7 @@ export function claudeCommands(cwd: string, home: string = os.homedir()): Claude
     .map((f) => {
       const h = sha256(readOr(f));
       shas[f] ??= h;
-      return `${path.relative(dir, f)} ${h}`;
+      return `${hashName(dir, f)} ${h}`;
     })
     .sort();
   const hash = sha256(Buffer.from(['threadbear-claude-1', stableJson(parts), ...lines].join('\n')));
@@ -295,4 +295,10 @@ function readOr(file: string): Buffer {
 
 function sha256(data: Buffer): string {
   return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+// A file's name in what the hash covers: relative to the folder, with forward
+// slashes whatever the platform, so a hash means the same on every one.
+function hashName(dir: string, file: string): string {
+  return path.relative(dir, file).split(path.sep).join('/');
 }

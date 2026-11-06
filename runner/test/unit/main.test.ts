@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { tmpDir } from '../helpers/fakes.ts';
+import { IS_WINDOWS } from '../helpers/platform.ts';
 import { groupAlive, killGroup, processInfo } from '../../src/proc.ts';
 
 const RUNNER_DIR = path.join(import.meta.dirname, '..', '..');
@@ -49,13 +50,14 @@ test('a second runner on the same data dir refuses to start and touches nothing'
   const a = startRunner(home);
   const port = await a.listening;
   // A process group the first runner owns, as children.json would list it.
-  const owned = spawn('/bin/sleep', ['60'], { detached: true, stdio: 'ignore' });
+  // (A node child that waits: it is ours, so its pid is ours to stop.)
+  const owned = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: !IS_WINDOWS, stdio: 'ignore' });
   owned.unref();
   try {
     await new Promise((r) => setTimeout(r, 100));
     fs.writeFileSync(
       path.join(home, 'run', 'children.json'),
-      JSON.stringify([{ pid: owned.pid, command: '/bin/sleep', startedAt: new Date().toISOString(), lstart: processInfo(owned.pid!)!.lstart, groups: [] }]),
+      JSON.stringify([{ pid: owned.pid, command: process.execPath, startedAt: new Date().toISOString(), lstart: processInfo(owned.pid!)!.lstart, groups: [] }]),
     );
     const b = startRunner(home);
     assert.equal(await b.exited, 1);
@@ -71,9 +73,13 @@ test('a second runner on the same data dir refuses to start and touches nothing'
     // Run from a checkout on a temp data dir: no Sentry (sentry.ts).
     assert.match(fs.readFileSync(path.join(home, 'runner.log'), 'utf8'), /runner starting .*"sentry":false/);
 
-    a.proc.kill('SIGTERM');
-    assert.equal(await a.exited, 0);
-    assert.equal(fs.existsSync(path.join(home, 'run', 'runner.pid')), false, 'the lock is released on a clean stop');
+    // Windows ends a process outright rather than delivering SIGTERM, so there
+    // is no clean stop to check there.
+    if (!IS_WINDOWS) {
+      a.proc.kill('SIGTERM');
+      assert.equal(await a.exited, 0);
+      assert.equal(fs.existsSync(path.join(home, 'run', 'runner.pid')), false, 'the lock is released on a clean stop');
+    }
   } finally {
     killGroup(owned.pid!, 'SIGKILL');
     a.proc.kill('SIGKILL');

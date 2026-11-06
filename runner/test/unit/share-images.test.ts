@@ -37,11 +37,11 @@ test('reply images: pictures in a reply and pinned pictures, nothing else', () =
   const ev = (seq: number, rest: object) => ({ ...base, seq, ...rest }) as never;
   const pin = (p: string) => ev(4, { type: 'tool.call', itemId: 'i', name: PIN_TOOL, kind: 'mcp', title: 'pin', input: { path: p } });
   assert.deepEqual(replyImagesInEvent(ev(1, { type: 'assistant.text', text: '![a](/w/a.png) and ![b](https://x.io/b.png)' }), '/w', home), [{ seq: 1, path: '/w/a.png', src: '/w/a.png' }]);
-  assert.deepEqual(replyImagesInEvent(pin('/w/a.png'), '/w', home), [{ seq: 4, path: '/w/a.png', pinned: true }]);
+  assert.deepEqual(replyImagesInEvent(pin('/w/a.png'), '/w', home), [{ seq: 4, path: path.resolve('/w/a.png'), pinned: true }]);
   // A relative pin is from the thread's folder, and without one it's unknown.
-  assert.deepEqual(replyImagesInEvent(pin('guide/a.jpg'), '/w', home), [{ seq: 4, path: '/w/guide/a.jpg', pinned: true }]);
+  assert.deepEqual(replyImagesInEvent(pin('guide/a.jpg'), '/w', home), [{ seq: 4, path: path.resolve('/w/guide/a.jpg'), pinned: true }]);
   assert.deepEqual(replyImagesInEvent(pin('guide/a.jpg'), undefined, home), []);
-  assert.deepEqual(replyImagesInEvent(pin('~/a.webp'), undefined, home), [{ seq: 4, path: '/Users/ann/a.webp', pinned: true }]);
+  assert.deepEqual(replyImagesInEvent(pin('~/a.webp'), undefined, home), [{ seq: 4, path: path.join('/Users/ann', 'a.webp'), pinned: true }]);
   // A pinned doc, a link pin, Mike's attachments and a tool's screenshots stay.
   assert.deepEqual(replyImagesInEvent(pin('/w/notes.md'), '/w', home), []);
   assert.deepEqual(replyImagesInEvent(ev(5, { type: 'tool.call', itemId: 'j', name: PIN_TOOL, kind: 'mcp', title: 'pin', input: { url: 'https://x.io/a.png' } }), '/w', home), []);
@@ -59,7 +59,7 @@ test('reply images: a video goes to the phone, but not to a shared page', () => 
     { seq: 1, path: '/w/b.MOV', src: '/w/b.MOV' },
   ]);
   const pin = { ...base, seq: 2, type: 'tool.call', itemId: 'i', name: PIN_TOOL, kind: 'mcp', title: 'pin', input: { path: 'clip.m4v' } } as never;
-  assert.deepEqual(replyImagesInEvent(pin, '/w', home), [{ seq: 2, path: '/w/clip.m4v', pinned: true }]);
+  assert.deepEqual(replyImagesInEvent(pin, '/w', home), [{ seq: 2, path: path.resolve('/w/clip.m4v'), pinned: true }]);
   assert.equal(localImagePath('/w/a.mp4', home), undefined);
   assert.deepEqual(imagesInEvent(text, home), []);
 });
@@ -210,7 +210,7 @@ test("share images: in the media folder too, a symlink, a text file named .png, 
 // every app's screenshots, so Markdown naming one published it.
 test("share images: a real picture in a temp folder that isn't the thread's stays on the Mac", () => {
   const media = tmpDir();
-  for (const dir of [os.tmpdir(), '/tmp']) {
+  for (const dir of process.platform === 'win32' ? [os.tmpdir()] : [os.tmpdir(), '/tmp']) {
     const other = fs.mkdtempSync(path.join(dir, 'other-app-'));
     const shot = write(path.join(other, 'Screenshot.png'), pngHeader(1440, 900));
     const [img] = md(shot);

@@ -738,6 +738,7 @@ async function main(): Promise<void> {
 // A warning when the Codex binary new sessions would start isn't there, or
 // undefined. Threadbear's own copy may still be on its way.
 function missingCodex(start: string, cfg: ReturnType<typeof loadConfig>): string | undefined {
+  if (process.platform === 'win32') return undefined; // no Codex on Windows
   const bin = resolveCodexBinary(start);
   if (fs.existsSync(bin.command)) return undefined;
   if (cfg.codexPath) return `The codex CLI isn't at ${cfg.codexPath} (codexPath in runner.json), so Codex threads can't start.`;

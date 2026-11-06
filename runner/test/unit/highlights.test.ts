@@ -8,9 +8,11 @@ import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import type { PersistedEvent } from '../../src/protocol.ts';
 import { commitsIn, emptyHighlights, linksIn, observe, openTargets, pinItem, pushedBranches, remove, unpin, upsert, view, HIGHLIGHTS_KEPT } from '../../src/highlights.ts';
 
-const HOME = '/Users/mike';
-const CWD = '/Users/mike/dev/app';
-const FILES = new Set(['/Users/mike/dev/app/docs/plan.md', '/Users/mike/dev/app/mock.html', '/Users/mike/notes/todo.md']);
+// A Mac's paths on a Mac, and the same ones under the current drive on Windows.
+const P = (p: string) => path.resolve(p);
+const HOME = P('/Users/mike');
+const CWD = P('/Users/mike/dev/app');
+const FILES = new Set([P('/Users/mike/dev/app/docs/plan.md'), P('/Users/mike/dev/app/mock.html'), P('/Users/mike/notes/todo.md')]);
 const ctx = { cwd: CWD, home: HOME, exists: (p: string) => FILES.has(p) };
 
 let seq = 0;
@@ -34,9 +36,9 @@ test('links, PRs and existing files in a reply are found; code blocks and missin
   );
   assert.deepEqual(found.map((f) => f.id), [
     'pr:https://github.com/mikecann/poddle/pull/19',
-    'file:/Users/mike/dev/app/mock.html',
-    'file:/Users/mike/dev/app/docs/plan.md',
-    'file:/Users/mike/notes/todo.md',
+    `file:${P('/Users/mike/dev/app/mock.html')}`,
+    `file:${P('/Users/mike/dev/app/docs/plan.md')}`,
+    `file:${P('/Users/mike/notes/todo.md')}`,
     'link:https://next-abc.vercel.app',
     'link:http://localhost:5173',
     'link:https://moose.convex.site',
@@ -75,16 +77,16 @@ test('a thread\'s events become highlights: written review files, opens, PRs, co
   assert.equal(observe(state, events, ctx), true);
   const v = view(state);
   const byId = Object.fromEntries(v.highlights.map((h) => [h.id, h]));
-  assert.equal(byId['file:/Users/mike/dev/app/docs/plan.md']?.how, 'written');
-  assert.equal(byId['file:/Users/mike/dev/app/src/x.ts'], undefined, 'code goes in edited, not the list');
-  assert.equal(byId['file:/Users/mike/dev/app/mock.html']?.how, 'opened');
+  assert.equal(byId[`file:${P('/Users/mike/dev/app/docs/plan.md')}`]?.how, 'written');
+  assert.equal(byId[`file:${P('/Users/mike/dev/app/src/x.ts')}`], undefined, 'code goes in edited, not the list');
+  assert.equal(byId[`file:${P('/Users/mike/dev/app/mock.html')}`]?.how, 'opened');
   const commit = byId['commit:1234567']!;
   assert.deepEqual([commit.branch, commit.title, commit.pushed], ['feat', 'Add x', true]);
   const pr = byId['pr:https://github.com/mikecann/app/pull/7']!;
   assert.equal(pr.how, 'created', 'a later mention keeps how it was found');
   assert.equal(pr.lastSeq, 9);
   assert.equal(v.highlights[0]!.id, pr.id, 'newest mention first');
-  assert.deepEqual(v.edited, ['/Users/mike/dev/app/src/y.ts', '/Users/mike/dev/app/src/x.ts', '/Users/mike/dev/app/docs/plan.md']);
+  assert.deepEqual(v.edited, [P('/Users/mike/dev/app/src/y.ts'), P('/Users/mike/dev/app/src/x.ts'), P('/Users/mike/dev/app/docs/plan.md')]);
   assert.equal(state.pending, undefined);
   // Seen events aren't read twice.
   assert.equal(observe(state, events, ctx), false);
@@ -98,8 +100,8 @@ test('Codex file changes and shell commands count too', () => {
     ev({ type: 'tool.call', itemId: 's', name: 'shell', kind: 'command', title: 'open', input: { command: 'open plan.md', cwd: '/Users/mike/dev/app/docs' } }),
   ], ctx);
   assert.deepEqual(view(state).highlights.map((h) => [h.id, h.how]).sort(), [
-    ['file:/Users/mike/dev/app/docs/plan.md', 'opened'],
-    ['file:/Users/mike/notes/todo.md', 'written'],
+    [`file:${P('/Users/mike/dev/app/docs/plan.md')}`, 'opened'],
+    [`file:${P('/Users/mike/notes/todo.md')}`, 'written'],
   ]);
 });
 
@@ -107,15 +109,15 @@ test('pins come first, merge with a found item, and unpin or remove take them of
   seq = 0;
   const state = emptyHighlights();
   observe(state, [ev({ type: 'assistant.text', itemId: 'a', text: 'See `/Users/mike/dev/app/mock.html` and https://a.dev/x' })], ctx);
-  upsert(state, pinItem({ path: '/Users/mike/dev/app/mock.html', title: 'Sidebar mockup', note: 'Pick one of the three', show: true }, 5, '2026-10-27T10:01:00.000Z'));
+  upsert(state, pinItem({ path: P('/Users/mike/dev/app/mock.html'), title: 'Sidebar mockup', note: 'Pick one of the three', show: true }, 5, '2026-10-27T10:01:00.000Z'));
   const v = view(state);
   assert.equal(v.highlights.length, 2);
   assert.deepEqual([v.highlights[0]!.how, v.highlights[0]!.title, v.highlights[0]!.note, v.highlights[0]!.show, v.highlights[0]!.seq], ['pinned', 'Sidebar mockup', 'Pick one of the three', true, 5]);
-  assert.equal(unpin(state, 'file:/Users/mike/dev/app/mock.html'), true);
+  assert.equal(unpin(state, `file:${P('/Users/mike/dev/app/mock.html')}`), true);
   assert.equal(unpin(state, 'link:https://a.dev/x'), false, 'only pins unpin');
   assert.equal(remove(state, 'link:https://a.dev/x'), true);
   observe(state, [ev({ type: 'assistant.text', itemId: 'b', text: 'Again: https://a.dev/x and `/Users/mike/dev/app/mock.html`' })], ctx);
-  assert.deepEqual(view(state).highlights.map((h) => h.id), ['file:/Users/mike/dev/app/mock.html'], 'a removed one never comes back; an unpinned one can');
+  assert.deepEqual(view(state).highlights.map((h) => h.id), [`file:${P('/Users/mike/dev/app/mock.html')}`], 'a removed one never comes back; an unpinned one can');
 });
 
 test('the list keeps the newest found items and every pin', () => {

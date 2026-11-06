@@ -36,7 +36,8 @@ export type CliUpdatesConfig = {
   checkMinutes: number;
   keepCodexVersions: number; // Codex copies kept under <home>/tools/codex
 };
-export const DEFAULT_CLI_UPDATES: CliUpdatesConfig = { claude: 'auto', codex: 'auto', checkMinutes: 60, keepCodexVersions: 2 };
+// Codex isn't supported on Windows (docs/windows-port-plan.md): it's left alone there.
+export const DEFAULT_CLI_UPDATES: CliUpdatesConfig = { claude: 'auto', codex: process.platform === 'win32' ? 'off' : 'auto', checkMinutes: 60, keepCodexVersions: 2 };
 
 // Everything that differs between the real install and a test lives here, so
 // tests can point THREADBEAR_HOME and THREADBEAR_PORT somewhere harmless and

@@ -47,7 +47,7 @@ test('computeEditDiff uses file line numbers when the file is known', () => {
 
 test('displayPath shows paths relative to the thread folder, real path included', () => {
   const dir = tmpDir();
-  assert.equal(displayPath(path.join(dir, 'src', 'a.ts'), dir), 'src/a.ts');
+  assert.equal(displayPath(path.join(dir, 'src', 'a.ts'), dir), path.join('src', 'a.ts'));
   assert.equal(displayPath(path.join(fs.realpathSync(dir), 'b.ts'), dir), 'b.ts');
   assert.equal(displayPath('/elsewhere/c.ts', dir), '/elsewhere/c.ts');
 });

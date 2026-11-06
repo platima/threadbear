@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { makeHarness, tick } from '../helpers/fakes.ts';
+import { skipOnWindows } from '../helpers/platform.ts';
 import { nullLogger } from '../../src/log.ts';
 import { FrozenClis, QUIET_MS, STOP_AFTER_MS, SWEEP_MS, fileCallInSample, parseProcs, realProbe, sampleSandbox, type FrozenProbe, type Proc } from '../../src/frozen-cli.ts';
 
@@ -172,7 +173,7 @@ test('the real probe sees a process blocked in open', { skip: process.platform !
   }
 });
 
-test('sample is kept away from what macOS asks about', () => {
+test('sample is kept away from what macOS asks about', skipOnWindows("sample and its sandbox profile are macOS's"), () => {
   const profile = sampleSandbox('/Users/me');
   for (const p of ['/Volumes', '/Users/me/Downloads', '/Users/me/Documents', '/Users/me/Desktop', '/Users/me/Library/Mobile Documents']) {
     assert.ok(profile.includes(`(subpath "${p}")`), p);

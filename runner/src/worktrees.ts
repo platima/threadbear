@@ -54,6 +54,13 @@ async function gitOut(cwd: string, args: string[]): Promise<string | undefined> 
   return r.ok ? r.stdout.trim() : undefined;
 }
 
+// A checkout's top folder in the platform's own separators (git prints
+// forward slashes on Windows, and the rest of the runner compares paths).
+async function toplevel(cwd: string): Promise<string | undefined> {
+  const top = await gitOut(cwd, ['rev-parse', '--show-toplevel']);
+  return top ? path.normalize(top) : undefined;
+}
+
 function firstLine(text: string): string {
   return (
     text
@@ -73,7 +80,7 @@ export async function listCheckouts(cwd: string): Promise<Checkout[] | undefined
   for (const block of out.split(/\n\s*\n/)) {
     const c: Checkout = { path: '' };
     for (const line of block.split('\n')) {
-      if (line.startsWith('worktree ')) c.path = line.slice('worktree '.length);
+      if (line.startsWith('worktree ')) c.path = path.normalize(line.slice('worktree '.length));
       else if (line.startsWith('branch ')) c.branch = line.slice('branch '.length).replace(/^refs\/heads\//, '');
       else if (line.startsWith('HEAD ')) c.head = line.slice('HEAD '.length);
       else if (line === 'locked' || line.startsWith('locked ')) c.locked = line.slice('locked '.length);
@@ -141,7 +148,7 @@ export function makeWorktree(opts: { cwd: string; threadId: string; patch: Workt
 let making: Promise<void> = Promise.resolve();
 
 async function makeWorktreeNow(opts: { cwd: string; threadId: string; patch: WorktreePatch }): Promise<MadeWorktree> {
-  const top = await gitOut(opts.patch.folder, ['rev-parse', '--show-toplevel']);
+  const top = await toplevel(opts.patch.folder);
   if (!top) return { ok: false, reason: `the ${opts.patch.patch} patch asks for one, but ${opts.patch.folder} isn't in a git repo` };
   const mainCheckout = await mainCheckoutOf(top);
   if (!mainCheckout) return { ok: false, reason: `no checkout of ${path.basename(top)} has ${MAIN} checked out` };
@@ -409,7 +416,7 @@ function runCheck(command: string, cwd: string, shell = plainShell()): Promise<{
 // For `tb land` outside a thread (or in a thread without one of its own):
 // the folder's checkout, if it's on a thread/ branch, and where main is.
 export async function landTargetFromGit(cwd: string): Promise<{ target?: Omit<LandTarget, 'check'>; reason?: string }> {
-  const top = await gitOut(cwd, ['rev-parse', '--show-toplevel']);
+  const top = await toplevel(cwd);
   if (!top) return { reason: `${cwd} isn't in a git checkout. Run tb land in a thread's worktree.` };
   const branch = await gitOut(top, ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (!branch?.startsWith('thread/')) {

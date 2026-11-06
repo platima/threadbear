@@ -74,3 +74,12 @@ export function linkDir(target: string, link: string): void {
 export function readLinkDir(link: string): string {
   return fs.readlinkSync(link);
 }
+
+// A path under the home folder as ~/rest, with forward slashes on every
+// platform: the form the librarian's prompts and replies use, which the
+// reading side expands from ~/ (a Windows path would come back as ~\rest,
+// which nothing expands).
+export function tildePath(p: string, home: string): string {
+  if (p === home) return '~';
+  return p.startsWith(home + path.sep) ? '~' + p.slice(home.length).split(path.sep).join('/') : p;
+}
