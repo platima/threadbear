@@ -178,7 +178,7 @@ test('a new thread in an opted-in repo gets its own worktree, cwd, setup run, br
   assert.equal(land.title, 'Land');
   // The path is shell-quoted when it has a space, as the updater's own clone
   // under Application Support does, so allow a closing quote before ` land`.
-  assert.match(land.command ?? '', /[\\/]bin[\\/]tb'? land$/);
+  assert.match(land.command ?? '', new RegExp(`${escapeRegExp(path.sep)}bin${escapeRegExp(path.sep)}tb'? land$`));
   assert.ok(h.runner.get(thread.id).patches?.some((p) => p.id === 'worktree' && p.source === 'builtin'));
   const rec = h.store.load(thread.id);
   assert.deepEqual(rec?.worktree, { repo: 'proj', mainCheckout: main, path: wt, branch: `thread/${id8}`, base: sh(main, 'git rev-parse main') });

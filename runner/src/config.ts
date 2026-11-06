@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { atomicWriteFileSync } from './fsutil.ts';
-import { chmodSafe, claudeBinaryFor, codexOnPath, dataDirFor, logFileFor, tokenStatsDirFor } from './platform.ts';
+import { chmodSafe, claudeBinaryFor, codexOnPath, dataDirFor, dataDirWarning, logFileFor, tokenStatsDirFor } from './platform.ts';
 import { RELEASE } from './release.ts';
 import { findGateway, gatewayBase } from './connectors.ts';
 import { findGatewayClient } from './notion-tasks.ts';
@@ -397,8 +397,11 @@ export const paths = {
   run: (home: string) => path.join(home, 'run'),
 };
 
-// Creates the data dir layout and the bearer token (0600) if missing.
-export function ensureHome(home: string): void {
+// Creates the data dir layout and the bearer token (0600) if missing. Returns
+// a warning to log when, on Windows, the data dir is outside the user's
+// profile, where file modes can't keep the token and secrets private
+// (platform.ts's dataDirWarning); undefined otherwise.
+export function ensureHome(home: string): string | undefined {
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(paths.threads(home), { recursive: true });
   fs.mkdirSync(paths.inbox(home), { recursive: true });
@@ -410,6 +413,7 @@ export function ensureHome(home: string): void {
     fs.writeFileSync(tokenPath, crypto.randomBytes(32).toString('base64url') + '\n', { mode: 0o600 });
   }
   chmodSafe(tokenPath, 0o600);
+  return dataDirWarning(home);
 }
 
 export function readToken(home: string): string {

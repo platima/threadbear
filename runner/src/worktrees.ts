@@ -9,6 +9,7 @@
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { realPath } from './platform.ts';
 import { plainShell } from './system-tools.ts';
 import type { WorktreePatch } from './patches.ts';
 import { inBackground } from './background.ts';
@@ -95,12 +96,10 @@ export async function mainCheckoutOf(cwd: string): Promise<string | undefined> {
   return (await listCheckouts(cwd))?.find((c) => c.branch === MAIN)?.path;
 }
 
+// The real form of a path, to compare two by (platform.ts: on Windows git's
+// long names and a cwd's 8.3 short ones are one folder).
 export function realpath(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return path.resolve(p);
-  }
+  return realPath(path.resolve(p));
 }
 
 function isDir(p: string): boolean {

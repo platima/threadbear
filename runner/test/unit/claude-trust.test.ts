@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FakeAccounts, makeHarness, tick, tmpDir, withCodex } from '../helpers/fakes.ts';
+import { escapeRegExp } from '../helpers/platform.ts';
 import { checkSummary } from '../helpers/protocol-check.ts';
 import { claudeCommands, claudeSettingsWithoutCommands, CLAUDE_PATCH_ID } from '../../src/claude-trust.ts';
 import { PatchTrust } from '../../src/patch-trust.ts';
@@ -218,7 +219,9 @@ test("runner: a Claude thread in a folder with untrusted hooks starts without th
 
   const s = h.adapter.last;
   assert.deepEqual(s.opts.untrustedProjectSettings, { permissions: { allow: ['Bash(npm test)'] } });
-  assert.ok(h.events(thread.id).some((e) => e.type === 'system.note' && /Skipped this folder's Claude Code hooks, commands and environment settings \(\.claude[\\/]settings\.json\): you haven't trusted them yet/.test(e.text)));
+  // The file as the platform writes it: .claude/settings.json, and .claude\settings.json on Windows only.
+  const skipped = new RegExp(`Skipped this folder's Claude Code hooks, commands and environment settings \\(${escapeRegExp(path.join('.claude', 'settings.json'))}\\): you haven't trusted them yet`);
+  assert.ok(h.events(thread.id).some((e) => e.type === 'system.note' && skipped.test(e.text)));
   let t = h.runner.get(thread.id);
   assert.deepEqual(checkSummary(t), []);
   const waiting = t.patches?.find((p) => p.id === CLAUDE_PATCH_ID);

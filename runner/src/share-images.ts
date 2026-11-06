@@ -8,7 +8,7 @@ import path from 'node:path';
 import type { PersistedEvent } from './protocol.ts';
 import { absolute } from './highlights.ts';
 import { sniffImage, sniffVideo } from './media.ts';
-import { IS_WINDOWS } from './platform.ts';
+import { IS_WINDOWS, isLocalPath, realPath } from './platform.ts';
 import { isSpace, seeker } from './linear-text.ts';
 
 // A picture bigger than this stays on the Mac.
@@ -56,7 +56,9 @@ export function localImagePath(src: string, home = os.homedir(), typeOf = imageT
       return undefined;
     }
   } else if (p.startsWith('~/')) p = home + p.slice(1);
-  if (!path.isAbsolute(p) || p.includes('\0')) return undefined;
+  // Not, on Windows, a //host/share one (platform.ts's isLocalPath): it
+  // would have the runner open a network connection to a host the text picked.
+  if (!path.isAbsolute(p) || p.includes('\0') || !isLocalPath(p)) return undefined;
   return typeOf(p) ? p : undefined;
 }
 
@@ -197,12 +199,10 @@ function under(file: string, dir: string): boolean {
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
 }
 
+// The real form of a path (platform.ts: on Windows the long names, so the
+// media folder and a file in it agree however either was spelt).
 function realOr(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return p;
-  }
+  return realPath(p);
 }
 
 const OUTSIDE = "it isn't in the thread's media folder";
@@ -216,7 +216,9 @@ const OUTSIDE = "it isn't in the thread's media folder";
 export function readShareImage(file: string, mediaDir: string | undefined): { bytes: Uint8Array; mediaType: string; width?: number; height?: number } | { skip: string } {
   if (!mediaDir) return { skip: OUTSIDE };
   const abs = path.resolve(file);
-  if (!under(abs, mediaDir) && !under(abs, realOr(mediaDir))) return { skip: OUTSIDE };
+  // (On Windows also by the file's real name: it may be given by its 8.3 short
+  // one, which is the same file the media folder's long name holds.)
+  if (!under(abs, mediaDir) && !under(abs, realOr(mediaDir)) && !(IS_WINDOWS && under(realOr(abs), realOr(mediaDir)))) return { skip: OUTSIDE };
   let st: fs.Stats;
   try {
     st = fs.lstatSync(abs);
@@ -283,6 +285,8 @@ export function replyImagesInEvent(e: PersistedEvent, cwd: string | undefined, h
   // The pin tool takes a path relative to the thread's folder.
   const raw = e.input.path.trim();
   if (!raw || (!path.isAbsolute(raw) && !raw.startsWith('~') && !cwd)) return [];
+  // A network path the agent names isn't opened; a relative one is in the thread's folder.
+  if (path.isAbsolute(raw) && !isLocalPath(raw)) return [];
   const file = absolute(raw, cwd ?? '/', home);
   return replyMediaType(file) ? [{ seq: e.seq, path: file, pinned: true }] : [];
 }
@@ -302,6 +306,7 @@ export function pastedImagesInEvent(e: PersistedEvent): ReplyImage[] {
 // write any path with a .png on the end, so the file has to be a picture or
 // a video.
 export function readReplyImage(file: string): { bytes: Uint8Array; mediaType: string; width?: number; height?: number } | { skip: string } {
+  if (!isLocalPath(file)) return { skip: "it's a network or device path" };
   let read: ReturnType<typeof readCapped>;
   try {
     read = readCapped(file);

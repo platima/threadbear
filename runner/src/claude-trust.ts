@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { realPath } from './platform.ts';
 
 // The id the folder's entry has in a thread's `patches`.
 export const CLAUDE_PATCH_ID = 'claude-settings';
@@ -337,11 +338,7 @@ function isInside(p: string, dir: string): boolean {
 }
 
 function realpath(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return p;
-  }
+  return realPath(p);
 }
 
 function readOr(file: string): Buffer {

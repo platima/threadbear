@@ -377,11 +377,11 @@ test('tb status, self, show, export and rpc against a runner', async () => {
     r = await run(h.home, url, ['export', thread.id, '--out', out]);
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /Exported 4 events and 0 images to /);
-    assert.match(r.out, new RegExp(`--fixtures ${escapeRegExp(shQuote(out))}\n`), 'loads the export alone');
+    assert.match(r.out, new RegExp(`--fixtures ${escapeRegExp(process.platform === 'win32' ? `'${out}'` : out)}\n`), 'loads the export alone');
     // The debug app comes first, and there's no bare mock runner line to
     // run in the foreground by mistake.
     // The path is quoted when the checkout sits under a dir with a space.
-    assert.match(r.out, /\n  ('[^']*|\S*)app[\\/]Tools[\\/]dev-app\.sh'? start --mock --fixtures /);
+    assert.match(r.out, new RegExp(`\\n  ('[^']*|\\S*)${escapeRegExp(`app${path.sep}Tools${path.sep}dev-app.sh`)}'? start --mock --fixtures `));
     assert.doesNotMatch(r.out, /server\.mjs/);
     assert.match(r.out, new RegExp(`tb'? events ${thread.id.slice(0, 8)} --from N --to M\n`));
     assert.equal(fs.readFileSync(path.join(out, 'events.ndjson'), 'utf8').trim().split('\n').length, 4);

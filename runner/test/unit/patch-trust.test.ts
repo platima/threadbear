@@ -1046,7 +1046,7 @@ test("a trusted patch's bare import of a workspace package (a file of the repo's
   const trust = new PatchTrust();
   trust.trustCurrent([file]);
   const set = await loadPatchSet(folder, root, new Map(), [], [], undefined, trust);
-  assert.match(set.patches[0].error ?? '', /imports @ws\/lib, which resolves to .*packages[\\/]lib[\\/]index\.mjs, not a package in node_modules/);
+  assert.match(set.patches[0].error ?? '', new RegExp(`imports @ws/lib, which resolves to .*${escapeRegExp(path.join('packages', 'lib', 'index.mjs'))}, not a package in node_modules`));
   assert.deepEqual(set.actions, []);
   assert.equal(fs.existsSync(wsRan), false, "the workspace's code never ran");
 

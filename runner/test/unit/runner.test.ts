@@ -1267,7 +1267,7 @@ test('a send the disk refuses leaves no stuck turn behind', async () => {
   const file = path.join(h.home, 'threads', thread.id, 'events.ndjson');
   fs.chmodSync(file, 0o444);
   try {
-    assert.throws(() => h.runner.send(thread.id, 'this one fails'), /EACCES|EPERM|permission|permitted/i);
+    assert.throws(() => h.runner.send(thread.id, 'this one fails'), process.platform === 'win32' ? /EPERM|EACCES|permission/i : /EACCES|permission/i);
   } finally {
     fs.chmodSync(file, 0o644);
   }

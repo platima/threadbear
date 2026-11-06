@@ -54,7 +54,7 @@ import { pathToFileURL } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
 import { loginShell } from './system-tools.ts';
 import { killGroup } from './proc.ts';
-import { IS_WINDOWS } from './platform.ts';
+import { IS_WINDOWS, realPathSync } from './platform.ts';
 import type { Action, Hook, ImageRef, Panel, PanelItem, PatchInfo } from './protocol.ts';
 import { LIMITS } from './protocol.ts';
 import { imageRefFor } from './media.ts';
@@ -225,14 +225,14 @@ function projectRoots(cwd: string, projectFolders: ProjectFolder[]): ProjectFold
 function inWorktree(folder: string, worktree: { top: string; main: string }, own: string): string {
   let real: string;
   try {
-    real = fs.realpathSync(folder);
+    real = realPathSync(folder);
   } catch {
     return folder;
   }
   if (!isInside(real, worktree.main)) return folder;
   let ownReal: string;
   try {
-    ownReal = fs.realpathSync(own);
+    ownReal = realPathSync(own);
   } catch {
     return folder;
   }
@@ -451,7 +451,7 @@ function bindAutomatic(loaded: LoadedPatch, file: string, files: string[], block
   const folder = path.dirname(path.dirname(path.dirname(file)));
   // Without a hash there's nothing to check a command against, so a live
   // function's sh refuses everything (liveSh).
-  liveBindings.set(file, { folder: fs.realpathSync(folder), files: [file, fs.realpathSync(file), ...files], ...(blocked ? { blocked } : {}), hash: hash ?? '', tool: loaded.appliesTo !== undefined });
+  liveBindings.set(file, { folder: realPathSync(folder), files: [file, realPathSync(file), ...files], ...(blocked ? { blocked } : {}), hash: hash ?? '', tool: loaded.appliesTo !== undefined });
   const refuse = (what: string, problem: string): LoadedPatch => ({ info: { ...loaded.info, error: `Not run: its ${what} ${problem}` }, panels: [], actions: [], hooks: [] });
   const hooks: Hook[] = [];
   for (const hook of loaded.hooks) {
@@ -469,7 +469,7 @@ function bindAutomatic(loaded: LoadedPatch, file: string, files: string[], block
       if (missed.length) {
         return refuse(`action "${action.title}"`, `runs ${missed[0]}, which patch trust didn't hash: write the command in the patch as plain text, so trusting the patch covers what it runs.`);
       }
-      actions.push({ ...action, folder: action.folder ?? fs.realpathSync(folder) });
+      actions.push({ ...action, folder: action.folder ?? realPathSync(folder) });
     } else actions.push(action);
   }
   let worktree = loaded.worktree;

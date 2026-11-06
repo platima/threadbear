@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { defaultHome, readToken, runnerUrl, type Config } from './config.ts';
-import { IS_WINDOWS } from './platform.ts';
+import { IS_WINDOWS, realPathSync } from './platform.ts';
 import { RunnerClient, RpcClientError } from './client.ts';
 import { ErrorCode, type Account, type ImageRef, type PersistedEvent, type RunnerDefaults, type ThreadSummary } from './protocol.ts';
 import { pushFailingText } from './push-failing.ts';
@@ -841,7 +841,7 @@ function fallbackLog(cfg: Config): string {
 function sameDir(a: string, b: string): boolean {
   const real = (p: string) => {
     try {
-      return fs.realpathSync(p);
+      return realPathSync(p);
     } catch {
       return path.resolve(p);
     }

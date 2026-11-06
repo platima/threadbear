@@ -71,8 +71,9 @@ export const REPORTS_LISTENING = true;
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  ensureHome(cfg.home);
+  const homeWarning = ensureHome(cfg.home);
   const log = createLogger(cfg.logFile, { echo: process.env.THREADBEAR_LOG_STDERR === '1', debug: process.env.THREADBEAR_DEBUG === '1', onError: reportLoggedError, onWarn: reportLoggedWarning });
+  if (homeWarning) log.warn(homeWarning);
   // Only the installed runner reports to Sentry (sentry.ts says why).
   const reporting = await startSentry(cfg.home);
   log.info('runner starting', { version: RUNNER_VERSION, home: cfg.home, port: cfg.port, pid: process.pid, sentry: reporting });
@@ -441,6 +442,7 @@ async function main(): Promise<void> {
     });
   }
   if (swept) runner.startupNotice('info', `Stopped ${swept === 1 ? 'a process group' : `${swept} process groups`} left running by the previous runner.`);
+  if (homeWarning) runner.startupNotice('warning', homeWarning);
 
   // launch.mjs went back to this release because a newer one kept crashing
   // at startup. Every client that says hello hears about it, not just the
