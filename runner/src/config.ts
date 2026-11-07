@@ -37,7 +37,7 @@ export type CliUpdatesConfig = {
   checkMinutes: number;
   keepCodexVersions: number; // Codex copies kept under <home>/tools/codex
 };
-// Codex isn't supported on Windows (docs/windows-port-plan.md): it's left alone there.
+// Threadbear doesn't install or update Codex on Windows (it uses a codex.exe on the PATH), so its updates are off there.
 export const DEFAULT_CLI_UPDATES: CliUpdatesConfig = { claude: 'auto', codex: process.platform === 'win32' ? 'off' : 'auto', checkMinutes: 60, keepCodexVersions: 2 };
 
 // Everything that differs between the real install and a test lives here, so
