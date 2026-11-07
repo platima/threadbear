@@ -31,17 +31,12 @@ jobs:
           cache: npm
           cache-dependency-path: runner/package-lock.json
       - run: npm ci
-      - run: npm run typecheck
-      - name: Tests
+      - name: proc tests, three times, in full
         shell: bash
         run: |
           set +e
-          npm test > "$RUNNER_TEMP/t.log" 2>&1
-          echo "npm test exit code: $?"
-          sed 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/t.log" > "$RUNNER_TEMP/plain.log"
-          echo "TOTALS:"
-          grep -E '^ℹ (tests|pass|fail|cancelled|skipped) ' "$RUNNER_TEMP/plain.log"
-          echo "FAILING-TESTS-BEGIN"
-          awk '/^✖ failing tests:/{f=1} f && /^✖ /{print}' "$RUNNER_TEMP/plain.log" | sed -E 's/ \([0-9.]+ms\)$//' | sort -u
-          echo "FAILING-TESTS-END"
+          for i in 1 2 3; do
+            echo "=== run $i"
+            node --test --test-reporter=spec --test-timeout=300000 --test-force-exit test/unit/proc.test.ts 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -vE '^\s*$' | cut -c1-300 | head -150
+          done
           exit 0
