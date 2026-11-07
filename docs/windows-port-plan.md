@@ -576,8 +576,20 @@ was 176 ms against a 40 ms start on that runner), the same commit having passed
 on the branch; the assertion was dropped and the floor checks on the later waits
 kept.
 
+The release dry run (`gh workflow run release.yml --ref <branch> -f version=v0.1.0`)
+was run three times. The first stopped at its first check, as it should: the
+changelog heading said `Unreleased`, and a final release needs a date. The second
+got past that (on a throwaway branch with a placeholder date, since the real date
+is for release day) and failed in the runner tests on `fsutil.test.ts`, which held
+a file for 700 ms against retries of about 1.6 s and ran out of room once on a busy
+runner; it now holds for 250 ms. The third passed every job: meta, both test jobs,
+the x64 and arm64 stage and package jobs, and the publish job, which checked all
+six packages, wrote `CHECKSUMS.txt` (six lines, each verified) and the notes
+preview, and created no release and no tag. The signing job was skipped.
+
 Still unproven, and said so where the docs claim it: the arm64 packages run on
-an Arm PC (they were built, not run), `release.yml` end to end (it has not run),
+an Arm PC (they were built, not run), the half of `release.yml` that only a tag
+runs (the draft release, its comparison with the files, making it public),
 real Azure signing and SmartScreen, the installers' action that restarts
 a registered runner task and the uninstaller's quit of a running app (the
 installers were run for real, into folders of their own, and are covered
