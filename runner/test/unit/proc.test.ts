@@ -267,6 +267,8 @@ test('the SIGKILL that follows a SIGTERM is skipped on Windows once the process 
   } finally {
     killGroup(live.pid!, 'SIGKILL');
   }
+  // A killed process is a zombie until node reaps it, and a zombie still counts as a group.
+  assert.ok(await until(() => !groupAlive(live.pid!), 5000), 'the group is gone');
   assert.equal(followUpKillDue(live.pid!, false), false, 'nothing there, nothing to kill');
 });
 
@@ -274,7 +276,9 @@ test('a member of a CLI\'s group that ignores SIGTERM is still killed when the C
   const run = tmpDir();
   const spawnCli = groupSpawner(new ProcessRegistry(run, nullLogger), nullLogger, () => {});
   // A stand-in CLI that exits with a code on SIGTERM, with a program in its group that ignores it.
-  const script = `const c = require('node:child_process').spawn('/bin/sh', ['-c', 'trap "" TERM; sleep 60'], { stdio: 'ignore' }); console.log(c.pid); process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);`;
+  // The pid is printed only once the program has said its trap is set (echo ready): a SIGTERM
+  // that arrives before the trap would end it, which a slow macOS runner showed.
+  const script = `const c = require('node:child_process').spawn('/bin/sh', ['-c', 'trap "" TERM; echo ready; sleep 60'], { stdio: ['ignore', 'pipe', 'ignore'] }); c.stdout.once('data', () => console.log(c.pid)); process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);`;
   const abort = new AbortController();
   const cli = spawnCli({ command: process.execPath, args: ['-e', script], cwd: run, env: process.env, signal: abort.signal } as any) as unknown as ChildProcess;
   const straggler = await new Promise<number>((resolve) => cli.stdout!.once('data', (d) => resolve(Number(String(d).trim()))));
