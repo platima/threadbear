@@ -6,8 +6,9 @@ import { IS_WINDOWS } from './platform.ts';
 // Windows won't rename over a file another program has open without allowing
 // that (antivirus, the indexer, a backup, a viewer): the rename fails with
 // EPERM, EBUSY or EACCES until it lets go, which is usually a moment. These
-// are the waits between tries, a little over a second and a half in all.
-const RENAME_RETRY_MS = [10, 25, 50, 100, 200, 400, 800];
+// are the waits between tries, a little over three seconds in all (a loaded
+// GitHub runner kept a file busy for longer than half of that).
+const RENAME_RETRY_MS = [10, 25, 50, 100, 200, 400, 800, 1600];
 const RENAME_BUSY = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 // A pause that holds this thread, as the writes it serves are synchronous.
