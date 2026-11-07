@@ -196,6 +196,7 @@ File references are where to look.
 | GitHub | Mike's repo | Release tags fetched every 6 hours; the fork at setup |
 | GitHub (the Windows app) | the fork's | Only the installed Windows app (see "On Windows"): `api.github.com/repos/<the fork>/releases/latest` once a day, to say in its rail when a newer release is out. A plain request: GitHub sees the PC's address and the app's user agent, and nothing else is sent. Settings, "This app", turns it off. |
 | downloads.claude.ai, registry.npmjs.org | Anthropic, npm | CLI version checks and installs; `npm ci` |
+| registry.npmjs.org (the Windows runner) | npm | Only a Windows install, on the runner's first start after it is installed or updated: the one tarball of the Claude Agent SDK (about 4 MB) that `runner/package-lock.json` names, checked against the hash in that file before it is unpacked (see "On Windows"). A plain request: npm sees the PC's address. Nothing else is sent. |
 | Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `labReview` experiment on (off by default), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one. After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
 | Mike's push relay | Mike's | Only when a paired iPhone gets a notification. It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A Connectors gateway | whoever runs it | Only if one is set in `runner.json` or `~/.claude.json`. Its `/health` every few minutes (and once more at the end of a turn where a call to one of its services failed, to see if it needs signing in), and for a project with a Notion page, a Notion read or two every 5 minutes for its task board (`runner/src/notion-tasks.ts`), signed with the header the `headersHelper` command in that `connectors` entry prints, which it runs for each read |
@@ -362,7 +363,8 @@ said otherwise.
   x64 and arm64. They put the app in `%LOCALAPPDATA%\Programs\Threadbear` (or
   Program Files for a system-wide install): `Threadbear.exe`, a pinned
   `node\node.exe` (its SHA-256 is checked at build time, `installer/node.json`),
-  the runner's source and its production packages, the bridge and built UI, the
+  the runner's source and its production packages (not the Claude Agent SDK:
+  see the next item), the bridge and built UI, the
   guide and a few of the docs the guide points at, `README-WINDOWS.txt` and
   `THIRD-PARTY-NOTICES.txt`. They add a Start menu entry (the setup exe also
   one for the notices, and a desktop shortcut if asked) and an entry in
@@ -379,6 +381,25 @@ said otherwise.
   `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion` for the Windows build and
   the registry and `%LOCALAPPDATA%\Microsoft\EdgeWebView` for WebView2). The packages are unsigned unless the fork has set up
   Azure Artifact Signing, and the release notes of an unsigned one say so.
+- **The Claude Agent SDK is fetched, not shipped.** It is Anthropic's, all
+  rights reserved and subject to their terms, so the packages do not carry a
+  copy; a Mac gets it from `npm ci`, and a Windows install has no npm. The
+  supervisor starts the runner as `node --import scripts/agent-sdk-preload.mjs
+  src/main.ts`. That script (`runner/scripts/agent-sdk.mjs`) reads the SDK's
+  version, address and hash from `package-lock.json`, and if the SDK isn't in
+  `node_modules` next to the runner, downloads that tarball from
+  registry.npmjs.org (timeout two minutes), refuses it if it doesn't match the
+  hash, unpacks it into `%LOCALAPPDATA%\Threadbear\sdk\<version>` (files and
+  folders only; a name that could leave that folder, a link or a device is an
+  error) and moves it into place whole, then removes the folders of other
+  versions. An import of `@anthropic-ai/claude-agent-sdk` that Node can't find
+  the usual way is looked for there (a resolve hook, for that name only). The
+  folder is the person's own, so a system-wide install, whose own folder a
+  normal user can't write to, works the same. With no network the runner does
+  not start, says why in `runner-supervisor.log`, and tries again with longer
+  waits; a source checkout with `npm ci` run in it never fetches anything. The
+  setup exe's uninstaller deletes that folder; the MSI leaves it, as it does the
+  logs and the data.
 - **The runner's task is offered, not assumed:** the first time the installed
   app opens, it asks once whether to start the runner when you sign in to
   Windows, and sets that task up (the item above) if you say yes. "No thanks"

@@ -587,6 +587,9 @@ the x64 and arm64 stage and package jobs, and the publish job, which checked all
 six packages, wrote `CHECKSUMS.txt` (six lines, each verified) and the notes
 preview, and created no release and no tag. The signing job was skipped.
 
+Windows 10 is out of scope (end of life, the user 7 Nov): the docs say Windows
+11, and the installers' floor of 1809 is left as it was, not tested.
+
 Still unproven, and said so where the docs claim it: the arm64 packages run on
 an Arm PC (they were built, not run), the half of `release.yml` that only a tag
 runs (the draft release, its comparison with the files, making it public),
@@ -594,7 +597,7 @@ real Azure signing and SmartScreen, the installers' action that restarts
 a registered runner task and the uninstaller's quit of a running app (the
 installers were run for real, into folders of their own, and are covered
 below, but with no task registered and no app running), a click on a link, a
-dropped picture or a setup-failure dialog in the real window, Windows 10, and anything on
+dropped picture or a setup-failure dialog in the real window, and anything on
 macOS or Linux (the runner changes were read there, and run on Linux under WSL
 for the kill fix and for one test helper only).
 
@@ -609,14 +612,24 @@ reach MAX_PATH in a deep folder, and a local build embeds the builder's cargo
 path in `Threadbear.exe` (use `--remap-path-prefix`; CI builds embed the
 runner's, not a person's).
 
-A decision for the user: the package redistributes the Claude Agent SDK
-(`@anthropic-ai/claude-agent-sdk`, about 4 MB without its 283 MB native
-binary), whose own licence says "All rights reserved" and defers to Anthropic's
-legal terms, which say that offering Claude Code in a product is subject to the
-Commercial Terms. The package keeps the licence files with it and nothing more
-has been decided. The alternative is to install the SDK from npm on the user's
-machine at first run (it needs npm or a tarball step and a network), or to ask
-Anthropic.
+The Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) is not in the
+packages (decided 7 Nov, the user leaving the choice to the author). Its own
+licence says "All rights reserved" and defers to Anthropic's legal terms, which
+say that offering Claude Code in a product is subject to the Commercial Terms,
+so the packages do not redistribute it. A Mac install gets it from `npm ci` on
+the person's own machine, and a Windows install now gets it the same way in
+effect: `runner/scripts/agent-sdk.mjs` downloads the one tarball
+`package-lock.json` names from registry.npmjs.org on the runner's first start,
+refuses it unless it matches the lock's SHA-512, unpacks it (files and folders
+only, no name that leaves the folder) under `%LOCALAPPDATA%\Threadbear\sdk\<version>`
+and points the import of that package name there with a resolve hook. That folder
+is the person's own, so a system-wide install, whose folder a normal user can't
+write to, works too. A checkout with `npm ci` run in it never fetches anything.
+The cost: the first start needs the internet once (about 4 MB), and a PC that
+can't reach npm says so in the supervisor log and retries. Run for real against
+the real registry it fetched 0.3.310 in about a second (21 files) and the runner
+imported `query`, `createSdkMcpServer` and `tool` from it. Asking Anthropic would
+still settle whether bundling is allowed, and would let this go if it is.
 
 ## Upstream pull requests
 

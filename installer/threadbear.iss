@@ -157,6 +157,11 @@ Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\Threadbe
 Filename: "{app}\{#AppExe}"; Parameters: "--runner --start"; WorkingDir: "{app}"; StatusMsg: "Starting the runner..."; Flags: runhidden nowait runasoriginaluser
 Filename: "{app}\{#AppExe}"; Description: "Open {#AppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
+[UninstallDelete]
+; The Claude Agent SDK the runner fetched from npm on its first start
+; (runner\scripts\agent-sdk.mjs), in the folder of the person removing this.
+Type: filesandordirs; Name: "{localappdata}\Threadbear\sdk"
+
 [UninstallRun]
 ; Removes the logon task and the `tb` command. The data folder is left alone.
 ; The app and the runner are asked to stop before this, in CurUninstallStepChanged.

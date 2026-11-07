@@ -160,8 +160,8 @@ Threads that need those belong on the Mac.
 
 ## 7. A runner on Windows (optional)
 
-The runner runs on Windows 10 and 11, and the desktop app in `desktop/` (or
-the website) is the way in. It is newer than the Mac and Linux setups, and
+The runner runs on Windows 11 (Windows 10 is out of support and is not
+tested), and the desktop app in `desktop/` (or the website) is the way in. It is newer than the Mac and Linux setups, and
 there is no Mac app. It runs Claude Code, and Codex when its `codex.exe` is on
 the PATH. docs/windows-port-plan.md says what is done and what isn't.
 
@@ -189,7 +189,16 @@ When it isn't, the release notes say so, and Windows SmartScreen warns on the
 first run. Pre-release versions (`v0.2.0-rc.1`) are marked as pre-releases, so
 they are never the "latest release" that the app's update check follows.
 
-Node comes inside every package. They still need Git for Windows (patch
+Node comes inside every package. The Claude Agent SDK does not: it is
+Anthropic's, so the packages don't redistribute it, and the runner downloads it
+(about 4 MB, from registry.npmjs.org, checked against the hash in
+`runner/package-lock.json`) the first time it starts after an install or an
+update. That needs the PC to reach the internet once. If it can't, the runner
+says so in `%LOCALAPPDATA%\Threadbear\Logs\runner-supervisor.log` and tries
+again. Behind a proxy, set `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY` in their
+user environment. Where the download is blocked, `npm ci --omit=dev` in the
+`runner` folder of the install puts the SDK in place by hand. They still need
+Git for Windows (patch
 commands and project checks run in its bash; without it those say so and do
 nothing, and `CLAUDE_CODE_GIT_BASH_PATH` points the runner at a bash in an
 unusual place) and Claude Code with its native installer. **Ask** them to run

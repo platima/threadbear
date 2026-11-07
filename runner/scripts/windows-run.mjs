@@ -18,9 +18,17 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, '..');
+
+// How the runner is started: through agent-sdk-preload.mjs, which makes sure the
+// Claude Agent SDK can be imported first (an install does not carry it; see
+// agent-sdk.mjs). A stand-in entry, which tests use, has no need of it.
+export function runnerArgs(entry, { preload = true } = {}) {
+  return preload ? ['--import', pathToFileURL(path.join(here, 'agent-sdk-preload.mjs')).href, entry] : [entry];
+}
 
 // What main.ts writes before it exits 1 because another runner holds the lock.
 export const ALREADY_RUNNING = /Another runner \(pid \d+\) is already using/;
@@ -63,7 +71,7 @@ function run() {
   function start() {
     rotateLog();
     const startedAt = Date.now();
-    const child = spawn(process.execPath, [entry], {
+    const child = spawn(process.execPath, runnerArgs(entry, { preload: !process.env.THREADBEAR_SUPERVISE_ENTRY }), {
       cwd: root,
       env: { ...process.env, THREADBEAR_FOLLOW_MAIN: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],

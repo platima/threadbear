@@ -75,7 +75,7 @@ $run = Join-Path $stage "runner"
 New-Item -ItemType Directory -Force (Join-Path $run "scripts") | Out-Null
 Copy-Item (Join-Path $repo "runner\src") (Join-Path $run "src") -Recurse
 Copy-Item (Join-Path $repo "runner\bin") (Join-Path $run "bin") -Recurse
-foreach ($f in "windows-run.mjs", "install-windows.mjs") {
+foreach ($f in "windows-run.mjs", "install-windows.mjs", "agent-sdk.mjs", "agent-sdk-preload.mjs") {
     Copy-Item (Join-Path $repo "runner\scripts\$f") (Join-Path $run "scripts\$f")
 }
 foreach ($f in "package.json", "package-lock.json") {
@@ -91,14 +91,25 @@ try {
 } finally { Pop-Location }
 $nodeModules = Join-Path $run "node_modules"
 
-# The Agent SDK carries its own copy of Claude Code (283 MB) in a platform
-# package. The runner always passes the path of the person's own claude
-# (pathToClaudeCodeExecutable, adapters/claude/adapter.ts), so the copy is
-# never run, and Threadbear only ever spawns the official CLI under the
-# person's own login. Take it out.
-Get-ChildItem (Join-Path $nodeModules "@anthropic-ai") -Directory -Filter "claude-agent-sdk-*" |
-    Where-Object { $_.Name -ne "claude-agent-sdk" } |
-    ForEach-Object { Write-Host "Leaving out $($_.Name) ($([math]::Round((Get-ChildItem $_.FullName -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)) MB)"; Remove-Item $_.FullName -Recurse -Force }
+# The Agent SDK is not shipped. It is Anthropic's, all rights reserved and
+# subject to their terms, so a package made here does not redistribute it. A
+# Mac install gets it from `npm ci` on the person's own machine; this one gets
+# it on its first start the same way, from the registry, checked against the
+# hash in the package-lock.json that is copied above (scripts/agent-sdk.mjs).
+# That also drops the platform packages with their own copy of Claude Code (283
+# MB), which the runner never runs: it always passes the path of the person's
+# own claude (pathToClaudeCodeExecutable, adapters/claude/adapter.ts).
+$anthropic = Join-Path $nodeModules "@anthropic-ai"
+if (Test-Path $anthropic) {
+    Get-ChildItem $anthropic -Directory -Filter "claude-agent-sdk*" |
+        ForEach-Object { Write-Host "Leaving out $($_.Name) ($([math]::Round((Get-ChildItem $_.FullName -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)) MB): fetched from npm on the first start"; Remove-Item $_.FullName -Recurse -Force }
+    if (-not (Get-ChildItem $anthropic -Force)) { Remove-Item $anthropic -Force }
+}
+if (Test-Path (Join-Path $nodeModules "@anthropic-ai\claude-agent-sdk")) { throw "The Agent SDK is still in the staged runner. It must not ship." }
+# Node reads the lock: PowerShell's ConvertFrom-Json refuses its "" package key.
+$sdkLock = (node -e "const p = require(process.argv[1]).packages['node_modules/@anthropic-ai/claude-agent-sdk'] || {}; console.log(JSON.stringify(p))" (Join-Path $run "package-lock.json")) | ConvertFrom-Json
+if (-not ($sdkLock.version -and $sdkLock.resolved -and $sdkLock.integrity)) { throw "package-lock.json has no version, address and hash for the Agent SDK, so the first start could not fetch it." }
+Write-Host "The Agent SDK $($sdkLock.version) is fetched on the first start from $($sdkLock.resolved)"
 
 # The `sentry` package is Sentry's command line tool (15 MB, under the FSL
 # licence), pulled in by @sentry/bundler-plugins, which only the build-plugin
@@ -126,11 +137,10 @@ if ((Test-Path (Join-Path $sentryCli "package.json")) -and ((Get-Content (Join-P
 # Thousands of them, and each one is a file to unpack, scan and (for the MSI)
 # keep in a component. Licence files are never pruned, whatever their extension
 # (LICENSE.md, license.markdown, NOTICE.md): the licences ask for the notice to
-# travel with copies. The Agent SDK's README.md stays too, because its
-# package.json names it as the place the terms are.
+# travel with copies.
 $keep = '^(licen[sc]e|copying|notice|patents|copyright|unlicen[sc]e)([-_. ].*)?$'
 $pruned = Get-ChildItem $nodeModules -Recurse -File -Include *.d.ts, *.d.mts, *.d.cts, *.map, *.md, *.markdown -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -notmatch $keep -and $_.FullName -notlike "*\@anthropic-ai\claude-agent-sdk\README.md" }
+    Where-Object { $_.Name -notmatch $keep }
 Write-Host "Pruning $(($pruned | Measure-Object).Count) declaration, map and markdown files from the runner's packages (licence files stay)"
 $pruned | Remove-Item -Force
 

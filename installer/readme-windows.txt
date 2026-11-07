@@ -11,8 +11,15 @@ What it needs, and does not install
 - Claude Code (the "claude" command), signed in. Open a terminal and run
   "claude auth login" once. Threadbear only ever starts the official claude, and
   under your own login.
-- Microsoft Edge WebView2, which Windows 11 and an up-to-date Windows 10 already
-  have. The installers check for it.
+- Microsoft Edge WebView2, which Windows 11 already has. The installers check
+  for it.
+- An internet connection the first time the runner starts. It downloads the
+  Claude Agent SDK (about 4 MB, from registry.npmjs.org) once for each version
+  of Threadbear, because the SDK is Anthropic's and is not part of this
+  package. It is kept in %LOCALAPPDATA%\Threadbear\sdk. If the download fails,
+  the runner says why in %LOCALAPPDATA%\Threadbear\Logs\runner-supervisor.log
+  and tries again. Behind a proxy, set NODE_USE_ENV_PROXY=1 and HTTPS_PROXY in
+  your user environment.
 
 Node.js comes inside this folder (node\node.exe), so nothing else is needed.
 
@@ -31,7 +38,8 @@ Your data
 ---------
 Threads and settings are in %APPDATA%\Threadbear and the logs in
 %LOCALAPPDATA%\Threadbear. Uninstalling removes the task and "tb" and leaves
-your data alone.
+your data alone. (The setup exe's uninstaller also removes the downloaded SDK;
+the MSI leaves it in %LOCALAPPDATA%\Threadbear\sdk, which you can delete.)
 
 Updates
 -------
