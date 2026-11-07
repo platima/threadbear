@@ -17,6 +17,9 @@ on:
   pull_request:
     branches: [main]
   workflow_call:
+  # By hand, against any branch: `gh workflow run windows.yml --ref <branch>`.
+  # GitHub only offers it once this file has it on the default branch.
+  workflow_dispatch:
 
 permissions:
   contents: read
