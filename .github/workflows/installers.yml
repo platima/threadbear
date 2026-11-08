@@ -56,6 +56,14 @@ name: Installers
 # Programs (default: Platima). It should match the certificate profile's
 # subject name.
 #
+# The federated credential's Subject must be exactly what GitHub presents, and
+# the error says which: AADSTS700213 "No matching federated identity record
+# found for presented assertion subject '...'". The usual one is
+# repo:<owner>/<repo>:environment:release. An account whose OIDC subject uses the
+# immutable ids presents repo:<owner>@<ownerId>/<repo>@<repoId>:environment:release
+# instead (8 Nov: platima@13729856/threadbear@1447608167). Issuer
+# https://token.actions.githubusercontent.com, audience api://AzureADTokenExchange.
+#
 # Restrict the "release" environment (Settings > Environments > release >
 # Deployment branches and tags) to the main branch and the tag pattern v*, so
 # that nothing else, however it gets here, can sign.
