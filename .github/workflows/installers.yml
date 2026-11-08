@@ -425,7 +425,8 @@ jobs:
           Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/$v/microsoft.artifactsigning.client.$v.nupkg" -OutFile $zip
           $got = (Get-FileHash $zip -Algorithm SHA512).Hash
           if ($got -ne $env:SIGNING_CLIENT_SHA512) { throw "Microsoft.ArtifactSigning.Client $v has SHA-512 $got, not the pinned $env:SIGNING_CLIENT_SHA512. Refusing to use it." }
-          "Artifact Signing client $v: SHA-512 matches the pinned value"
+          # (${v}, not $v: PowerShell reads "$v:" as a variable with a scope or drive in front.)
+          "Artifact Signing client ${v}: SHA-512 matches the pinned value"
           Expand-Archive $zip (Join-Path $dir "client") -Force
           $dlib = Get-ChildItem (Join-Path $dir "client") -Recurse -Filter Azure.CodeSigning.Dlib.dll |
                   Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
