@@ -100,6 +100,15 @@ sh installer/release-notes.sh --check "$VERSION" || {
     exit 1
 }
 
+# A fresh checkout has no dependencies yet, and the typecheck needs tsc. Install
+# them from the lockfiles, as CI does, for any folder that has none.
+for dir in runner desktop; do
+    if [ ! -d "$dir/node_modules" ]; then
+        print_status "Installing the $dir dependencies (npm ci)..."
+        (cd "$dir" && npm ci) || { print_error "npm ci failed in $dir"; exit 1; }
+    fi
+done
+
 print_status "Running the checks..."
 (cd runner && npm run typecheck) || { print_error "The runner's typecheck failed"; exit 1; }
 (cd desktop && npm run typecheck && npm test) || { print_error "The desktop app's checks failed"; exit 1; }
