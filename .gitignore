@@ -30,3 +30,6 @@ android/src-tauri/gen/
 # The Firebase project's file for the app: CI takes it from a secret, so builds
 # made without it simply have no push
 android/google-services.json
+# A Firebase service account key (a private key): it goes into the
+# FIREBASE_SERVICE_ACCOUNT secret and nowhere else
+*-firebase-adminsdk-*.json
