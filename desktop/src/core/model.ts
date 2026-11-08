@@ -3,7 +3,7 @@
 // top: tool output, diffs, cards. Events come in `seq` order; an older page
 // of them means building again from the start.
 
-import type { AnyEvent, ApprovalDecision, ApprovalOption, AskAnswer, DesignReview, Hunk, ImageRef, NeedsWho, PersistedEvent, PlanEntry, Question, ReviewDraft, ToolKind, TurnOutcome } from './types.ts';
+import type { AnyEvent, ApprovalDecision, ApprovalOption, AskAnswer, DesignReview, Hunk, ImageRef, NeedsWho, PersistedEvent, PlanEntry, QueuedCall, Question, ReviewDraft, ToolKind, TurnOutcome } from './types.ts';
 import type { TurnMessage } from '../../../web/src/turns.ts';
 
 export type ToolData = {
@@ -16,7 +16,8 @@ export type ToolData = {
 };
 
 export type CardData =
-  | { type: 'approval'; approvalId: string; name: string; title: string; input: Record<string, unknown>; options: ApprovalOption[]; decision?: ApprovalDecision; message?: string }
+  // `queued` is the agent's other calls from the same reply, waiting behind this card (docs/protocol.md, "Queued calls"): they are answered with it.
+  | { type: 'approval'; approvalId: string; itemId?: string; name: string; title: string; input: Record<string, unknown>; options: ApprovalOption[]; queued?: QueuedCall[]; decision?: ApprovalDecision; message?: string }
   | { type: 'question'; approvalId: string; questions: Question[]; decision?: ApprovalDecision; message?: string }
   | { type: 'secret'; approvalId: string; label: string; reason: string; placeholder?: string; decision?: ApprovalDecision };
 
@@ -175,8 +176,18 @@ export class TranscriptModel {
         break;
       }
       case 'approval.requested':
-        this.card(base, `p${e.seq}`, { type: 'approval', approvalId: e.approvalId, name: e.name, title: e.title, input: e.input, options: e.options }, e.title);
+        this.card(base, `p${e.seq}`, { type: 'approval', approvalId: e.approvalId, itemId: e.itemId, name: e.name, title: e.title, input: e.input, options: e.options }, e.title);
         break;
+      case 'approval.queued': {
+        // The list as it stands now: a later event replaces an earlier one. One
+        // for a card that is already answered has nothing left to ask.
+        const r = this.byApproval.get(e.approvalId);
+        if (r?.card?.type === 'approval' && r.card.decision === undefined) {
+          r.card.queued = e.calls;
+          this.touch(r);
+        }
+        break;
+      }
       case 'question.requested':
         this.card(base, `q${e.seq}`, { type: 'question', approvalId: e.approvalId, questions: e.questions }, e.questions[0]?.question ?? 'A question');
         break;

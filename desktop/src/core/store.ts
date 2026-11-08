@@ -6,7 +6,7 @@ import { RpcClient, RpcError, bridgeKey, type ConnState } from './rpc.ts';
 import { APP_VERSION } from './version.ts';
 import { notifyTransition } from './native.ts';
 import { TranscriptModel, type Streaming } from './model.ts';
-import type { Account, AnyEvent, ApprovalDecision, AskAnswer, DesignReview, EffortLevel, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, ReviewDraft, ThreadSummary } from './types.ts';
+import type { Account, AnyEvent, ApprovalDecision, AskAnswer, DesignReview, EffortLevel, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, QueuedAnswers, ReviewDraft, ThreadSummary } from './types.ts';
 
 // What to show a person when a request fails: a runner that doesn't have the
 // method (-32601) is too old for it, not broken.
@@ -306,7 +306,7 @@ export class AppStore {
     }
   }
 
-  respond(threadId: string, approvalId: string, decision: ApprovalDecision, extra: { message?: string; answers?: Record<string, string> } = {}): Promise<unknown> {
+  respond(threadId: string, approvalId: string, decision: ApprovalDecision, extra: { message?: string; answers?: Record<string, string>; queued?: QueuedAnswers } = {}): Promise<unknown> {
     return this.rpc.request('approvals.respond', { threadId, approvalId, decision, ...extra });
   }
 

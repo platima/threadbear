@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { errorText, type AppStore } from '../core/store.ts';
 import type { Row } from '../core/model.ts';
+import { stackedAnswer, stackedCalls, tickedCount } from '../core/queued.ts';
 
 // An approval, a question or a secret the agent is waiting on. Once answered
 // it stays in the transcript as a quiet line.
@@ -30,16 +31,71 @@ function useAct() {
   return { busy, act, error };
 }
 
+const payload = (input: Record<string, unknown>) => (typeof input.command === 'string' ? input.command : JSON.stringify(input, null, 2));
+
+// A card with calls queued behind it: every call with its tick and cross, then
+// Allow (as many as are ticked) and Deny all. Always allow is left out.
+function StackedApproval({ c, store, threadId }: { c: Extract<NonNullable<Row['card']>, { type: 'approval' }>; store: AppStore; threadId: string }) {
+  const { busy, act, error } = useAct();
+  const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
+  const calls = stackedCalls(c, c.queued ?? []);
+  const count = tickedCount(calls, unticked);
+  const set = (key: string, ticked: boolean) =>
+    setUnticked((was) => {
+      const next = new Set(was);
+      if (ticked) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const send = (allow: boolean) => {
+    const { decision, queued } = stackedAnswer(calls, unticked, allow);
+    return act(() => store.respond(threadId, c.approvalId, decision, { queued }));
+  };
+  return (
+    <div className="card">
+      <h3>{calls.length} things the agent wants to do</h3>
+      {calls.map((call) => {
+        const ticked = !unticked.has(call.key);
+        return (
+          <div key={call.key} className={`stacked-call${ticked ? '' : ' off'}`}>
+            <div className="stacked-head">
+              <span className="stacked-title">{call.title}</span>
+              <span className="stacked-toggles">
+                <button className={ticked ? 'primary' : ''} disabled={busy} aria-pressed={ticked} title="Allow this one" onClick={() => set(call.key, true)}>
+                  ✓
+                </button>
+                <button className={ticked ? '' : 'primary'} disabled={busy} aria-pressed={!ticked} title="Do not allow this one; the agent is told no" onClick={() => set(call.key, false)}>
+                  ✕
+                </button>
+              </span>
+            </div>
+            <pre>{payload(call.input)}</pre>
+          </div>
+        );
+      })}
+      <div className="btns">
+        <button className="primary" disabled={busy || count === 0} title={count === calls.length ? 'Let the agent do all of these' : 'Let the agent do the ticked ones; the rest are refused'} onClick={() => void send(true)}>
+          Allow {count}
+        </button>
+        <button disabled={busy} title="Do not let the agent do any of these; it is told no" onClick={() => void send(false)}>
+          Deny all
+        </button>
+      </div>
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
 function ApprovalCard({ row, store, threadId }: Props) {
   const c = row.card!;
   const { busy, act, error } = useAct();
   if (c.type !== 'approval') return null;
   const done = c.decision !== undefined;
-  const command = typeof c.input.command === 'string' ? c.input.command : undefined;
+  if (!done && c.queued?.length) return <StackedApproval c={c} store={store} threadId={threadId} />;
   return (
     <div className={`card${done ? ' done' : ''}`}>
       <h3>{done ? `${c.title} (${c.decision})` : c.title}</h3>
-      {!done && <pre>{command ?? JSON.stringify(c.input, null, 2)}</pre>}
+      {!done && <pre>{payload(c.input)}</pre>}
       {!done && (
         <div className="btns">
           {c.options.includes('allow') && (

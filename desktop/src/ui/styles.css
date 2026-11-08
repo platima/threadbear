@@ -115,6 +115,12 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .card h3 { margin: 0 0 6px; font-size: 13px; }
 .card pre { background: var(--bg-code); border-radius: 6px; padding: 8px; margin: 6px 0; max-height: 200px; overflow: auto; font: 12px var(--mono); white-space: pre-wrap; }
 .card .btns { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+/* An approval with calls queued behind it: each call with its tick and cross. An unticked one stays readable and steps back. */
+.stacked-call { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
+.stacked-call.off .stacked-title, .stacked-call.off pre { opacity: 0.45; }
+.stacked-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.stacked-title { font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.stacked-toggles { display: flex; gap: 4px; flex-shrink: 0; }
 .opt { display: block; padding: 4px 0; }
 .opt small { color: var(--dim); display: block; margin-left: 22px; }
 
