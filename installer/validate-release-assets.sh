@@ -160,6 +160,29 @@ for arch in x64 arm64; do
 	fi
 done
 
+# Android: threadbear-v<version>-android.apk, which is on a release only when the
+# release key signed it (release.yml), so it is optional here. One that is there
+# has to verify, and must not be signed with a key made for one run, which a
+# phone could never update from.
+apk=$dir/threadbear-$tag-android.apk
+if [ -f "$apk" ]; then
+	check "threadbear-$tag-android.apk" 10000000
+	apksigner=$(ls -d "${ANDROID_HOME:-/nonexistent}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n 1 || true)
+	if [ -n "$apksigner" ]; then
+		if "$apksigner" verify --print-certs "$apk" >"$tmp/apk-certs" 2>&1; then
+			if grep -q 'Threadbear build made for one run' "$tmp/apk-certs"; then
+				fail "$(basename "$apk") is signed with a key made for one run, not the release key"
+			else
+				echo "OK: $(basename "$apk") has a valid signature, not a run's own key"
+			fi
+		else
+			fail "$(basename "$apk")'s signature does not verify: $(head -n 3 "$tmp/apk-certs" | tr '\n' ' ')"
+		fi
+	else
+		echo "note: apksigner is not on this machine, so $(basename "$apk")'s signature was not checked"
+	fi
+fi
+
 # CHECKSUMS.txt: one line for each package, and nothing else
 echo "CHECKSUMS.txt" >>"$tmp/allowed"
 sums=$dir/CHECKSUMS.txt

@@ -2,17 +2,44 @@ name: android
 
 # Builds the Android app (android/, docs/android.md) on GitHub's Ubuntu image,
 # which already has the Android SDK, an NDK and a JDK, so nobody needs
-# Android Studio to get an APK. The APK is signed with the Android debug key,
-# which is enough to install it on a phone (docs/android.md says how); a
-# release signing key is the person publishing it to make and keep.
+# Android Studio to get an APK.
 #
-# It runs on changes to the app or to the website it wraps, and by hand.
+# The APK is a release build, signed by android/scripts/sign-apk.sh: with the
+# release key when the repository has the four ANDROID_KEYSTORE_* secrets (so a
+# phone takes each build as an update of the last), and with a key made for the
+# run when it has not (enough to install it, once). Whether it was the release
+# key is the workflow's `signed` output, which release.yml reads to decide
+# whether the APK goes on a release.
+#
+# A second job runs the app once on an emulator.
+#
+# It runs on changes to the app or to the website it wraps, by hand, and as a
+# part of release.yml.
 
 on:
   push:
     branches: [main, 'android/**']
     paths: ['android/**', 'web/**', 'package.json', 'package-lock.json', '.github/workflows/android.yml']
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: "The release tag the APK is named for (v0.1.0), when a release calls this"
+        type: string
+        default: ''
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+    outputs:
+      signed:
+        description: "true when the APK is signed with the release key, false when with a key made for the run"
+        value: ${{ jobs.apk.outputs.signed }}
 
 permissions:
   contents: read
@@ -25,6 +52,8 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,30 +93,49 @@ jobs:
           props=src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
           if grep -q '^networkTimeout=' "$props"; then sed -i 's/^networkTimeout=.*/networkTimeout=120000/' "$props"; else echo 'networkTimeout=120000' >> "$props"; fi
           grep networkTimeout "$props"
-      - name: Build the APK
+      - name: Build the release APK
         working-directory: android
         # Up to three tries: the build downloads Gradle, Kotlin and the libraries
-        # from servers that now and then answer 504.
+        # from servers that now and then answer 504. A release build comes out
+        # unsigned, and is signed in the next step.
         run: |
           for i in 1 2 3; do
-            npx tauri android build --apk --debug --target aarch64 armv7 && exit 0
+            npx tauri android build --apk --target aarch64 armv7 && exit 0
             echo "Attempt $i failed"
             sleep 30
           done
           exit 1
-      - name: What was made
-        run: find android/src-tauri/gen/android -name '*.apk' -print -exec ls -l {} \;
+      - name: Sign it
+        id: sign
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          unsigned=$(find android/src-tauri/gen/android -name '*-unsigned.apk' -print -quit)
+          [ -n "$unsigned" ] || { echo "::error::The build made no unsigned APK"; find android/src-tauri/gen/android -name '*.apk'; exit 1; }
+          mkdir -p out
+          name="threadbear-${VERSION:-dev}-android.apk"
+          sh android/scripts/sign-apk.sh "$unsigned" "out/$name" | tee "$RUNNER_TEMP/sign.log"
+          echo "signed=$(tail -n 1 "$RUNNER_TEMP/sign.log" | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          (cd out && sha256sum --text "$name" > "$name.sha256" && cat "$name.sha256")
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: threadbear-android-debug-apk
-          path: android/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          name: threadbear-android-apk
+          path: |
+            out/*.apk
+            out/*.apk.sha256
           if-no-files-found: error
 
-  # The app run once on an emulator, as there is no phone here: a build for the
-  # emulator's CPU (x86_64), installed, opened, and shown a pairing link. The
-  # pictures it takes are kept, and the run fails if the app crashes or the page
-  # never comes up. It is a check that the app starts and takes the link, not a
-  # test of a real phone (a camera, the notification shade, the back button).
+  # The app run once on an emulator, as there is no phone here: a release build
+  # for the emulator's CPU (x86_64), signed with a key of its own, installed,
+  # opened, and shown a pairing link. The pictures it takes are kept, and the
+  # run fails if the app crashes or the page never comes up. It is a check that
+  # the release build (shrunk, as a phone gets it) starts and takes the link, not
+  # a test of a real phone (a camera, the notification shade, the back button).
   emulator:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -119,11 +167,18 @@ jobs:
           props=src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
           if grep -q '^networkTimeout=' "$props"; then sed -i 's/^networkTimeout=.*/networkTimeout=120000/' "$props"; else echo 'networkTimeout=120000' >> "$props"; fi
           for i in 1 2 3; do
-            npx tauri android build --apk --debug --target x86_64 && exit 0
+            npx tauri android build --apk --target x86_64 && exit 0
             echo "Attempt $i failed"
             sleep 30
           done
           exit 1
+      - name: Sign it with a key of its own
+        # No ANDROID_KEYSTORE_* here, on purpose: the emulator never needs the release key.
+        run: |
+          set -eu
+          unsigned=$(find android/src-tauri/gen/android -name '*-unsigned.apk' -print -quit)
+          [ -n "$unsigned" ] || { echo "::error::The build made no unsigned APK"; exit 1; }
+          sh android/scripts/sign-apk.sh "$unsigned" emulator.apk
       - name: Let the emulator use the hardware's virtualisation
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -145,7 +200,12 @@ jobs:
           say "the system image"
           timeout 900 "$sdk/sdkmanager" "emulator" "platform-tools" "$image" | tail -n 5
           say "the virtual device"
+          # One place for the device, for the tool that makes it and the emulator
+          # that finds it (they looked in different ones the first time).
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           echo no | "$sdk/avdmanager" create avd --force -n ci -k "$image" --device pixel_6
+          "$ANDROID_HOME/emulator/emulator" -list-avds
           say "starting the emulator"
           nohup "$ANDROID_HOME/emulator/emulator" -avd ci -no-window -no-audio -no-boot-anim -no-snapshot -accel on -gpu swiftshader_indirect -memory 3072 -cores 2 > emulator.log 2>&1 &
           emulator_pid=$!
@@ -167,9 +227,8 @@ jobs:
         run: |
           set -eu
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
-          apk=$(find android/src-tauri/gen/android -name '*.apk' -print -quit)
-          ls -l "$apk"
-          adb install -r "$apk"
+          ls -l emulator.apk
+          adb install -r emulator.apk
           adb shell pm list packages dev.threadbear.android
           mkdir -p shots
           adb logcat -c

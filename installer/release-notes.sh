@@ -6,10 +6,11 @@
 # shipping a bare list of files) and, with --check, by release.sh and by the
 # workflow's version check.
 #
-# Usage: installer/release-notes.sh [--unsigned] [--check] <tag> [repo] [commit] [run-url]
+# Usage: installer/release-notes.sh [--unsigned] [--android] [--check] <tag> [repo] [commit] [run-url]
 #   e.g. installer/release-notes.sh v0.1.0 platima/threadbear "$GITHUB_SHA" "$RUN_URL"
 #   --unsigned  the build is not code-signed: say so, and what SmartScreen will
 #               show, instead of describing a signature
+#   --android   the release has an Android APK: list it with the downloads
 #   --check     write nothing; only fail (exit 1, with the reason) if the tag
 #               has no changelog entry, the entry has no Highlights, or a final
 #               release's heading still says Unreleased. A pre-release
@@ -20,9 +21,11 @@ set -eu
 
 unsigned=0
 check=0
+android=0
 while [ $# -gt 0 ]; do
     case $1 in
     --unsigned) unsigned=1; shift ;;
+    --android) android=1; shift ;;
     --check) check=1; shift ;;
     --) shift; break ;;
     -*) echo "release-notes: unknown option $1" >&2; exit 2 ;;
@@ -106,6 +109,17 @@ Every change in this release: [CHANGELOG.md](https://github.com/$repo/blob/$tag/
 **Linux** (\`x64\` or \`arm64\`; a desktop with WebKitGTK 4.1, and systemd for the runner's service). It needs [Claude Code](https://claude.com/claude-code) signed in, git and bash; Node comes inside. These are not signed: the SHA-256 in \`CHECKSUMS.txt\` is what to check. [docs/linux.md](https://github.com/$repo/blob/$tag/docs/linux.md) says what it adds and leaves out.
 - \`threadbear-$tag-linux-x64.deb\` / \`threadbear-$tag-linux-arm64.deb\`: for Debian and Ubuntu (\`sudo apt install ./<file>\`)
 - \`threadbear-$tag-linux-x64.tar.gz\` / \`threadbear-$tag-linux-arm64.tar.gz\`: unpack anywhere and run \`./threadbear-desktop\`, or \`./install.sh\` for a menu entry
+EOF
+
+if [ "$android" -eq 1 ]; then
+    cat <<EOF
+
+**Android** (Android 8 or newer). The website in an app of its own, told which deployment to use by the pairing link from the Mac or Windows app. It has no notifications while it is closed. [docs/android.md](https://github.com/$repo/blob/$tag/docs/android.md) says how to pair it and what is left.
+- \`threadbear-$tag-android.apk\`: signed with the release key, so each release installs over the last (Android asks to allow installs from your browser or file manager, once)
+EOF
+fi
+
+cat <<EOF
 
 **Verification:** \`CHECKSUMS.txt\` lists the SHA-256 of every file. On Linux or in Git Bash, \`sha256sum -c --ignore-missing CHECKSUMS.txt\` (you will not have every file). On Windows, in the folder you downloaded to:
 

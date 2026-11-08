@@ -43,12 +43,36 @@ the Convex deployment, as the iPhone does.
 ### Getting it
 
 GitHub builds it: the **android** workflow (`.github/workflows/android.yml`)
-runs on Ubuntu, which has the Android SDK, an NDK and a JDK, and leaves an
-`threadbear-android-debug-apk` artifact on its run. Download it, copy the
-`.apk` to the phone, and open it (Android asks to allow installs from that
-app, once). It is signed with the Android debug key, which is enough to
-install it. An update installs over it as long as it is signed with the same
-key, and a build from another machine uses another debug key, so keep to one.
+runs on Ubuntu, which has the Android SDK, an NDK and a JDK, and leaves a
+`threadbear-android-apk` artifact on its run, and on a release when one is
+made with the release key (below). Download the `.apk`, copy it to the phone,
+and open it (Android asks to allow installs from that app, once).
+
+It is a release build, signed by `android/scripts/sign-apk.sh`:
+
+- **With the release key** (the four secrets below), every build has the same
+  signature, so a phone takes each one as an update of the last.
+- **Without it**, with a key made for that run: enough to install it once, but
+  the next build has another key, so the phone has to remove the app first.
+  A release (`release.yml`) leaves such an APK off, and says so in its log.
+
+To make the release key, once, and keep the file somewhere safe (lose it and
+nobody can update the app without removing it):
+
+    keytool -genkeypair -v -keystore threadbear-release.jks -alias threadbear -keyalg RSA -keysize 4096 -validity 10000
+
+Then add four secrets to the repository (Settings, Secrets and variables,
+Actions, **Secrets**, not variables): `ANDROID_KEYSTORE_BASE64` (the file,
+base64 on one line: `base64 -w0 threadbear-release.jks`, or in PowerShell
+`[Convert]::ToBase64String([IO.File]::ReadAllBytes("threadbear-release.jks"))`),
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`threadbear` above) and
+`ANDROID_KEY_PASSWORD`. The same key later signs a Play Store upload.
+
+A second job in the same workflow runs the release build on an Android 14
+emulator (x86_64, with KVM) on every change: it installs the APK, opens it from
+the launcher, sends it a `threadbear://pair` link and keeps the screenshots
+and log (`threadbear-android-emulator`). That shows the app starts and takes a
+link; it is not a phone with a camera or a notification shade.
 
 To build it yourself you need Android Studio (for the SDK, an NDK and a JDK),
 Rust with the Android targets (`rustup target add aarch64-linux-android
@@ -80,4 +104,5 @@ set. Then, in `android/`:
   deployment's address, so a policy that says so is the next thing to try on a
   real phone.
 
-None of it has been run on a phone yet: it was written and built without one.
+None of it has been run on a phone yet: it was written and built without one,
+and run on an emulator in CI.
