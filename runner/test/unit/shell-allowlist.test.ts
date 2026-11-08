@@ -859,8 +859,16 @@ test("R5: a repo's filter drivers don't run: its own are refused, and your own d
     assert.equal(fs.existsSync(marker), false, cmd);
   }
   // (The same global filter does run for git status, which isn't on the list.)
-  spawnSync(SHELL[0]!, [SHELL[1]!, 'git status --porcelain'], { cwd: repo, env: e, timeout: 20_000 });
-  assert.equal(fs.existsSync(marker), true, 'the test plays it right');
+  // Git decides from the file's stat whether to run it, and on a busy Windows
+  // runner it once didn't (8 Nov), so the file is changed again and it looks
+  // again, a few times, before the test calls its own set-up wrong.
+  let ran = false;
+  for (let i = 0; i < 3 && !ran; i++) {
+    if (i > 0) fs.appendFileSync(path.join(repo, 'a.txt'), `again ${i}\n`);
+    spawnSync(SHELL[0]!, [SHELL[1]!, 'git status --porcelain'], { cwd: repo, env: e, timeout: 20_000 });
+    ran = fs.existsSync(marker);
+  }
+  assert.equal(ran, true, 'the test plays it right');
 });
 
 test('R6: gh runs only `gh pr list`, with the options cannvas uses', () => {

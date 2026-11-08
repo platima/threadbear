@@ -12,7 +12,7 @@ import { nullLogger } from '../../src/log.ts';
 import { RpcError } from '../../src/protocol.ts';
 import { checkSequence } from '../helpers/protocol-check.ts';
 import { tmpDir } from '../helpers/fakes.ts';
-import { NO_LINKS_ON_WINDOWS, SHELL } from '../helpers/platform.ts';
+import { IS_WINDOWS, NO_LINKS_ON_WINDOWS, SHELL, sleepCommand } from '../helpers/platform.ts';
 
 const MIN = 60_000;
 
@@ -128,7 +128,9 @@ test('an idle restart waits for a running turn.end hook, and goes once it has en
   const root = tmpDir();
   const project = path.join(root, 'app');
   fs.mkdirSync(path.join(project, '.threadbear/patches'), { recursive: true });
-  fs.writeFileSync(path.join(project, '.threadbear/patches/h.ts'), `export default { hooks: [{ title: "Slow", on: "turn.end", run: "sleep 0.3", tell: "never" }] };`);
+  // (On Windows the hook is slower to start and the runner's loop can stall a
+  // while: a 0.3 s hook had ended by the time the test looked, on GitHub's runner.)
+  fs.writeFileSync(path.join(project, '.threadbear/patches/h.ts'), `export default { hooks: [{ title: "Slow", on: "turn.end", run: ${JSON.stringify(sleepCommand(IS_WINDOWS ? 2 : 0.3))}, tell: "never" }] };`);
   const h = makeHarness(undefined, {}, { panelsRoot: root, actionShell: SHELL, actionTimeoutMs: 5000 });
   const { r, state } = withRestarter(h);
   const { thread } = create(h, { cwd: project });
