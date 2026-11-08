@@ -797,3 +797,22 @@ speech recognition in place of QuickAsk): another 1 to 2 weeks.
 Decisions for the user: B or C; whose Firebase and relay; and whether Mike's
 backend takes the platform field upstream or the Android build runs against a
 fork's backend until then.
+
+### What was built (8 Nov 2026)
+
+Route B above, with the part that needs a Firebase project and a backend change
+left out: `docs/android.md` has the details, and `android/` and `web/` the code.
+The website is installable (a manifest), and built with `TB_APP=1` it is the
+page of a Tauri 2 Android shell that is told which deployment to use by the
+`threadbear://pair` link or the website's sign-in link (`web/src/pairing.ts`,
+with tests). The `android` workflow builds a debug-signed APK on GitHub's Ubuntu
+image (no Android Studio here): it installs, and its manifest holds the link's
+intent filter and the INTERNET permission. Not run on a phone, and no
+notifications while the app is closed.
+
+## Linux
+
+The M5 of the plan, as a tarball: the same shell, a Node and the runner in one
+folder, the runner as a systemd user service, built on Ubuntu x64 and arm64 by
+the `linux` workflow. `docs/linux.md` says what it does and what it leaves out
+(a `.deb`, an AppImage, a real desktop's look at Wayland and HiDPI).
