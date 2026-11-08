@@ -27,3 +27,6 @@ android/src-tauri/gen/
 # the owner's password manager, never in a checkout
 *.jks
 *.keystore
+# The Firebase project's file for the app: CI takes it from a secret, so builds
+# made without it simply have no push
+android/google-services.json
