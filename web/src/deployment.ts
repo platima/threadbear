@@ -3,6 +3,7 @@
 // Android app is built for none: it is told by the link that pairs it
 // (pairing.ts) and keeps the address in this app's storage, beside the token.
 import type { Pairing } from './pairing';
+import { watchLinksWith, type TauriGlobal } from './links';
 
 const KEY = 'threadbear.deployment';
 
@@ -37,13 +38,8 @@ export function unpair(): void {
 }
 
 // The link that opened the app, or arrives while it is open: Tauri's deep-link
-// plugin (the Android shell turns on withGlobalTauri, so the page needs no
-// package for it). Nothing in a browser.
-type DeepLinkApi = { getCurrent(): Promise<string[] | null>; onOpenUrl(cb: (urls: string[]) => void): Promise<unknown> };
-
+// plugin, through the globals the Android shell's withGlobalTauri gives the
+// page (links.ts says how). Nothing in a browser.
 export function watchLinks(onLink: (url: string) => void): void {
-  const api = (window as unknown as { __TAURI__?: { deepLink?: DeepLinkApi } }).__TAURI__?.deepLink;
-  if (!api) return;
-  void api.getCurrent().then((urls) => urls?.forEach(onLink), () => undefined);
-  void api.onOpenUrl((urls) => urls.forEach(onLink)).catch(() => undefined);
+  watchLinksWith((window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__, onLink);
 }
