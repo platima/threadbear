@@ -23,3 +23,7 @@ dist-app/
 android/node_modules/
 android/src-tauri/target/
 android/src-tauri/gen/
+# The release signing key (docs/android.md): it lives in the GitHub secrets and
+# the owner's password manager, never in a checkout
+*.jks
+*.keystore
