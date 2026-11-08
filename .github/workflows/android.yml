@@ -84,6 +84,16 @@ jobs:
           ls "$ANDROID_HOME/ndk" || true
           echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
           echo "NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+      # Gradle's own downloads (its distribution, Kotlin, the libraries) come from
+      # servers that answered 504 for hours on 8 Nov. Once a build has worked they
+      # are kept, so the next one does not need them again.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-phone-${{ hashFiles('android/src-tauri/Cargo.lock', 'android/package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-phone-
       - name: Make the Gradle project
         working-directory: android
         run: |
@@ -99,10 +109,10 @@ jobs:
         # from servers that now and then answer 504. A release build comes out
         # unsigned, and is signed in the next step.
         run: |
-          for i in 1 2 3; do
+          for i in 1 2 3 4 5; do
             npx tauri android build --apk --target aarch64 armv7 && exit 0
             echo "Attempt $i failed"
-            sleep 30
+            sleep $((i * 45))
           done
           exit 1
       - name: Sign it
@@ -122,6 +132,25 @@ jobs:
           sh android/scripts/sign-apk.sh "$unsigned" "out/$name" | tee "$RUNNER_TEMP/sign.log"
           echo "signed=$(tail -n 1 "$RUNNER_TEMP/sign.log" | cut -d= -f2)" >> "$GITHUB_OUTPUT"
           (cd out && sha256sum --text "$name" > "$name.sha256" && cat "$name.sha256")
+      # What a release would say about this APK (release.yml runs the same check
+      # on the whole set): that the signature verifies, and that a key made for
+      # one run is refused. The other files of a release are missing here, and
+      # their errors are not what is looked at.
+      - name: The release check reads the APK's signature
+        env:
+          SIGNED: ${{ steps.sign.outputs.signed }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          mkdir check
+          cp out/* check/
+          sh installer/validate-release-assets.sh check "${VERSION:-dev}" > check.log 2>&1 || true
+          grep -i 'android' check.log
+          if [ "$SIGNED" = true ]; then
+            grep -q 'has a valid signature, not a run' check.log
+          else
+            grep -q 'signed with a key made for one run' check.log
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: threadbear-android-apk
@@ -160,16 +189,23 @@ jobs:
         run: |
           echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
           echo "NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-emulator-${{ hashFiles('android/src-tauri/Cargo.lock', 'android/package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-emulator-
       - name: Make the Gradle project and build for x86_64
         working-directory: android
         run: |
           npx tauri android init --ci
           props=src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
           if grep -q '^networkTimeout=' "$props"; then sed -i 's/^networkTimeout=.*/networkTimeout=120000/' "$props"; else echo 'networkTimeout=120000' >> "$props"; fi
-          for i in 1 2 3; do
+          for i in 1 2 3 4 5; do
             npx tauri android build --apk --target x86_64 && exit 0
             echo "Attempt $i failed"
-            sleep 30
+            sleep $((i * 45))
           done
           exit 1
       - name: Sign it with a key of its own
@@ -238,7 +274,9 @@ jobs:
           adb exec-out screencap -p > shots/1-first-screen.png
           adb exec-out uiautomator dump /dev/tty > shots/1-first-screen.xml || true
           # A pairing link, as the phone's camera would hand it over
-          adb shell am start -W -a android.intent.action.VIEW -d 'threadbear://pair?url=https%3A%2F%2Fdemo.example.test&token=abc123' dev.threadbear.android
+          # The whole command goes to the phone's shell as one string, so its & stays
+          # in the quotes (outside them it ended the command and started another).
+          adb shell "am start -W -a android.intent.action.VIEW -d 'threadbear://pair?url=https%3A%2F%2Fdemo.example.test&token=abc123' dev.threadbear.android"
           sleep 10
           adb exec-out screencap -p > shots/2-pairing-link.png
           adb exec-out uiautomator dump /dev/tty > shots/2-pairing-link.xml || true
