@@ -166,7 +166,8 @@ done
 # phone could never update from.
 apk=$dir/threadbear-$tag-android.apk
 if [ -f "$apk" ]; then
-	check "threadbear-$tag-android.apk" 10000000
+	# A release build is shrunk: the real one is about 9.5 MB (a debug build, 60 MB)
+	check "threadbear-$tag-android.apk" 4000000
 	apksigner=$(ls -d "${ANDROID_HOME:-/nonexistent}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n 1 || true)
 	if [ -n "$apksigner" ]; then
 		if "$apksigner" verify --print-certs "$apk" >"$tmp/apk-certs" 2>&1; then
