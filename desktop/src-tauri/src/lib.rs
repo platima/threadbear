@@ -1,5 +1,5 @@
-// The Windows shell around the desktop UI (docs/windows-port-plan.md). It does
-// only what a web page can't: a window of its own, a tray icon that keeps the
+// The shell around the desktop UI, for Windows and for Linux
+// (docs/windows-port-plan.md). It does only what a web page can't: a window of its own, a tray icon that keeps the
 // app running when the window is closed, one copy at a time, the window's place
 // remembered, toasts, a folder picker and links that open in the browser.
 //
@@ -33,8 +33,36 @@ struct Bridge(Mutex<Option<Child>>);
 // How long to wait for the bridge to say it is ready.
 const BRIDGE_READY: Duration = Duration::from_secs(20);
 
+// What the program is called where a person types it (in messages), and the
+// name of the Node it brings, the script that sets the runner up, and the
+// words for the sign-in step, which differ between Windows and Linux.
+fn program_name() -> &'static str {
+    if cfg!(windows) {
+        "Threadbear.exe"
+    } else {
+        "threadbear-desktop"
+    }
+}
+
+fn bundled_node(dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        dir.join("node").join("node.exe")
+    } else {
+        dir.join("node").join("bin").join("node")
+    }
+}
+
+fn runner_script_name() -> &'static str {
+    if cfg!(windows) {
+        "install-windows.mjs"
+    } else {
+        "install-linux.mjs"
+    }
+}
+
 // The Node to run things with: THREADBEAR_NODE, else the one the installer put
-// beside this program (node/node.exe), else whatever `node` is on the PATH.
+// beside this program (node/node.exe, or node/bin/node on Linux), else
+// whatever `node` is on the PATH.
 fn find_node() -> PathBuf {
     if let Ok(n) = std::env::var("THREADBEAR_NODE") {
         let p = PathBuf::from(n);
@@ -43,7 +71,7 @@ fn find_node() -> PathBuf {
         }
     }
     if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
-        let bundled = dir.join("node").join("node.exe");
+        let bundled = bundled_node(&dir);
         if bundled.exists() {
             return bundled;
         }
@@ -61,12 +89,12 @@ fn hide_window(cmd: &mut Command) {
     let _ = cmd;
 }
 
-// Runs the runner's install-windows.mjs with these arguments (--installed,
-// --start, --stop, --uninstall, --status, --dry-run, or none to install and
-// start the task), waits, and gives back its exit code and what it printed.
-// The script sits at runner/scripts beside the desktop folder, in the repo and
-// in the installed layout alike. The task's name is the script's business: this
-// never spells it out.
+// Runs the runner's install-windows.mjs (install-linux.mjs on Linux) with these
+// arguments (--installed, --start, --stop, --uninstall, --status, --dry-run,
+// or none to install and start the task or service), waits, and gives back its
+// exit code and what it printed. The script sits at runner/scripts beside the
+// desktop folder, in the repo and in the installed layout alike. The task's
+// name is the script's business: this never spells it out.
 fn runner_script(args: &[String]) -> Result<(i32, String), String> {
     let desktop = find_desktop_dir().ok_or("Couldn't find the desktop folder.")?;
     let script = desktop
@@ -74,7 +102,7 @@ fn runner_script(args: &[String]) -> Result<(i32, String), String> {
         .ok_or("The desktop folder has no parent.")?
         .join("runner")
         .join("scripts")
-        .join("install-windows.mjs");
+        .join(runner_script_name());
     if !script.exists() {
         return Err(format!("Couldn't find {}.", script.display()));
     }
@@ -143,7 +171,8 @@ mod console {
 fn runner_command(rest: &[String]) -> ! {
     if let Some(bad) = unknown_runner_flag(rest) {
         console::print(&format!(
-            "Threadbear.exe --runner: {bad} is not an option.\nOptions: {}. With none, the runner is installed and started at sign-in.\n",
+            "{} --runner: {bad} is not an option.\nOptions: {}. With none, the runner is installed and started at sign-in.\n",
+            program_name(),
             RUNNER_FLAGS.join(" ")
         ));
         std::process::exit(2);
@@ -158,15 +187,43 @@ fn runner_command(rest: &[String]) -> ! {
     std::process::exit(code)
 }
 
+// Where a "no thanks" to the runner is remembered: %LOCALAPPDATA% on Windows,
+// $XDG_STATE_HOME (else ~/.local/state) on Linux.
 fn declined_marker() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("Threadbear").join("declined-runner-task"))
+    let base = if cfg!(windows) {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+    } else if let Some(state) = std::env::var_os("XDG_STATE_HOME").filter(|s| !s.is_empty()) {
+        PathBuf::from(state)
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?).join(".local").join("state")
+    };
+    Some(base.join("Threadbear").join("declined-runner-task"))
 }
 
-// The runner is a Task Scheduler task for this user, and installing the app
-// does not make one (an MSI or a portable zip can't do it per user), so the app
-// offers it the first time it opens and never again once declined. The tray
-// menu offers it whenever someone asks (`asked`).
+// What the app tells the person when it offers to set the runner up.
+fn offer_text() -> String {
+    if cfg!(windows) {
+        format!(
+            "Threadbear's runner does the work in the background. Start it when you sign in to Windows?\n\n\
+             This adds a Task Scheduler task for your account (no admin rights) and puts the tb command on your PATH. \
+             {} --runner --uninstall removes both.",
+            program_name()
+        )
+    } else {
+        format!(
+            "Threadbear's runner does the work in the background. Start it when you log in?\n\n\
+             This adds a systemd user service for your account (no root) and puts the tb command in ~/.local/bin. \
+             {} --runner --uninstall removes both.",
+            program_name()
+        )
+    }
+}
+
+// The runner is a Task Scheduler task (a systemd user service on Linux) for this
+// user, and installing the app does not make one (an MSI, a portable zip or a
+// tarball can't do it per user), so the app offers it the first time it opens
+// and never again once declined. The tray menu offers it whenever someone asks
+// (`asked`).
 fn offer_runner(app: &AppHandle, asked: bool) {
     // Tests and scripted runs set this so no dialog opens on a real desktop.
     if !asked && std::env::var_os("THREADBEAR_NO_RUNNER_OFFER").is_some() {
@@ -191,11 +248,7 @@ fn offer_runner(app: &AppHandle, asked: bool) {
     }
     let handle = app.clone();
     app.dialog()
-        .message(
-            "Threadbear's runner does the work in the background. Start it when you sign in to Windows?\n\n\
-             This adds a Task Scheduler task for your account (no admin rights) and puts the tb command on your PATH. \
-             Threadbear.exe --runner --uninstall removes both.",
-        )
+        .message(offer_text())
         .title("Set up the runner?")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom("Set up".into(), "No thanks".into()))
@@ -292,7 +345,8 @@ fn start_bridge(desktop: &Path) -> Result<(Child, String), String> {
     let mut child = cmd.spawn().map_err(|e| {
         format!(
             "Couldn't start Node to run Threadbear's bridge ({e}).\n\nNode 24 or later needs to be installed and on your PATH. \
-             You can also set THREADBEAR_NODE to the full path of node.exe."
+             You can also set THREADBEAR_NODE to the full path of {}.",
+            if cfg!(windows) { "node.exe" } else { "node" }
         )
     })?;
     let stdout = child.stdout.take().ok_or("The bridge gave no output.")?;
@@ -413,8 +467,32 @@ fn start_ui(app: &mut tauri::App) -> Result<(), String> {
         // sees them. Tauri documents it as needed for HTML5 drag and drop on Windows.
         .disable_drag_drop_handler()
         .build()
-        .map_err(|e| format!("Couldn't open the window ({e}). Threadbear needs Microsoft's WebView2 runtime, which comes with Windows 11 and current Windows 10."))?;
+        .map_err(|e| {
+            if cfg!(windows) {
+                format!("Couldn't open the window ({e}). Threadbear needs Microsoft's WebView2 runtime, which comes with Windows 11.")
+            } else {
+                format!("Couldn't open the window ({e}). Threadbear needs WebKitGTK 4.1 (libwebkit2gtk-4.1) and a desktop session to show it in.")
+            }
+        })?;
 
+    // On Linux the tray is a nicety, not part of the app: GNOME shows none unless an
+    // extension adds one, so a tray that can't be made doesn't stop the window.
+    match build_tray(app) {
+        Err(why) if cfg!(windows) => return Err(why),
+        Err(why) => eprintln!("{why}"),
+        Ok(()) => {}
+    }
+
+    // Offer the runner on the first run, or start it if it is set up but
+    // stopped, off the main thread so the window is not held up by the check.
+    let handle = app.handle().clone();
+    std::thread::spawn(move || offer_runner(&handle, false));
+    watch_bridge(app.handle().clone());
+    Ok(())
+}
+
+// The tray icon and its menu: show the window, set up the runner, quit.
+fn build_tray(app: &mut tauri::App) -> Result<(), String> {
     let build_err = |e: tauri::Error| format!("Couldn't set up the tray icon ({e}).");
     let show = MenuItem::with_id(app, "show", "Show Threadbear", true, None::<&str>).map_err(build_err)?;
     let runner = MenuItem::with_id(app, "runner", "Start the runner at sign-in...", true, None::<&str>).map_err(build_err)?;
@@ -447,12 +525,6 @@ fn start_ui(app: &mut tauri::App) -> Result<(), String> {
         tray = tray.icon(icon.clone());
     }
     tray.build(app).map_err(build_err)?;
-
-    // Offer the runner on the first run, or start it if it is set up but
-    // stopped, off the main thread so the window is not held up by the check.
-    let handle = app.handle().clone();
-    std::thread::spawn(move || offer_runner(&handle, false));
-    watch_bridge(app.handle().clone());
     Ok(())
 }
 
@@ -496,10 +568,14 @@ pub fn run() {
             Ok(())
         })
         // Closing the window keeps the app in the tray; Quit in its menu ends it.
+        // (Not on Linux, where a tray may not be there to bring the window back
+        // from: closing it ends the app, and the runner goes on as its service.)
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            if cfg!(windows) {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .build(tauri::generate_context!())

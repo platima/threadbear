@@ -1,8 +1,10 @@
 {
   "version": "24.22.2",
-  "note": "The Node that ships inside the Windows app. 24 is what the runner is tested on (engines >=24) and the Windows CI job uses. Checksums are from https://nodejs.org/dist/v24.22.2/SHASUMS256.txt. To move to another Node: change the version, replace both hashes from that release's SHASUMS256.txt, and run installer/fetch-node.ps1 for each architecture.",
+  "note": "The Node that ships inside the Windows and Linux apps. 24 is what the runner is tested on (engines >=24) and the CI jobs use. Checksums are from https://nodejs.org/dist/v24.22.2/SHASUMS256.txt: x64 and arm64 are the Windows zips (installer/fetch-node.ps1), linux-x64 and linux-arm64 the .tar.xz files (installer/linux/stage.mjs). To move to another Node: change the version, replace all four hashes from that release's SHASUMS256.txt, and fetch it again for each architecture.",
   "sha256": {
     "x64": "ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2",
-    "arm64": "f47968c213105077f64c6510f007632c0ca2574802a0b5067c327c49abe1c468"
+    "arm64": "f47968c213105077f64c6510f007632c0ca2574802a0b5067c327c49abe1c468",
+    "linux-x64": "48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75",
+    "linux-arm64": "eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8"
   }
 }
