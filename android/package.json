@@ -1,0 +1,14 @@
+{
+  "name": "threadbear-android",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Threadbear for Android: the website in an app, paired with a deployment by a link. See README.md.",
+  "scripts": {
+    "tauri": "tauri",
+    "build:web": "node ../web/scripts/build-app.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

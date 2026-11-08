@@ -12,6 +12,8 @@ import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import { go, threadPath, useRoute } from './route';
 import { useToken } from './token';
+import { isApp } from './deployment';
+import { PairScreen } from './pair';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { ReplyButton } from './reply-button';
 import { CommandState } from './command-state';
@@ -47,12 +49,14 @@ export function App() {
 // ------------------------------------------------------------ sign-in
 
 function SignIn({ expired }: { expired?: boolean }) {
+  // The app is signed in by pairing it, not by a link that opens a website.
+  if (isApp) return <PairScreen expired={expired} />;
   return (
     <main className="signin">
       <img src="/icon.png" alt="" width={72} height={72} />
       <h1>Threadbear</h1>
       <p>{expired ? 'This browser’s sign-in has expired or been revoked.' : 'This browser isn’t signed in yet.'}</p>
-      <p>On the Mac, open Threadbear, then Settings › Phone &amp; browser › Open signed in.</p>
+      <p>On the Mac or Windows PC, open Threadbear, then Settings › Phone &amp; browser › Open signed in.</p>
       <p className="muted small">
         It opens this site in your browser, signed in. From a terminal instead, in the repo: <code>npm run web:sign-in</code> (add <code>-- --qr</code> for a code to scan on another device).
       </p>

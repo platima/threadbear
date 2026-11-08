@@ -1,0 +1,25 @@
+[package]
+name = "threadbear-android"
+version = "0.1.0"
+description = "Threadbear for Android: the website in an app, paired with a deployment by a link"
+edition = "2021"
+
+[lib]
+name = "threadbear_android_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-deep-link = "2"
+# generate_context!() expands to code that names serde_json.
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -103,6 +103,10 @@ code, pre { font-family: var(--mono); font-size: 13px; }
 .signin { max-width: 440px; margin: 12vh auto; padding: 0 24px; text-align: center; }
 .signin h1 { margin: 12px 0 8px; font-size: 22px; }
 .signin code { background: var(--code); border-radius: 5px; padding: 1px 5px; }
+.pair textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; resize: vertical; }
+.pair button { font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--bg); color: var(--text); }
+.pair button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.pair .bad { color: #c0392b; }
 
 /* ---- Markdown, everywhere */
 .md { overflow-wrap: anywhere; }
