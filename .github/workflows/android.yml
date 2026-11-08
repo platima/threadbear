@@ -284,6 +284,10 @@ jobs:
           adb exec-out screencap -p > shots/2-pairing-link.png
           adb exec-out uiautomator dump /dev/tty > shots/2-pairing-link.xml || true
           adb logcat -d > shots/logcat.txt
+          # What the shell and the page said about the link (never the link itself)
+          echo "--- the app's own lines:"
+          grep -E 'RustStdoutStderr: threadbear' shots/logcat.txt || echo "(none)"
+          echo "---"
           adb shell pidof dev.threadbear.android
           if grep -q 'FATAL EXCEPTION' shots/logcat.txt; then grep -A 20 'FATAL EXCEPTION' shots/logcat.txt | head -60; exit 1; fi
           # The page comes up: a screen that is not the blank one (a blank WebView is

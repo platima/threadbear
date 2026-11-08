@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { watchLinksWith, type TauriGlobal } from './links.ts';
+import { LINK_EVENTS, watchLinksWith, type TauriGlobal } from './links.ts';
 
 const tick = () => new Promise((r) => setImmediate(r));
 
 // A Tauri global that answers like the deep-link plugin: `started` for
-// get_current, and `emit` sends a link that arrives while the app is open.
+// get_current, and `emit` sends a link that arrives, on one of the events.
 function fake(started: unknown) {
   const calls: string[] = [];
-  let handler: ((e: { payload: unknown }) => void) | undefined;
+  const handlers = new Map<string, (e: { payload: unknown }) => void>();
   const tauri: TauriGlobal = {
     core: {
       invoke: async (command) => {
@@ -19,12 +19,12 @@ function fake(started: unknown) {
     event: {
       listen: async (event, h) => {
         calls.push(`listen ${event}`);
-        handler = h;
+        handlers.set(event, h);
         return () => undefined;
       },
     },
   };
-  return { tauri, calls, emit: (payload: unknown) => handler?.({ payload }) };
+  return { tauri, calls, emit: (event: string, payload: unknown) => handlers.get(event)?.({ payload }) };
 }
 
 test('the link the app was started by, and one that arrives later, both reach the page', async () => {
@@ -32,11 +32,20 @@ test('the link the app was started by, and one that arrives later, both reach th
   const got: string[] = [];
   watchLinksWith(f.tauri, (u) => got.push(u));
   await tick();
-  assert.deepEqual(f.calls, ['plugin:deep-link|get_current', 'listen deep-link://new-url']);
+  assert.deepEqual(f.calls, ['plugin:deep-link|get_current', ...LINK_EVENTS.map((e) => `listen ${e}`)]);
   assert.deepEqual(got, ['threadbear://pair?url=https%3A%2F%2Fa.convex.cloud&token=t1']);
-  f.emit(['threadbear://pair?url=https%3A%2F%2Fb.convex.cloud&token=t2']);
+  f.emit('deep-link://new-url', ['threadbear://pair?url=https%3A%2F%2Fb.convex.cloud&token=t2']);
   assert.equal(got.length, 2);
   assert.equal(got[1], 'threadbear://pair?url=https%3A%2F%2Fb.convex.cloud&token=t2');
+});
+
+test("the shell's own pairing-link event reaches the page as well, in case the plugin's does not", async () => {
+  const f = fake(null);
+  const got: string[] = [];
+  watchLinksWith(f.tauri, (u) => got.push(u));
+  await tick();
+  f.emit('pairing-link', ['threadbear://pair?x']);
+  assert.deepEqual(got, ['threadbear://pair?x']);
 });
 
 test('an app started from its icon has no link, and what is not a list of strings is no link', async () => {
@@ -44,9 +53,9 @@ test('an app started from its icon has no link, and what is not a list of string
   const got: string[] = [];
   watchLinksWith(f.tauri, (u) => got.push(u));
   await tick();
-  f.emit('not a list');
-  f.emit([1, null, { url: 'x' }]);
-  f.emit(['threadbear://pair?x', 7]);
+  f.emit('deep-link://new-url', 'not a list');
+  f.emit('deep-link://new-url', [1, null, { url: 'x' }]);
+  f.emit('deep-link://new-url', ['threadbear://pair?x', 7]);
   assert.deepEqual(got, ['threadbear://pair?x']);
 });
 
@@ -84,4 +93,19 @@ test('a plugin that fails leaves the other half working', async () => {
   );
   await tick();
   assert.deepEqual(got2, ['threadbear://pair?z']);
+});
+
+test('the notes say what the page found, and never a link', async () => {
+  const f = fake(['threadbear://pair?url=https%3A%2F%2Fsecret.convex.cloud&token=SECRETTOKEN']);
+  const notes: string[] = [];
+  watchLinksWith(f.tauri, () => undefined, (t) => notes.push(t));
+  await tick();
+  f.emit('pairing-link', ['threadbear://pair?url=https%3A%2F%2Fsecret.convex.cloud&token=SECRETTOKEN']);
+  assert.equal(notes[0], 'Tauri globals: core yes, event yes');
+  assert.ok(notes.includes('1 link(s) reached the page by get_current'));
+  assert.ok(notes.includes('1 link(s) reached the page by pairing-link'));
+  assert.ok(notes.every((n) => !/SECRETTOKEN|secret\.convex|threadbear:\/\//.test(n)), notes.join(' | '));
+  const none: string[] = [];
+  watchLinksWith(undefined, () => undefined, (t) => none.push(t));
+  assert.deepEqual(none, ['Tauri globals: core no, event no']);
 });

@@ -41,5 +41,14 @@ export function unpair(): void {
 // plugin, through the globals the Android shell's withGlobalTauri gives the
 // page (links.ts says how). Nothing in a browser.
 export function watchLinks(onLink: (url: string) => void): void {
-  watchLinksWith((window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__, onLink);
+  const w = window as unknown as { __TAURI__?: TauriGlobal; __TAURI_INTERNALS__?: { invoke(command: string, args?: unknown): Promise<unknown> } };
+  // What the page found goes to the shell's log (`adb logcat`), never a link
+  const note = (text: string) => {
+    try {
+      void w.__TAURI_INTERNALS__?.invoke('page_note', { note: text }).catch(() => undefined);
+    } catch {
+      // not in the app
+    }
+  };
+  watchLinksWith(w.__TAURI__, onLink, note);
 }
