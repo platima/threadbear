@@ -47,20 +47,28 @@ function tokenOf(text: string | null): string | undefined {
   return text !== null && TOKEN.test(text) ? text : undefined;
 }
 
+// The parts of a threadbear://pair link, read by hand. A browser's URL class is
+// not to be trusted with a scheme it has no name for: before Chrome 130 or so it
+// reads `threadbear://pair?x` with an empty hostname, and the Android emulator's
+// WebView (Chrome 113) turned every pairing link down for that (8 Nov 2026).
+// The scheme and the word `pair` are case-insensitive, as a URL's are.
+const PAIR_LINK = /^threadbear:\/\/pair\/?\?([^#]*)/i;
+
 function fromLink(link: string): Pairing | undefined {
+  const pair = PAIR_LINK.exec(link);
+  if (pair) {
+    const q = new URLSearchParams(pair[1]);
+    const url = deploymentAddress(q.get('url'));
+    const token = tokenOf(q.get('token'));
+    if (!url || !token) return undefined;
+    const key = q.get('key');
+    return { url, token, ...(key ? { key } : {}) };
+  }
   let u: URL;
   try {
     u = new URL(link);
   } catch {
     return undefined;
-  }
-  if (u.protocol === 'threadbear:') {
-    if (u.hostname !== 'pair') return undefined;
-    const url = deploymentAddress(u.searchParams.get('url'));
-    const token = tokenOf(u.searchParams.get('token'));
-    if (!url || !token) return undefined;
-    const key = u.searchParams.get('key');
-    return { url, token, ...(key ? { key } : {}) };
   }
   if (u.protocol === 'https:' && !u.username && !u.password) {
     const token = tokenOf(new URLSearchParams(u.hash.slice(1)).get('token'));

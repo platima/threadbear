@@ -51,3 +51,30 @@ test('only the first link in a text counts, and its parts are read once', () => 
   const p = parsePairing('threadbear://pair?url=https://a.convex.cloud&token=one and threadbear://pair?url=https://b.convex.cloud&token=two');
   assert.deepEqual(p, { url: 'https://a.convex.cloud', token: 'one' });
 });
+
+// Before Chrome 130 or so a URL with a scheme the browser has no name for was
+// read with an empty hostname, and the Android emulator's WebView (Chrome 113)
+// turned every pairing link down for it. This is that browser's URL.
+test('a WebView that reads threadbear://pair with no hostname still takes the link', () => {
+  const RealURL = globalThis.URL;
+  class OldChromeURL extends RealURL {
+    get hostname(): string {
+      return this.protocol === 'threadbear:' ? '' : super.hostname;
+    }
+  }
+  globalThis.URL = OldChromeURL as typeof URL;
+  try {
+    assert.equal(new URL('threadbear://pair?x').hostname, '', 'the stand-in does what Chrome 113 did');
+    const want = { url: 'https://demo.example.test', token: 'abc123' };
+    assert.deepEqual(parsePairing('threadbear://pair?url=https%3A%2F%2Fdemo.example.test&token=abc123'), want);
+    assert.deepEqual(parsePairing('THREADBEAR://PAIR/?url=https%3A%2F%2Fdemo.example.test&token=abc123#x'), want);
+    // And what it must still refuse
+    assert.equal(parsePairing('threadbear://paired?url=https%3A%2F%2Fa.example.test&token=t'), undefined);
+    assert.equal(parsePairing('threadbear://pair.evil.example?url=https%3A%2F%2Fa.example.test&token=t'), undefined);
+    assert.equal(parsePairing('threadbear://pair?url=https%3A%2F%2Fa.example.test'), undefined);
+    assert.equal(parsePairing('threadbear://pair?token=t'), undefined);
+    assert.equal(parsePairing('threadbear://other?url=https%3A%2F%2Fa.example.test&token=t'), undefined);
+  } finally {
+    globalThis.URL = RealURL;
+  }
+});
