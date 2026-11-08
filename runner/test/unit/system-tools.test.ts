@@ -21,6 +21,7 @@ const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../src')
 const KNOWN: Record<string, { everywhere: true } | { linux: string; files: string[] }> = {
   '/bin/sh': { everywhere: true },
   '/bin/ps': { everywhere: true },
+  '/bin/ls': { linux: 'only on darwin, for its access lists (aclProblem)', files: ['shell-allowlist.ts'] },
   '/bin/bash': { everywhere: true },
   '/usr/bin/bash': { linux: 'one of the shells loginShell looks for', files: ['system-tools.ts'] },
   '/bin/zsh': { linux: 'only on darwin; Linux gets loginShell()', files: ['system-tools.ts'] },
@@ -40,6 +41,7 @@ const KNOWN: Record<string, { everywhere: true } | { linux: string; files: strin
   '/usr/bin/xcrun': { linux: 'behind a darwin check: the secret check is Mac only', files: ['secret-check.ts'] },
   '/usr/bin/pmset': { linux: 'behind darwin checks: the secret check and keeping awake are Mac only', files: ['secret-check.ts', 'keep-awake.ts'] },
   '/usr/bin/caffeinate': { linux: 'behind a darwin check: keeping awake is Mac only', files: ['keep-awake.ts'] },
+  '/usr/bin/lockf': { linux: 'behind a darwin check; flock on Linux', files: ['worktrees.ts'] },
 };
 
 function sources(dir: string): string[] {

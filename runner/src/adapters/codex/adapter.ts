@@ -84,6 +84,9 @@ export type CodexAdapterDeps = {
   normalizer?: NormalizerFactory;
   // A runner.notice warning (configWarning: a broken config.toml).
   onNotice?: (text: string) => void;
+  // More developer instructions for a new thread with tools, read at its
+  // start (an experiment's line, RICH_BLOCKS_LINE).
+  extraGuidance?: () => string;
   timings?: Partial<CodexTimings>;
   maxLineBytes?: number;
   now?: () => number;
@@ -106,6 +109,8 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   start(opts: StartSessionOptions, sink: SessionSink): AgentSession {
+    // Codex never runs in the sandbox (sandbox.ts), so a thread shut in one can't run here.
+    if (opts.confined) throw new Error("This thread runs in a sandbox, and Codex can't, so it wasn't started. Move it to a Claude login.");
     const s = new CodexSession(opts, sink, this.deps, {
       track: (p, live) => this.track(p, live),
       child: (parent, child) => {
@@ -470,7 +475,7 @@ export class CodexSession implements AgentSession {
       note: (text) => this.sink.output({ kind: 'event', event: { type: 'system.note', text } }),
       cwd: () => this.cwd,
       itemPaths: (id) => this.itemPaths.get(id),
-      runsAsCode: (file) => runsAsCodeByName(file) || opts.runsAsCode?.(file) === true,
+      runsAsCode: (file) => runsAsCodeByName(file) || (opts.runsAsCode?.(file) ?? false),
       callTool: (params, o) => this.tools.call(params, o),
       now: this.now,
     });
@@ -526,7 +531,7 @@ export class CodexSession implements AgentSession {
       const tools = dynamicToolSpecs(defs);
       // With tools, the guidance on using them leads the developer
       // instructions (the namespace description is too short to hold it).
-      const developer = [tools.length ? toolGuidance(defs) : '', opts.instructions ?? ''].filter(Boolean).join('\n\n');
+      const developer = [tools.length ? toolGuidance(defs) : '', tools.length ? (this.deps.extraGuidance?.() ?? '') : '', opts.instructions ?? ''].filter(Boolean).join('\n\n');
       const config = { ...common.config, ...(developer ? { developer_instructions: developer } : {}) };
       const params: ThreadStartParams = { ...common, config, ...(tools.length ? { dynamicTools: tools } : {}) };
       res = await this.proc.request<ThreadStartResponse>('thread/start', params);

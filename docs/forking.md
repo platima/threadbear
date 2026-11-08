@@ -16,7 +16,7 @@ Mike's copy (reporting to his Sentry, uploading his debug symbols).
 | What | Where | Notes |
 |---|---|---|
 | Mike's repo checks | `runner/src/sentry.ts` (`MIKES_REPO`), `app/Sources/Threadbear/AppUpdate.swift` (`isMikesRepo`), `app/build-app.sh` (`is_mikes_repo`), `scripts/setup.mjs` (`MIKES_REPO`), `runner/src/upstream.ts` | Crash reports and symbol uploads only happen when `origin` is `mikecann/threadbear`, so a fork never sends anything. setup.mjs uses it to tell a fork from a clone and to set `upstream`. Point these at your repo only if you want your copies to report to you, or others to follow your releases. |
-| Release signing key | `scripts/release-signers` | Mike's public SSH key. Setup pins it into each install's data folder, and only release tags signed with it count as upstream releases. Replace it with your own if others will follow your fork; `releases.publish: true` in your runner.json then makes your runner tag them. |
+| Release signing key | `scripts/release-signers` | Mike's public SSH key. Setup pins it into each install's data folder, and only release tags signed with it count as upstream releases. Replace it with your own if others will follow your fork; `releases.publish: true` in your runner.json then makes your runner tag them, with plain-words notes Opus writes from the commits through its Claude pool. |
 | Sentry DSN | `runner/src/sentry.ts`, `app/Sources/Threadbear/CrashReporting.swift`, `ios/Threadbear/CrashReporting.swift` | The Mac app and runner only report from Mike's repo (above). **The iPhone app reports from any App Store build**, so a fork that ships its own phone app must change or remove the iOS DSN. `THREADBEAR_SENTRY=off` turns reporting off everywhere. |
 | Mac bundle ids | `app/Resources/Info.plist`, `app/build-app.sh` (`BUNDLE_ID`), the runner's LaunchAgent label in `runner/scripts/install-runner.sh` and `runner/launcher/Info.plist`, the log subsystem in `app/Sources/Threadbear/AppLog.swift` | All `com.mikerosoft.threadbear*`. Changing them on an existing install leaves the old LaunchAgent and preferences behind, so change them before you install, or uninstall first. `docs/on-your-mac.md` lists every label. |
 | iPhone bundle ids, app group, team | `ios/Threadbear.xcodeproj/project.pbxproj` (`PRODUCT_BUNDLE_IDENTIFIER`, `DEVELOPMENT_TEAM = 4DTAZSZL6B`), `ios/Config/*.entitlements` and `ios/NotificationService/NotificationService.swift` (`group.com.mikecann.threadbear`), `ios/scripts/appstore-upload.sh` (`TEAM_ID`) | Needed for anything that builds the phone app on your own Apple account. `ios/appstore/` is Mike's App Store listing. |
@@ -65,7 +65,16 @@ gone from your fork, not just quiet.
   (what it installs, reads and talks to).
 - Then `./check.sh` (`--app` when you touched `app/`). To run it on
   another Mac over ssh, put `"checkHost": "<ssh host>"` in your
-  runner.json (Mike's is `tinker-desk`); without it, it runs on yours.
+  runner.json, or `"checkHosts"` with a list of them (Mike's is
+  `["tinker-desk", "cloud"]`; a Linux one only takes `--quick` runs that
+  don't touch `ios/`); without either, it runs on yours. On your Mac it
+  keeps one ssh connection per host through a socket in `~/.ssh/tbc`, and
+  the lock on each checkout's copy in `~/.cache/threadbear-check-locks`,
+  both folders only you can use (mode 700, yours; one that's anything else
+  is never used: ssh then connects afresh each time, and the lock refuses
+  to run). The folder the host reports for its copies must be a plain
+  absolute path (letters, digits, `.`, `_`, `/`, `-`), or that host is
+  passed over.
 
 ### Optional, with a switch
 
@@ -82,13 +91,12 @@ gone from your fork, not just quiet.
 | Connectors gateway | `runner/src/connectors.ts`; app `ConnectorsModel.swift`, `Views/ConnectorsPanel.swift`; Core `Connectors.swift`, `ConnectorsText.swift` | `THREADBEAR_CONNECTORS_URL=off`, or no gateway configured | Self-contained, but Notion task boards read through it. |
 | Notion task boards | `runner/src/notion-tasks.ts`; `useTaskBoards` and `refreshTasks` in `projects.ts`; the board in `Views/ProjectPage.swift` and `HighlightsBoard.swift` | Nothing happens without a gateway and a project with a Notion page | Medium. |
 | Sentry | `runner/src/sentry.ts`, app and iOS `CrashReporting.swift`, `app/SentryBinary/`, dSYM upload in `app/build-app.sh` | `THREADBEAR_SENTRY=off`; a fork never reports from the Mac (section 1) | Self-contained: drop the start calls in `main.ts` and both `ThreadbearApp.swift`, the logger handlers in `main.ts`, the `@sentry/node` dependency and the Swift package references. `HangWatch.swift` keeps its local logs. |
+| The ding when a thread finishes | app `DingPlayer.swift`, Core `Support/CompletionSound.swift` (the sounds, made in code), one call in `AppModel+Connection.swift`, the Notifications section in `Views/SettingsView.swift` | Off by default (Settings > General > Notifications) | Self-contained: drop the two files, the call and the section. |
 | The activity log | `runner/src/activity.ts` (`tb activity`), app `ActivityRecorder.swift`, Core `Support/Activity.swift` | Off by default (Settings > General) | Self-contained: about a dozen `ActivityRecorder.shared` calls in the app. |
 | Following main, upstream releases | `runner/src/update.ts`, `upstream.ts`, `bring-in.ts`, `scripts/release-signers`; app `AppUpdate.swift`, `Views/UpdatesPanel.swift`, `app/stage-update.sh` | `followMain: false` (or `THREADBEAR_FOLLOW_MAIN=0`); upstream is off with no `upstream` remote; `releases.bringIn: "off"` stops the update threads | Medium. Keep `release.ts` and `restart.ts`: handovers and crash rollback use them. |
 | The Xcode 26 build check | `.github/workflows/xcode-26.yml` | GitHub doesn't run a fork's workflows until you turn Actions on for it | Self-contained: delete the file. It builds the Mac and iPhone apps on GitHub's macos-26 runner, as Mike's own Macs only have a newer Xcode. |
 | Thread worktrees, `tb land` | `runner/src/worktrees.ts`, `worktree-setup.sh`, `borrow-worktree.sh`, `docs/thread-worktrees.md` | Only repos whose patch sets `worktree` get them | Medium; AGENTS.md's workflow assumes them. |
-| Review by another lab (experiment) | `runner/src/runner/lab-review.ts`; `waitOnReview` and `deliverReview` in `runner/src/runner/hibernation.ts`; the call in `completeTurn` (`runner.ts`); `src/experiments.ts` | `experiments.labReview` in `runner.json`, off by default | Self-contained: delete the file and those three hooks. Every experiment lives in `experiments.ts`, which stays. |
-| Keep the Mac awake (experiment) | `runner/src/keep-awake.ts`; `workingThreads` in `runner.ts`; built in `main.ts` | `experiments.keepAwake` in `runner.json`, off by default | Self-contained: delete the file and its lines in `main.ts`. |
-| Schedule checks (experiment) | `runner/src/schedule-check.ts`; `checked` and the `check` field in `runner/src/schedules.ts`; `checkArg` in `threadbear-mcp.ts`; `check` on `schedules` in `convex/schema.ts` and `convex/sync.ts` | `experiments.scheduleChecks` in `runner.json`, off by default | Self-contained: delete the file and those lines. Leave the Convex field if rows have it. |
+| Experiments | One file each, `runner/src/experiments/<id>.md`, read by `runner/src/experiments.ts`; [docs/experiments.md](experiments.md) lists where each lives and how to take it out | `experiments.<id>` in `runner.json`, off by default | Each one: what docs/experiments.md says, then delete its file and run `npm run experiment-docs` in `runner/`. `experiments.ts` stays. |
 | Codex | `runner/src/adapters/codex/`, `runner/src/updates/codex.ts` | No Codex login, and `cliUpdates: { codex: "off" }` | Woven in, but keep `'codex'` decodable as a provider. |
 | BrowserBear link hand-off | `app/Sources/Threadbear/BrowserBear.swift`, called from `PaneModel.swift` | Inert unless BrowserBear (Mike's own tool) is running | Self-contained: one file, one call. |
 | The Browser panel | `app/Sources/Threadbear/Views/AgentBrowserPanel.swift`, and `BrowserBearPipe.swift`, with cases in `PanelsView.swift`, `WindowDock.swift`, `PanelRequests.swift` and `Automation.swift` | Inert without BrowserBear; existing profiles use its private socket, separate agent Chrome retains its CDP path | Self-contained. |

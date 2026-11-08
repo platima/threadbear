@@ -6,9 +6,11 @@
 #   ./check.sh [--quick | --app] [--all] [--e2e] [--shots DIR] [--local]
 #
 # With a check host set (THREADBEAR_CHECK_HOST, or "checkHost" in the
-# runner's runner.json, an ssh host such as "tinker-desk"), the checks run
-# on that Mac instead (scripts/check-remote.sh), so test suites and the
-# app's test windows stay off this one. If it can't be reached they run
+# runner's runner.json, an ssh host such as "tinker-desk"; or "checkHosts",
+# a list of them, the first free one that can run it taking each run, which
+# wins over checkHost so a copy older than the list still finds one), the checks run
+# there instead (scripts/check-remote.sh), so test suites and the app's test
+# windows stay off this one. If it can't be reached they run
 # here. --e2e always runs here, as it needs this Mac's claude login.
 #   --local       run here even with a check host set (narrow it down too:
 #                 one test file, or swift test --filter)
@@ -31,6 +33,9 @@
 # tests run with any of the options when ios/ changed, --quick included, so
 # `tb land` runs them (MicTapTests guards a crash the phone hit twice). On
 # main itself, with nothing changed, everything runs.
+#
+# A Swift step that prints nothing for 10 minutes, or runs for an hour, is
+# killed and fails, saying which test was running and where it was stuck.
 #
 # How long the app takes depends on its build cache: under a minute when
 # app/.build is warm, 5 to 10 minutes in a folder that has never built
@@ -85,7 +90,7 @@ if [ "$LOCAL" = 0 ] && [ "$E2E" = 0 ]; then
   else
     RUNNER_JSON="${THREADBEAR_HOME:-$HOME/Library/Application Support/Threadbear}/runner.json"
     CHECK_HOST="$( [ -x "$NODE" ] && [ -f "$RUNNER_JSON" ] && "$NODE" -e '
-      try { const h = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).checkHost; if (typeof h === "string") console.log(h) } catch {}' "$RUNNER_JSON")"
+      try { const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const h = Array.isArray(j.checkHosts) ? j.checkHosts : j.checkHost; const l = (Array.isArray(h) ? h : [h]).filter((x) => typeof x === "string" && /^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(x)); if (l.length) console.log(l.join(",")) } catch {}' "$RUNNER_JSON")"
   fi
   if [ -n "$CHECK_HOST" ]; then
     "$ROOT/scripts/check-remote.sh" "$CHECK_HOST" ${ARGS[@]+"${ARGS[@]}"}
@@ -156,6 +161,17 @@ step() {
 "
   fi
 }
+
+# The Swift steps run through this, as one frozen test holds the check host
+# and so every thread's landing (scripts/limit-step.mjs says how it tells, and
+# app/Tests/ModalGuard is the quicker catch for a modal). Each test prints when
+# it starts, so 10 minutes of nothing is plenty even on a loaded machine, and a
+# build from cold takes 5 to 10 minutes in all but keeps printing.
+# NSUnbufferedIO is what makes xctest print as it goes when it isn't on a
+# terminal: without it a frozen run's log doesn't say which test.
+export NSUnbufferedIO=YES
+LIMITED=("$NODE" "$ROOT/scripts/limit-step.mjs"
+  --silence "${THREADBEAR_CHECK_SILENCE_SECS:-600}" --total "${THREADBEAR_CHECK_TOTAL_SECS:-3600}" --)
 
 # The runner's unit tests, as `npm test` runs them (runner/package.json),
 # plus a reporter that writes the files with a failure. Plenty of them
@@ -230,11 +246,11 @@ if [ "$QUICK" = 0 ]; then
   if [ ! -d "$ROOT/app/Tools/mock-runner/node_modules" ]; then
     step "mock runner packages" "$ROOT/app/Tools/mock-runner" npm ci --no-audit --no-fund
   fi
-  step "app build" "$ROOT/app" swift build
-  step "app tests" "$ROOT/app" env THREADBEAR_REQUIRE_MOCK=1 swift test
+  step "app build" "$ROOT/app" "${LIMITED[@]}" swift build --disable-keychain
+  step "app tests" "$ROOT/app" env THREADBEAR_REQUIRE_MOCK=1 "${LIMITED[@]}" swift test --disable-keychain
   # BearDock, the window's docking panels: its layout tests.
   if needed '^dock/'; then
-    step "dock tests" "$ROOT/dock" swift test
+    step "dock tests" "$ROOT/dock" "${LIMITED[@]}" swift test --disable-keychain
   else
     skip "dock tests" "nothing in dock/ changed"
   fi
@@ -242,7 +258,7 @@ fi
 # The iPhone app's logic and source checks (ios/ThreadbearKit), on the Mac.
 # The app itself only builds with Xcode; ios/scripts/sim-shots.sh does that.
 if needed '^ios/'; then
-  step "iphone kit tests" "$ROOT/ios/ThreadbearKit" swift test
+  step "iphone kit tests" "$ROOT/ios/ThreadbearKit" "${LIMITED[@]}" swift test --disable-keychain
 else
   skip "iphone kit tests" "nothing in ios/ changed"
 fi

@@ -32,7 +32,7 @@ import type { Logger } from './log.ts';
 import type { Notification } from './runner.ts';
 import type { RemoteThread, RemoteThreads } from './thread-index.ts';
 import type { Post, Subscribe } from './sync.ts';
-import { ErrorCode, RpcError } from './protocol.ts';
+import { ErrorCode, RpcError, remoteCreateMode } from './protocol.ts';
 import { seal } from './secrets.ts';
 
 export const SCALE = 8;
@@ -847,14 +847,14 @@ export class Relay {
         const changes: [Record<string, unknown>, Partial<RemoteThread>][] = [];
         if (typeof p.title === 'string') changes.push([{ title: p.title }, { title: p.title }]);
         if (typeof p.archived === 'boolean') {
-          changes.push(p.archived ? [{ archive: true, ...(typeof p.verdict === 'string' ? { verdict: p.verdict } : {}) }, { archivedAt: now }] : [{ unarchive: true }, { archivedAt: undefined }]);
+          changes.push(p.archived ? [{ archive: true, ...(typeof p.verdict === 'string' ? { verdict: p.verdict } : {}), ...(p.archivedBy === 'agent' ? { by: 'agent' } : {}) }, { archivedAt: now }] : [{ unarchive: true }, { archivedAt: undefined }]);
         }
         if (typeof p.starred === 'boolean') changes.push([{ star: p.starred }, { starredAt: p.starred ? (t?.starredAt ?? now) : undefined }]);
         if ('snoozedUntil' in p) {
           const s = p.snoozedUntil;
           changes.push(s === null ? [{ wake: true }, { snoozedUntil: undefined }] : s === 'restart' ? [{ snooze: { untilRestart: true } }, { snoozedUntil: UNTIL_RESTART }] : [{ snooze: { until: String(s) } }, { snoozedUntil: String(s) }]);
         }
-        const known = new Set(['threadId', 'title', 'archived', 'verdict', 'starred', 'snoozedUntil']);
+        const known = new Set(['threadId', 'title', 'archived', 'verdict', 'archivedBy', 'starred', 'snoozedUntil']);
         if (Object.keys(p).some((k) => !known.has(k) && p[k] !== undefined)) this.unsupported(w, 'Changing its login, model or settings');
         // Kept as each is done, so one failing after another went through
         // doesn't lose the one that did.
@@ -892,11 +892,10 @@ export class Relay {
     if (Array.isArray(p.images) && p.images.length) this.unsupported(undefined, 'Sending pictures to another Mac');
     const args: Record<string, unknown> = { text: String(p.text ?? '') };
     for (const k of ['cwd', 'accountId', 'model', 'effort']) if (typeof p[k] === 'string') args[k] = p[k];
-    // "Ask before edits": left out, that runner would give it full access.
-    // A runner from before step 5 ignores it (full access), as it would a
-    // phone's; every runner follows main within minutes, and the sidebar
-    // list doesn't say a runner's release to check against.
-    if (p.permissionMode === 'ask' || p.permissionMode === 'full' || p.permissionMode === 'auto') args.permissionMode = p.permissionMode;
+    // Left out, that runner would give it full access, so every mode goes
+    // (Plan first as Ask plus a flag, which an older runner reads as Ask)
+    // and one this runner doesn't know is refused (remoteCreateMode).
+    Object.assign(args, remoteCreateMode(p.permissionMode));
     const done = await this.command(runnerId, undefined, 'create', args, { done: true, ms: CALL_MS });
     if (!done.threadId) throw new RpcError(ErrorCode.other, `${this.runnerName(runnerId)} didn't say which thread it made.`);
     const now = new Date(this.deps.clock.now()).toISOString();
@@ -994,6 +993,6 @@ function describe(method: string): string {
     case 'threads.delete':
       return 'Deleting it';
     default:
-      return method.startsWith('panels.') || method.startsWith('actions.') ? 'Its patches' : method.startsWith('reviews.') ? 'Design reviews' : 'That';
+      return method.startsWith('panels.') || method.startsWith('actions.') || method.startsWith('patches.') ? 'Its patches' : method.startsWith('reviews.') ? 'Design reviews' : method.startsWith('buttons.') ? 'Reply buttons' : 'That';
   }
 }

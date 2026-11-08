@@ -25,9 +25,15 @@ import { spawn } from 'node:child_process';
 import { atomicWriteFileSync } from './fsutil.ts';
 import { IS_WINDOWS } from './platform.ts';
 import { killGroup } from './proc.ts';
+import { dropPartialStart, safeStart } from './safe-cut.ts';
 import { plainShell } from './system-tools.ts';
 
+// How long a check may run unless its schedule says (checkTimeoutSecs),
+// and the most it can say: a Slack read through `codex exec` took 77 s by
+// 6 Nov 2026 and failed every hour on the fixed minute (schedule 7a3a98d9).
+// The cap keeps a stuck check from holding a runner's stop for long.
 export const CHECK_TIMEOUT_MS = 60_000;
+export const MAX_CHECK_TIMEOUT_SECS = 300;
 export const CHECK_OUTPUT_CHARS = 8000;
 export const MAX_CHECK_CHARS = 2000;
 
@@ -80,8 +86,32 @@ export function dropKeptCheck(home: string, scheduleId: string, check?: string):
   } catch {
     return;
   }
-  for (const n of names) if (n.startsWith(`${scheduleId}.`) && n.endsWith('.kept.json')) fs.rmSync(path.join(dir, n), { force: true });
+  for (const n of names) if (n.startsWith(`${scheduleId}.`) && (n.endsWith('.kept.json') || n.endsWith('.held'))) fs.rmSync(path.join(dir, n), { force: true });
 }
+
+// A check whose approval no longer holds (schedules.ts, `held`): the digest
+// of what it'd run that a thread has been told about, so that's said once
+// and later runs are skipped until it's approved again, rather than an agent
+// starting every five minutes to hear the same thing.
+function heldCheckFile(home: string, scheduleId: string): string {
+  return path.join(home, 'schedule-checks', `${scheduleId}.held`);
+}
+
+export function heldToldAbout(home: string, scheduleId: string): string | undefined {
+  try {
+    return fs.readFileSync(heldCheckFile(home, scheduleId), 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+export function noteHeldTold(home: string, scheduleId: string, hash: string): void {
+  fs.mkdirSync(path.join(home, 'schedule-checks'), { recursive: true });
+  atomicWriteFileSync(heldCheckFile(home, scheduleId), hash);
+}
+
+export const HELD_EXTRA = "\n\nIts check wasn't run, as what it runs has changed since it was approved (or it was never approved on this runner). So this run went ahead without it, and later runs are skipped until it's approved again. Look at what it runs, and if that's fine, call update_schedule with the same check to approve it as it is now.";
+export const HELD_SKIP = "Its check is waiting to be approved again, as what it runs has changed: update_schedule with the same check approves it.";
 
 // A check under way in some runner process, so another one (the next
 // release, in a handover) waits for it rather than running it again: the
@@ -91,8 +121,18 @@ export function runningCheckFile(home: string, scheduleId: string): string {
   return path.join(home, 'schedule-checks', `${scheduleId}.running.json`);
 }
 
-export function markCheckRunning(home: string, scheduleId: string, at: number): void {
-  atomicWriteFileSync(runningCheckFile(home, scheduleId), JSON.stringify({ pid: process.pid, at }));
+// limitMs: its time limit, so another process knows when the marker has
+// gone stale. A marker without one (an older release's) had a minute.
+export function markCheckRunning(home: string, scheduleId: string, at: number, limitMs = CHECK_TIMEOUT_MS): void {
+  atomicWriteFileSync(runningCheckFile(home, scheduleId), JSON.stringify({ pid: process.pid, at, limitMs }));
+}
+
+// A schedule's own time limit for its check, in ms.
+// A record from the backend hasn't been through checkedTimeout, so anything
+// but a positive number is the default rather than a timer firing at once.
+export function checkLimitMs(checkTimeoutSecs: unknown): number {
+  if (typeof checkTimeoutSecs !== 'number' || !(checkTimeoutSecs > 0)) return CHECK_TIMEOUT_MS;
+  return Math.min(checkTimeoutSecs, MAX_CHECK_TIMEOUT_SECS) * 1000;
 }
 
 export function clearCheckRunning(home: string, scheduleId: string): void {
@@ -100,14 +140,15 @@ export function clearCheckRunning(home: string, scheduleId: string): void {
 }
 
 export function checkRunningElsewhere(home: string, scheduleId: string, now: number): boolean {
-  let m: { pid?: unknown; at?: unknown };
+  let m: { pid?: unknown; at?: unknown; limitMs?: unknown };
   try {
     m = JSON.parse(fs.readFileSync(runningCheckFile(home, scheduleId), 'utf8'));
   } catch {
     return false;
   }
   if (typeof m?.pid !== 'number' || typeof m.at !== 'number' || m.pid === process.pid) return false;
-  if (now - m.at > CHECK_TIMEOUT_MS * 2) return false;
+  const limit = typeof m.limitMs === 'number' && m.limitMs > 0 ? Math.min(m.limitMs, MAX_CHECK_TIMEOUT_SECS * 1000) : CHECK_TIMEOUT_MS;
+  if (now - m.at > limit * 2) return false;
   try {
     process.kill(m.pid, 0);
     return true;
@@ -143,27 +184,35 @@ export function runCheck(p: { command: string; cwd: string; home: string; schedu
       // (Windows stops the whole tree with taskkill instead).
       detached: !IS_WINDOWS,
     });
+    // Whether what's kept has lost its start, maybe in a secret whose start is gone.
+    let cutFront = false;
     const take = (b: Buffer) => {
       // Keep the end: the last lines of a long output say the most.
-      out = (out + b.toString('utf8')).slice(-CHECK_OUTPUT_CHARS * 2);
+      out += b.toString('utf8');
+      if (out.length > CHECK_OUTPUT_CHARS * 2) {
+        out = out.slice(-CHECK_OUTPUT_CHARS * 2);
+        cutFront = true;
+      }
     };
     child.stdout?.on('data', take);
     child.stderr?.on('data', take);
     const timer = setTimeout(() => {
       if (child.pid && !killGroup(child.pid, 'SIGKILL')) child.kill('SIGKILL');
-      finish({ ok: false, output: clip(out), why: `it took longer than ${Math.round((p.timeoutMs ?? CHECK_TIMEOUT_MS) / 1000)} seconds` });
+      // Says how to give it longer, for the agent that reads it.
+      finish({ ok: false, output: clip(cutFront ? dropPartialStart(out) : out), why: `it took longer than ${Math.round((p.timeoutMs ?? CHECK_TIMEOUT_MS) / 1000)} seconds; the schedule's checkTimeoutSecs can give it up to ${MAX_CHECK_TIMEOUT_SECS}` });
     }, p.timeoutMs ?? CHECK_TIMEOUT_MS);
-    child.on('error', (e) => finish({ ok: false, output: clip(out), why: e.message }));
+    child.on('error', (e) => finish({ ok: false, output: clip(cutFront ? dropPartialStart(out) : out), why: e.message }));
     child.on('close', (code, signal) => {
-      if (code === 0) finish({ ok: true, output: clip(out) });
-      else finish({ ok: false, output: clip(out), why: signal ? `it was stopped by ${signal}` : `it exited with ${code}` });
+      if (code === 0) finish({ ok: true, output: clip(cutFront ? dropPartialStart(out) : out) });
+      else finish({ ok: false, output: clip(cutFront ? dropPartialStart(out) : out), why: signal ? `it was stopped by ${signal}` : `it exited with ${code}` });
     });
   });
 }
 
 function clip(s: string): string {
   const t = s.trim();
-  return t.length > CHECK_OUTPUT_CHARS ? '…' + t.slice(-CHECK_OUTPUT_CHARS) : t;
+  // Its last part, begun where no secret is cut in two (safe-cut.ts).
+  return t.length > CHECK_OUTPUT_CHARS ? '…' + t.slice(safeStart(t, t.length - CHECK_OUTPUT_CHARS)) : t;
 }
 
 // What goes under the scheduled message, or that the run is skipped.

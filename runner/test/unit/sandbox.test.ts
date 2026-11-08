@@ -68,7 +68,7 @@ test('the docker run mounts the folder, the login and the CLI at the same paths,
   assert.deepEqual(a.slice(a.indexOf('--user'), a.indexOf('--user') + 2), ['--user', '1000:1000']);
 });
 
-test("another login's config folder goes in instead of ~/.claude, without ~/.claude.json", () => {
+test("another login's config folder goes in instead of ~/.claude, without ~/.claude.json", skipOnWindows('Sandboxes mount a path at the same path in a Linux container, which a Windows path cannot be'), () => {
   const cfg = '/home/mike/Library/Application Support/Threadbear/accounts/claude-1';
   const run = dockerRun(
     { command: '/c', args: [], cwd: '/home/mike/sandboxed/x', env: { CLAUDE_CONFIG_DIR: cfg } },

@@ -5,6 +5,12 @@ import SwiftUI
 import ThreadbearCore
 import WebKit
 
+/// The rail's built-in Files panel, below the folder's own panels (such as
+/// Worktrees): the thread's folder to look through.
+enum BuiltinPanels {
+    static let files = "threadbear.files"
+}
+
 /// A pane section as a panel in the window's dock (WindowDock): Highlights,
 /// one of the thread's panels, or Patches, for the thread that's selected,
 /// or on a project's page the project's panels and Patches.
@@ -38,6 +44,11 @@ struct DockPane: View {
                     case .panel(AgentBrowser.panelId):
                         // One per thread, with its own tabs and picture.
                         AgentBrowserPanel(thread: thread).id(thread.id)
+                    case .panel(BuiltinPanels.files):
+                        // The thread's folder, browsed as a folder link is:
+                        // a file opens over it, Back comes back.
+                        PreviewBody(thread: thread, preview: app.filesPanelPreview(for: thread))
+                            .id(thread.id)
                     case .panel(let id):
                         if let panel = thread.panels.first(where: { $0.id == id }) {
                             panelView(panel, in: thread)
@@ -94,11 +105,14 @@ struct DockPaneButtons: View {
                         }
                         PaneHeaderButton(symbol: "arrow.clockwise", help: "Reload panel") { pool.reloadConvex(selected) }
                         PaneHeaderButton(symbol: "arrow.up.right", help: "Open \(selected) in browser") {
-                            if let target = pool.convexBrowserURL(convex) { NSWorkspace.shared.open(target) }
+                            if let target = pool.convexBrowserURL(convex) { OpenGate.openWeb(target) }
                         }
                     } else {
                         PaneHeaderButton(symbol: "arrow.clockwise", help: "Reload panel") { WebPanelPool.shared.reloadIfLoaded(url) }
-                        PaneHeaderButton(symbol: "arrow.up.right", help: "Open in browser") { NSWorkspace.shared.open(url) }
+                        // The panel's page is the patch's or a runner's to say:
+                        // a web page opens, another Mac's file is fetched
+                        // from it, anything else asks (OpenGate).
+                        PaneHeaderButton(symbol: "arrow.up.right", help: "Open in browser") { app.openLink(url, in: thread, external: true) }
                     }
                 }
             }
@@ -235,6 +249,12 @@ struct PanelRail: View {
                 }
                 .onAppear {
                     if tabs.contains(where: { $0.state == "yours" }) { app.showPane(.panel(AgentBrowser.panelId)) }
+                }
+            }
+            // The thread's folder, in the folder browser.
+            if project == nil {
+                ActivityButton(symbol: "folder", title: "Files", tip: "The files in this thread's folder", active: app.dock.isShowing(BuiltinPanels.files)) {
+                    app.clickRail(.panel(BuiltinPanels.files), in: thread)
                 }
             }
             Spacer(minLength: zoomed(8))
@@ -383,11 +403,28 @@ struct PatchesList: View {
                     Text(PatchesList.waitingText(patch, untrusted: untrusted))
                         .font(.system(size: TypeScale.detail))
                         .foregroundStyle(Color(nsColor: Theme.needsYou))
+                    let trusting = app.isTrusting(patch)
                     Button("Trust") { app.trustPatches([patch], in: thread.id) }
                         .controlSize(.small)
-                        .tip(patch.source == "claude"
-                             ? "Let this folder's Claude Code hooks, status line and MCP servers run on your Mac, and its environment settings (which can change where Claude sends your messages) apply, from your next message. Open the files below to read them first."
+                        .disabled(trusting)
+                        .tip(trusting
+                             ? "Trusting it. The runner loads its patches again, which takes a few seconds."
+                             : patch.source == "claude"
+                             ? "Let this folder's Claude Code hooks, status line and MCP servers run on your Mac, and its environment settings (which can change where Claude sends your messages) and permission rules apply, from your next message. Open the files below to read them first."
                              : "Load this patch and let its code run on your Mac from now on. Open the file below to read it first.")
+                    if trusting {
+                        SpinnerMark(color: .secondaryLabelColor).frame(width: zoomed(11), height: zoomed(11))
+                    }
+                }
+                // What its permission rules would let run without asking.
+                if let grants = patch.grants, !grants.isEmpty {
+                    ForEach(grants, id: \.self) { grant in
+                        Text(grant)
+                            .font(.system(size: TypeScale.small))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
                 }
             } else if let error = patch.error {
                 Text(error)
@@ -418,7 +455,7 @@ struct PatchesList: View {
             }
             if let file = patch.file {
                 Button {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: file))
+                    app.openFile(file, of: thread)
                 } label: {
                     Text(file.abbreviatingHome)
                         .font(.system(size: TypeScale.small))
@@ -432,7 +469,7 @@ struct PatchesList: View {
                 if patch.untrusted != nil, let helpers = patch.helpers, !helpers.isEmpty {
                     ForEach(helpers, id: \.self) { helper in
                         Button {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: helper))
+                            app.openFile(helper, of: thread)
                         } label: {
                             Text((patch.source == "claude" ? "Also trusts " : "Imports ") + helper.abbreviatingHome)
                                 .font(.system(size: TypeScale.small))
@@ -623,8 +660,8 @@ private struct ConvexPanel: View {
                         .textSelection(.enabled)
                 }
                 HStack(spacing: zoomed(8)) {
-                    if let url = signIn.url.flatMap(URL.init(string:)) {
-                        Button("Open the page again") { NSWorkspace.shared.open(url) }
+                    if let url = signIn.page {
+                        Button("Open the page again") { OpenGate.openWeb(url) }
                             .tip("Open Convex's sign-in page in your browser")
                     }
                     Button("Cancel") { stopSignIn() }
@@ -723,10 +760,17 @@ private struct ConvexPanel: View {
         signIn = ConvexLogin(state: "waiting")
         signInTask = Task {
             var status = await app.convexPanelLogin(threadId: threadId, panelId: panelId, force: force)
-            if case .success(let started) = status, let url = started.url.flatMap(URL.init(string:)) {
-                NSWorkspace.shared.open(url)
+            if case .success(let started) = status, let url = started.page {
+                OpenGate.openWeb(url)
             }
             while !Task.isCancelled, case .success(let now) = status, now.state == "waiting" {
+                // A page that isn't Convex's sign-in, first or on a later
+                // look: nothing to open, and the sign-in stops saying so.
+                if let refused = now.refusedPage {
+                    signIn = nil
+                    signInFailure = refused
+                    return
+                }
                 signIn = now
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { return }
@@ -827,28 +871,11 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
             // it only itself and the assets it names (LocalPreviewSite), in
             // a store of its own so it shares nothing with dashboards' logins.
             config.setURLSchemeHandler(previews, forURLScheme: LocalPreviewSchemeHandler.scheme)
-            let store = WKWebsiteDataStore.nonPersistent()
-            // Every connection the store would make goes to a proxy on this
-            // Mac that isn't there. The rule list and the navigation policy
-            // stop loads, but WebKit opens a connection for a clicked link
-            // (and looks its host up) before asking; through the proxy, no
-            // name is looked up and nothing leaves (the egress test caught it).
-            store.proxyConfigurations = [ProxyConfiguration(httpCONNECTProxy: previewProxy)]
-            // Loopback skips any proxy, so a click on a link away from the
-            // preview is stopped in the page, before WebKit would connect.
-            config.userContentController.addUserScript(WKUserScript(
-                source: LocalPreviewSchemeHandler.linkGuard, injectionTime: .atDocumentStart, forMainFrameOnly: false))
-            config.websiteDataStore = store
-            config.preferences.javaScriptCanOpenWindowsAutomatically = false
-            // A local preview is static: the page's own scripts never run.
-            // Whatever its markup names it can show, but no script can read
-            // those bytes back (verify-fix: `<a href="private.png">` let a
-            // page's script fetch the file). Other panels keep JavaScript.
-            // The app's own scripts (the link guard) still run. Once Mike
-            // lets this page's bytes run (Run them), its own view has them
-            // on: a script can then read what the page names, and the
-            // guards here and in LocalPreviewSchemeHandler keep it in the pane.
-            config.defaultWebpagePreferences.allowsContentJavaScript = digest != nil
+            PreviewSandbox.lockDown(config, proxy: previewProxy, pageScripts: digest != nil)
+            // Once Mike lets this page's bytes run (Run them), its own view
+            // has its scripts on: a script can then read what the page
+            // names, and the guards here and in LocalPreviewSchemeHandler
+            // keep it in the pane.
             if digest != nil {
                 config.userContentController.addUserScript(WKUserScript(
                     source: LocalPreviewSchemeHandler.scriptsGuard, injectionTime: .atDocumentStart, forMainFrameOnly: false,
@@ -856,13 +883,8 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
                 config.userContentController.addUserScript(WKUserScript(
                     source: LocalPreviewSchemeHandler.clipboardGuard, injectionTime: .atDocumentStart, forMainFrameOnly: false))
                 // And the async Clipboard API off in WebKit itself, which only
-                // offers it privately, like WebRTC's switch below.
+                // offers it privately, like WebRTC's switch (PreviewSandbox).
                 Self.setFeature("AsyncClipboardAPIEnabled", false, in: config.preferences)
-            }
-            // WebRTC goes round proxies and content rules alike. WebKit only
-            // offers the switch privately; KVC finds `_setPeerConnectionEnabled:`.
-            if config.preferences.responds(to: NSSelectorFromString("_setPeerConnectionEnabled:")) {
-                config.preferences.setValue(false, forKey: "peerConnectionEnabled")
             }
         } else {
             config.websiteDataStore = .default()
@@ -871,7 +893,7 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         keep(view, as: slot)
         if url.isFileURL {
             // No load until the rule list blocking the network is on it.
-            withPreviewRules { [weak self, weak view] rules in
+            PreviewSandbox.withRules { [weak self, weak view] rules in
                 guard let self, let view else { return }
                 guard let rules else {
                     // Without it the page could reach the network: show nothing.
@@ -908,27 +930,6 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     /// by its configuration, the only kind with the preview scheme's handler.
     private func isPreviewView(_ view: WKWebView) -> Bool {
         view.configuration.urlSchemeHandler(forURLScheme: LocalPreviewSchemeHandler.scheme) != nil
-    }
-
-    /// The content rule list that keeps a local preview off the network,
-    /// compiled once (WebKit keeps it in its own store for next time).
-    private var previewRules: WKContentRuleList?
-    private var previewRulesWaiting: [(WKContentRuleList?) -> Void]?
-    private func withPreviewRules(_ use: @escaping (WKContentRuleList?) -> Void) {
-        if let previewRules { return use(previewRules) }
-        if previewRulesWaiting != nil { previewRulesWaiting?.append(use); return }
-        previewRulesWaiting = [use]
-        WKContentRuleListStore.default().compileContentRuleList(
-            forIdentifier: "threadbear-local-preview", encodedContentRuleList: LocalPreviewSchemeHandler.ruleList
-        ) { [weak self] rules, _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.previewRules = rules
-                let waiting = self.previewRulesWaiting ?? []
-                self.previewRulesWaiting = nil
-                waiting.forEach { $0(rules) }
-            }
-        }
     }
 
     /// Serves every local HTML preview (Daybreak finding 6).
@@ -1047,8 +1048,8 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         }
         if isConvexView(webView), navigationAction.targetFrame?.isMainFrame ?? true,
            let url = navigationAction.request.url, url.host != Self.convexEmbedded.host,
-           ["http", "https"].contains(url.scheme) {
-            NSWorkspace.shared.open(url)
+           LinkPolicy.web(url) != nil {
+            OpenGate.openWeb(url)
             decisionHandler(.cancel)
             return
         }
@@ -1096,7 +1097,9 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if isPreviewView(webView) { return nil }
         guard let url = navigationAction.request.url else { return nil }
-        if isConvexView(webView) { NSWorkspace.shared.open(url) } else { webView.load(URLRequest(url: url)) }
+        // A page's window.open goes to the browser only as a web page: the
+        // page chose the address (OpenGate refuses anything else).
+        if isConvexView(webView) { OpenGate.openWeb(url) } else { webView.load(URLRequest(url: url)) }
         return nil
     }
 }
@@ -1140,7 +1143,14 @@ private struct ImagePanel: View {
                 if Task.isCancelled { return }
                 render = result
                 // A new NSImage each time: the file's name doesn't change.
-                image = result?.image.flatMap { NSImage(contentsOfFile: $0.path) }
+                // Another Mac's picture is that Mac's file, fetched from it,
+                // never this Mac's file at that path (Codex review, 7 Nov).
+                if let path = result?.image?.path, let thread = app.threads[threadId], thread.isRemote {
+                    let copy = try? await app.remoteCopy(path, in: thread)
+                    image = copy.flatMap { $0.truncated ? nil : NSImage(contentsOf: $0.url) }
+                } else {
+                    image = result?.image.flatMap { NSImage(contentsOfFile: $0.path) }
+                }
                 try? await Task.sleep(for: .seconds(result?.image == nil ? 5 : 3))
             }
         }

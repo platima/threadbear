@@ -318,6 +318,17 @@ public struct SecretItem: Sendable, Hashable {
     }
 }
 
+public extension RowContent {
+    /// The note a thread back from hibernating says so in. The runner words
+    /// it (`wake` in runner/src/runner/hibernation.ts), and every way it says
+    /// it starts like this. It's what Mike came to the thread to read, so it
+    /// never folds into the work above it, and it gets the bear.
+    var isWakeNote: Bool {
+        if case .note(let text) = self { return text.hasPrefix("Woke up") }
+        return false
+    }
+}
+
 public enum RowContent: Sendable, Hashable {
     case user(UserMessage)
     case assistant(TextItem)
@@ -414,9 +425,13 @@ public struct AsksCard: Sendable, Hashable {
     /// picked Something else on, by ask index. The card makes room for
     /// each box from it; the box itself is a text view over that room.
     public var notes: [Int: AskNote]
+    /// The done card's loose ends, as the runner checked them (protocol
+    /// "Loose ends"): nil when it didn't, empty when nothing's left.
+    public var looseEnds: [LooseEnd]?
 
-    public init(seq: Int, asks: [Ask], ticked: Set<Int> = [], isOpen: Bool = true, picks: [Int: Int] = [:], next: [String] = [], notes: [Int: AskNote] = [:], pickedNext: Set<Int> = [], explainNext: Set<Int> = []) {
+    public init(seq: Int, asks: [Ask], ticked: Set<Int> = [], isOpen: Bool = true, picks: [Int: Int] = [:], next: [String] = [], notes: [Int: AskNote] = [:], pickedNext: Set<Int> = [], explainNext: Set<Int> = [], looseEnds: [LooseEnd]? = nil) {
         self.seq = seq
+        self.looseEnds = looseEnds
         self.notes = notes
         self.pickedNext = pickedNext
         self.explainNext = explainNext

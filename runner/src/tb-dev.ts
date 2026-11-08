@@ -452,6 +452,8 @@ export function formatStatus(s: RunnerStatus, threads: ThreadSummary[], now: num
   const u = s.update;
   if (u) lines.push(formatUpdate(u, now));
   if (s.upstream && (s.upstream.state !== 'off' || s.upstream.published)) lines.push(formatUpstream(s.upstream, now).split('\n')[0]);
+  // A held release is the one thing here that wants doing something about.
+  if (s.upstream?.held) lines.push(heldLine(s.upstream.held));
   if (s.sync) lines.push(formatSync(s.sync, now));
   if (s.sync?.scrub) lines.push(...formatSecrets(s.sync.scrub, s.secretCheck, now, s.sync.full));
   // Releases never touch the LaunchAgent (launch.mjs, the plist, Threadbear
@@ -472,7 +474,8 @@ function formatSync(y: NonNullable<RunnerStatus['sync']>, now: number): string {
   const behind = y.backend && y.backend.apiVersion < y.backend.expected ? `; its backend is older than this runner (API ${y.backend.apiVersion}, wants ${y.backend.expected}): deploy it with runner/scripts/deploy-backend.mjs` : '';
   const held = y.schedulesHeld ? `; ${y.schedulesHeld} schedule${y.schedulesHeld === 1 ? '' : 's'} too big (or taken) for this runner's key, so its schedules stay in schedules.json on this Mac (tb logs says which)` : '';
   const rotating = y.ownerKeyRotating ? '; RUNNER_KEY_NEXT is still set, so two main keys work: finish with tb runner rotate-owner --finish' : '';
-  const push = y.pushFailing ? `\n${pushFailingText(y.pushFailing)}` : '';
+  // A self-hosted backend can't send phone notifications (docs/self-hosting.md).
+  const push = y.pushOff ? "\nPhone notifications: off, as this backend can't send them (a self-hosted backend can't use the push relay)." : y.pushFailing ? `\n${pushFailingText(y.pushFailing)}` : '';
   const f = y.full;
   const full = f
     ? f.backendTooOld
@@ -524,11 +527,17 @@ function formatUpdate(u: NonNullable<RunnerStatus['update']>, now: number): stri
   }
 }
 
+// Mike's runner, when GitHub's checks keep main's tip from being today's
+// release (upstream.ts ciVerdict).
+function heldLine(h: { commit: string; why: string }): string {
+  return `Today's release is waiting: ${h.why} (${h.commit.slice(0, 8)})`;
+}
+
 // Mike's releases (src/upstream.ts): a line, then what's in a release
 // main doesn't have yet.
 export function formatUpstream(u: UpstreamStatus, now: number): string {
   const checked = u.checkedAt ? `, checked ${duration(now - Date.parse(u.checkedAt))} ago` : '';
-  const published = u.published ? `\nLast release tagged here: ${u.published.tag}` : '';
+  const published = (u.published ? `\nLast release tagged here: ${u.published.tag}` : '') + (u.held ? `\n${heldLine(u.held)}` : '');
   const r = u.release;
   switch (u.state) {
     case 'off':
@@ -542,6 +551,9 @@ export function formatUpstream(u: UpstreamStatus, now: number): string {
       const more = r.changes > r.subjects.length ? `\n  … and ${r.changes - r.subjects.length} more` : '';
       return [
         `Mike's releases: ${r.tag} has ${r.changes} change${r.changes === 1 ? '' : 's'} this copy's main doesn't${checked}`,
+        // Mike's plain-words notes first, when his runner wrote some.
+        ...(r.notes ?? []).flatMap((n) => [`  What changed in ${n.tag}:`, ...n.lines.map((l) => `    ${l}`)]),
+        ...(r.notes?.length ? ['  Every change:'] : []),
         ...r.subjects.map((x) => `  ${x}`),
       ].join('\n') + more + `\nIts commit, signed with the pinned key: ${r.commit}. To bring it in, follow docs/bringing-in-updates.md and merge that commit (git merge ${r.commit}), or use Bring them in, in the app's Updates panel.`;
     }

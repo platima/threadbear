@@ -34,6 +34,8 @@ struct ThreadbearApp: App {
         Window("Threadbear", id: "main") {
             RootView()
                 .environment(app)
+                // Links in SwiftUI text go through OpenGate.
+                .environment(\.openURL, OpenGate.urlAction(files: .unknown))
                 // A click counts while another app is in front, rather than
                 // only bringing the window forward (FirstClick.swift).
                 .allowsWindowActivationEvents()
@@ -51,8 +53,10 @@ struct ThreadbearApp: App {
         .defaultLaunchBehavior(.presented)
         .restorationBehavior(.disabled)
         .commands {
-            CommandGroup(after: .appInfo) {
+            // The Den, in place of the stock About panel.
+            CommandGroup(replacing: .appInfo) {
                 IconMenuItems {
+                    Button("About Threadbear", systemImage: "pawprint") { DenWindow.show(app: app) }
                     // Only while a newer build is staged (AppUpdater).
                     if let staged = updater.staged {
                         Button("Restart to Update to \(staged.short)", systemImage: "arrow.clockwise") { updater.restartToUpdate() }
@@ -92,7 +96,7 @@ struct ThreadbearApp: App {
             }
             // Back and forward through the threads and views, as Safari
             // and Finder have them. The mouse's side buttons do the same
-            // (MouseNavigation).
+            // (MouseNavigation), and so do trackpad swipes (SwipeNavigation).
             CommandMenu("Go") {
                 IconMenuItems {
                     Button("Back", systemImage: "chevron.left") { app.goBack() }
@@ -141,13 +145,13 @@ struct ThreadbearApp: App {
                     .disabled(app.selection == nil)
                     Button("Stop", systemImage: "stop.circle") { app.interrupt() }
                         .shortcut(.stop)
-                        .disabled(app.selectedThread?.status.isBusy != true)
+                        .disabled(app.selectedThread?.status.isBusy != true || app.selection.map { app.isBusy(BusyKey.stop($0)) } == true)
                     Divider()
                     Button("Copy Transcript as Markdown", systemImage: "doc.plaintext") {
                         if let id = app.selection { app.session(for: id).copyTranscript() }
                     }
                     .shortcut(.copyTranscript)
-                    .disabled(app.selection == nil)
+                    .disabled(app.selection.map { app.isBusy(BusyKey.copying($0)) } ?? true)
                     Divider()
                     // ⌘1 to ⌘4 in the activity bar's order, as VS Code numbers
                     // its views. Hibernating and Archive are sections of the
@@ -176,6 +180,19 @@ struct ThreadbearApp: App {
             SettingsView()
                 .environment(app)
         }
+        // The app menu's Settings… made here rather than left to the
+        // Settings scene, so its key comes from the shortcut list and
+        // Settings > Keyboard can change it. It opens the same window.
+        // On the Settings scene, not the main window: from there the
+        // scene's own Settings… stayed beside it, two in the menu (7 Nov).
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                IconMenuItems {
+                    SettingsLink { Label("Settings…", systemImage: "gearshape") }
+                        .shortcut(.settings)
+                }
+            }
+        }
     }
 }
 
@@ -184,9 +201,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var linkedThread: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A voice server the last run left behind by crashing (VoiceServer).
+        VoiceServer.reapLeftover()
         MainActor.assumeIsolated {
             let app = AppModel.shared
             let arguments = CommandLine.arguments
+            // Before any window draws. Automation's --appearance comes later and wins.
+            AppAppearance.saved().apply()
             if AppUpdater.isInstalledApp {
                 HangWatch.start(folder: HangWatch.defaultFolder, build: BuildInfo.read(bundle: Bundle.main.bundleURL)?.short, report: CrashReporting.reportHang)
             }
@@ -213,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // Not over the pages a screenshot, perf or scripted run opens.
             Tour.shared.introsEnabled = !scripted
             if !scripted { Notifier.setUp(delegate: self) }
+            if !scripted { app.milestones = MilestoneWatch() }
             app.onThreadsLoaded = { [weak self] in
                 LaunchClock.threadsLoaded()
                 if let threadId = self?.linkedThread {
@@ -233,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             app.start()
             MouseNavigation.install(app: app)
+            SwipeNavigation.shared.install(app: app)
             // Records nothing unless it's switched on in Settings.
             ActivityRecorder.shared.install(app: app)
             MenuWatch.install()
@@ -261,6 +284,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             ActivityRecorder.shared.quit()
+            VoiceMode.shared.stop()
+            VoiceServer.shared.stop()
             AppUpdater.shared.applyAtQuit()
         }
     }

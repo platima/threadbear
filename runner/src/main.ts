@@ -11,7 +11,7 @@ import { PatchTrust } from './patch-trust.ts';
 import type { RunnerUpdates } from './runner.ts';
 import { Peers, PrimaryLink, ThreadRouter, drainChildrenName, peersElsewhere, phoneCommands, primaryElsewhere, projectRouter, removeDrainInfo, scheduleRouter, writeDrainInfo, type CrossRunnerHooks, type Elsewhere } from './handover.ts';
 import { RunnerUpdater, releaseTreeAt } from './update.ts';
-import { SETTLE_MS, Upstream } from './upstream.ts';
+import { RELEASE_NOTES_SYSTEM, SETTLE_MS, Upstream } from './upstream.ts';
 import { BringIn } from './bring-in.ts';
 import { UpdateFixer } from './fix-update.ts';
 import { bringInSetting } from './settings.ts';
@@ -49,9 +49,12 @@ import { acquireLock } from './lock.ts';
 import { removeTempFiles } from './fsutil.ts';
 import { Models } from './models/index.ts';
 import { SettingsService, modelMethods, settingsMethods } from './settings.ts';
+import { InstructionsStore, instructionsMethods } from './instructions.ts';
 import { ConvexSync, defaultRunnerName, ensureRunnerId, readSyncKey } from './sync.ts';
 import { pushFailingText } from './push-failing.ts';
 import { Scrubber } from './scrub.ts';
+import { useScrubForCuts } from './safe-cut.ts';
+import { redactSecrets } from './redaction.ts';
 import { SecretCheck } from './secret-check.ts';
 import { SharedPools } from './shared-pools.ts';
 import { sandboxFor } from './sandbox.ts';
@@ -61,9 +64,9 @@ import { detectMachineIcon } from './machine.ts';
 import { filesMethods } from './files.ts';
 import { devicesMethods } from './devices.ts';
 import { flushSentry, reportException, reportLoggedError, reportLoggedWarning, startSentry } from './sentry.ts';
-import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, SERVER_NAME, buildThreadbearTools, threadbearMcpServer, type RemoteControl } from './threadbear-mcp.ts';
+import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, RICH_BLOCKS_LINE, SERVER_NAME, buildThreadbearTools, threadbearMcpServer, type RemoteControl } from './threadbear-mcp.ts';
 import { CrossRunner } from './cross-runner.ts';
-import { EFFORT_LEVELS, type EffortLevel } from './protocol.ts';
+import { EFFORT_LEVELS, ErrorCode, RpcError, isPermissionMode, type EffortLevel, type PermissionMode } from './protocol.ts';
 
 // Tells launch.mjs this runner calls its listening() hook (release.ts), so
 // it may stop one that hasn't started listening in time.
@@ -95,6 +98,10 @@ async function main(): Promise<void> {
   process.on('exit', () => lock.release());
 
   if (!fs.existsSync(cfg.claudePath)) log.warn('claude CLI not found', { path: cfg.claudePath });
+  // A sync or gateway URL that would send keys in the clear (secure-url.ts):
+  // left unused, and said here as well as in tb status and the Connectors panel.
+  if (cfg.sync.urlRefused) log.warn('sync URL refused, so sync is off', { reason: cfg.sync.urlRefused });
+  if (cfg.connectorsRefused) log.warn('Connectors gateway URL refused, so it is off', { reason: cfg.connectorsRefused });
 
   // Temp files from atomic writes a crash interrupted.
   removeTempFiles(cfg.home, paths.run(cfg.home), paths.threads(cfg.home));
@@ -198,7 +205,7 @@ async function main(): Promise<void> {
     claudePath: cfg.claudePath,
     registry,
     log,
-    mcpServersFor: (threadId) => ({ [SERVER_NAME]: threadbearMcpServer(router(), threadId, scheduleControl(), projectControl(), appRestarts, () => cfg.bulletReplies, pocketControl, () => cfg.oneReply, () => cfg.connectorsUrl, gatewayHealth, () => experimentOn(cfg.home, 'scheduleChecks'), remoteControl) }),
+    mcpServersFor: (threadId) => ({ [SERVER_NAME]: threadbearMcpServer(router(), threadId, scheduleControl(), projectControl(), appRestarts, () => cfg.bulletReplies, pocketControl, () => cfg.oneReply, () => cfg.connectorsUrl, gatewayHealth, () => experimentOn(cfg.home, 'scheduleChecks'), remoteControl, () => experimentOn(cfg.home, 'richBlocks'), () => experimentOn(cfg.home, 'replyButtons')) }),
     oneReply: () => cfg.oneReply,
     sandboxFor: (cwd) => sandboxFor(cfg.sandbox, cwd),
     alwaysAsk: ALWAYS_ASK_TOOLS,
@@ -211,8 +218,9 @@ async function main(): Promise<void> {
     codexArgs: cfg.codexArgs,
     registry,
     log,
-    toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl }),
+    toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons') }),
     onNotice: (text) => runner.notice('warning', text),
+    extraGuidance: () => (experimentOn(cfg.home, 'richBlocks') ? RICH_BLOCKS_LINE : ''),
   });
   // The runner's own small-model calls, on the settings' Claude pool.
   const models = new Models({
@@ -229,7 +237,9 @@ async function main(): Promise<void> {
   // message gets (Runner.forAgent). Only phone messages read it, and they
   // only come through that mirror.
   let atMac: boolean | undefined;
+  const instructions = new InstructionsStore({ home: cfg.home, token, publish: (n) => runner.publish(n) });
   runner = new Runner({
+    standingInstructions: () => instructions.given(),
     projects,
     atMac: () => atMac,
     config: cfg,
@@ -320,6 +330,8 @@ async function main(): Promise<void> {
     syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && readSyncKey(cfg.home)),
   });
   scheduler.start();
+  // The done card's loose ends list the check-ins booked for a thread.
+  runner.schedulesFor = (id) => scheduler.list(id);
   // Projects need the threads loaded (their counts, and the thread side of
   // membership); the librarian needs both.
   projects.start(runner);
@@ -348,6 +360,7 @@ async function main(): Promise<void> {
   // (docs/protocol.md, "Connectors"). Off when there's no gateway.
   const connectors = new ConnectorsMonitor({
     url: cfg.connectorsUrl,
+    ...(cfg.connectorsRefused ? { offReason: cfg.connectorsRefused } : {}),
     log,
     onChange: (s) => runner.publish({ method: 'connectors.updated', params: { connectors: s } }),
   });
@@ -384,6 +397,10 @@ async function main(): Promise<void> {
     runner.sharedPools = sharedPools;
   }
   const scrubber = new Scrubber({ secretsDir: paths.secrets(cfg.home), log });
+  // Text cut short anywhere in the runner is cut where none of these values
+  // (nor anything the rules know) is split in two (safe-cut.ts). Not counted
+  // in the scrubber's status: nothing is taken out here.
+  useScrubForCuts((text) => redactSecrets(scrubber.known.mask(text)).text);
   runner.secrets.onWritten = (value) => scrubber.known.add(value);
   // Set once the relay is made, further down; sync's list goes through it.
   let relayRef: Relay | undefined;
@@ -403,6 +420,7 @@ async function main(): Promise<void> {
       listProjects: () => projects.list({ archived: true }),
       listSchedules: () => scheduler.list(),
       listAccounts: () => runner.hello().accounts,
+      buttons: (id) => runner.listButtons(id).buttons,
     },
     // The phone's commands, through the same methods the app's RPCs use,
     // on whichever runner has the thread.
@@ -426,6 +444,8 @@ async function main(): Promise<void> {
     readKey: () => readSyncKey(cfg.home),
     restart: (reason) => void restarter.request({ when: 'idle', reason }),
     scrubber,
+    elsewhere: (id) => peers.owns(id) || peers.isArriving(id),
+    elsewhereIds: () => [...peers.summaries(['inbox', 'snoozed', 'archived']).map((t) => t.id), ...peers.arrivingIds()],
     version: RUNNER_VERSION,
     release: RELEASE.release,
     startedAt,
@@ -544,6 +564,11 @@ async function main(): Promise<void> {
     },
     onChange: () => publishUpdates(),
     onChecked: (status) => void bringIn.consider(status),
+    // Only asked on Mike's runner, once a day as it tags a release.
+    writeNotes: async (commits) => {
+      const res = await models.generate({ feature: 'release-notes', cwd: thisRelease?.checkout, system: RELEASE_NOTES_SYSTEM, prompt: commits, maxTokens: 800, strong: true });
+      return res.ok ? res.value : undefined;
+    },
   });
   // runner.updates: sent when what hello's `updates` says changes.
   let lastUpdates = '';
@@ -571,7 +596,7 @@ async function main(): Promise<void> {
   updaterReady = true;
 
   runner.attachClis(updates);
-  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...modelMethods(models), ...devicesMethods(sync), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
+  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
   // runner.status carries the CLI statuses too (protocol, "runner.status").
   const restartStatus = methods['runner.status'];
   methods['runner.status'] = (p) => {
@@ -584,6 +609,14 @@ async function main(): Promise<void> {
   methods['remoteThreads.list'] = () => relayRef?.overlay(sync.remoteThreads()) ?? sync.remoteThreads();
   // Every runner's machine figures, for the Mac app's Runners panel.
   methods['runners.stats'] = async () => ({ stats: await sync.runnerStats() });
+  // Mike's runner order (docs/protocol.md, "Other runners' threads"): every
+  // runner's id, this one's too. The answer comes back as remoteThreads.updated.
+  methods['runners.setOrder'] = async (p) => {
+    const ids = (p as { runnerIds?: unknown } | undefined)?.runnerIds;
+    if (!Array.isArray(ids) || !ids.every((x) => typeof x === 'string')) throw new RpcError(ErrorCode.badParams, 'runnerIds must be a list of runner ids');
+    await sync.setRunnerOrder(ids);
+    return {};
+  };
   // A file here, for a Mac app showing one of this runner's threads from
   // another Mac (files.ts).
   Object.assign(methods, filesMethods());
@@ -601,7 +634,14 @@ async function main(): Promise<void> {
   }));
   // Starting threads on other runners, and a runner key's requests for
   // that (docs/protocol.md, "Asking another runner").
-  const permission = (m: string | undefined) => (m === 'full' || m === 'ask' || m === 'auto' ? m : undefined);
+  // A request's mode as the card showed it: none is the default (full
+  // access, as the card says), and one this runner doesn't know is refused
+  // rather than dropped to that default (Daybreak, 7 Nov 2026).
+  const permission = (m: string | undefined): PermissionMode | undefined => {
+    if (m === undefined || m === '') return undefined;
+    if (!isPermissionMode(m)) throw new RpcError(ErrorCode.badParams, `Unknown permission mode ${JSON.stringify(m)}, so the thread wasn't started.`);
+    return m;
+  };
   const cross = new CrossRunner({
     self: () => ({ id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName() }),
     backend: () => sync,
@@ -654,6 +694,7 @@ async function main(): Promise<void> {
         ...(rolledBack ? [{ level: 'warning' as const, message: rolledBack }] : []),
         ...(noCodex ? [{ level: 'warning' as const, message: noCodex }] : []),
         ...restarter.helloNotices(),
+        ...instructions.helloNotices(),
       ];
     },
   }));

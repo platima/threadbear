@@ -76,6 +76,9 @@ public enum UpdatesText {
     /// why it can't tell. Nil when there's nothing to say (no upstream).
     public static func upstreamLine(_ u: RunnerUpdates.Upstream?) -> String? {
         guard let u else { return nil }
+        // Held comes first: it's the one that wants something doing (a red
+        // build on main), and the last tag is still in tb status.
+        if let why = u.heldWhy, u.state == "off" { return "Your next release for everyone else is waiting: \(why)." }
         if let tag = u.publishedTag, u.state == "off" { return "Your last release for everyone else is \(tag)." }
         switch u.state {
         case "available":
@@ -91,6 +94,24 @@ public enum UpdatesText {
         default:
             return nil
         }
+    }
+
+    /// What the From Mike section lists under a release: the plain-words
+    /// notes Mike's runner wrote, a heading per release when there's more
+    /// than one, or (from older tags) the first commit subjects.
+    public static func releaseLines(_ r: RunnerUpdates.Upstream.Release) -> [(heading: String?, lines: [String])] {
+        guard !r.notes.isEmpty else { return [(nil, Array(r.subjects.prefix(5)))] }
+        if r.notes.count == 1, r.notes[0].tag == r.tag { return [(nil, r.notes[0].lines)] }
+        var groups = r.notes.map { note in
+            let date = releaseDate(note.tag)
+            return (heading: Optional(date.hasPrefix("of ") ? String(date.dropFirst(3)) : date), lines: note.lines)
+        }
+        // An older runner may supply notes only for older tags. Keep those
+        // dated, and show the subjects so the newest changes remain visible.
+        if !r.notes.contains(where: { $0.tag == r.tag }), !r.subjects.isEmpty {
+            groups.append((heading: "Every change", lines: Array(r.subjects.prefix(5))))
+        }
+        return groups
     }
 
     /// "release/2026-10-30" as "of 30 Oct".

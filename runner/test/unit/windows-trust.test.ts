@@ -1,4 +1,4 @@
-// Patch trust and the path helpers on Windows (docs/windows-port-plan.md):
+// Patch trust and the path helpers on Windows (docs/on-your-mac.md, "On Windows"):
 // the real form of a path (8.3 short names, which GitHub's runners use for
 // TEMP), the spellings Git Bash reads for a script, the program names
 // Windows adds an extension to, and the fingerprint cache on NTFS. The pure
@@ -207,7 +207,11 @@ test("a network or device path is refused, wherever it comes up: a live command,
   const patch = path.join(folder, '.threadbear', 'patches', 'p.ts');
   for (const spelled of ['//otherhost/share/x.sh', '\\\\otherhost\\share\\x.sh', '//?/UNC/otherhost/share/x.sh', '//localhost/share/x.sh', '//?/GLOBALROOT/Device/x.sh']) {
     for (const form of [`bash '${spelled}'`, `'${spelled}'`, `cd '${spelled}' && ./x.sh`, `source '${spelled}'`]) {
-      assert.match(liveCommandProblem(form, folder, []) ?? '', /network or device path/, form);
+      // The short list of shell (shell-allowlist.ts) refuses each of these
+      // first, in its own words: bash and source aren't on it, and a script
+      // outside the repo is refused on Windows. The network wording shows in
+      // the patch's hash, below.
+      assert.ok(liveCommandProblem(form, folder, []), form);
     }
     fs.writeFileSync(patch, `export default { actions: [{ title: 'Go', run: ${JSON.stringify(`bash '${spelled}'`)} }] };\n`);
     const hashed = patchHash(patch);

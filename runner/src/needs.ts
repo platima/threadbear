@@ -5,6 +5,7 @@
 
 import type { Ask, AskLink, NeedsWho, PersistedEvent } from './protocol.ts';
 import { hasLineBreak, replaceLinks } from './linear-text.ts';
+import { cutSafely, safeEnd } from './safe-cut.ts';
 
 export type Needs = { needs: NeedsWho; asks?: Ask[]; next?: string[] };
 
@@ -117,7 +118,7 @@ export function summaryFromTool(input: unknown): string[] | undefined {
   for (const b of v) {
     // The app draws them as a list, so a bullet of its own would be doubled.
     const t = typeof b === 'string' ? b.trim().replace(/^[-*•]\s+/, '').trim() : '';
-    if (t) out.push(t.slice(0, MAX_BULLET));
+    if (t) out.push(cutSafely(t, MAX_BULLET));
     if (out.length === MAX_SUMMARY) break;
   }
   return out.length ? out : undefined;
@@ -166,7 +167,7 @@ export function waitForFromTool(input: unknown): WaitFor[] | undefined {
   for (const x of w) {
     const o = x && typeof x === 'object' ? (x as Record<string, unknown>) : undefined;
     const id = (typeof x === 'string' ? x : typeof o?.thread === 'string' ? o.thread : '').trim();
-    const until = typeof o?.until === 'string' ? o.until.replace(/\s+/g, ' ').trim().slice(0, MAX_UNTIL) : '';
+    const until = typeof o?.until === 'string' ? cutSafely(o.until.replace(/\s+/g, ' ').trim(), MAX_UNTIL) : '';
     if (!id || out.some((y) => y.id === id)) continue;
     out.push(until ? { id, until } : { id });
     if (out.length === MAX_WAIT_FOR) break;
@@ -180,7 +181,7 @@ export function bylineFromTool(input: unknown): string | undefined {
   if (!input || typeof input !== 'object') return undefined;
   const v = (input as Record<string, unknown>).byline;
   if (typeof v !== 'string') return undefined;
-  return v.replace(/\s+/g, ' ').trim().slice(0, MAX_BYLINE) || undefined;
+  return cutSafely(v.replace(/\s+/g, ' ').trim(), MAX_BYLINE) || undefined;
 }
 
 function linksFrom(v: unknown): AskLink[] {
@@ -200,7 +201,7 @@ function linksFrom(v: unknown): AskLink[] {
 function str(v: unknown, max: number): string | undefined {
   if (typeof v !== 'string') return undefined;
   const t = v.trim();
-  return t ? t.slice(0, max) : undefined;
+  return t ? cutSafely(t, max) : undefined;
 }
 
 // Words Mike reads on the card, kept to max but cut at a word with an
@@ -209,9 +210,13 @@ function str(v: unknown, max: number): string | undefined {
 function clipText(v: unknown, max: number): string | undefined {
   const t = str(v, Number.MAX_SAFE_INTEGER);
   if (!t || t.length <= max) return t;
-  const cut = t.slice(0, max - 1);
-  const space = cut.lastIndexOf(' ');
-  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, '')}…`;
+  const end = safeEnd(t, max - 1);
+  const space = t.lastIndexOf(' ', end - 1);
+  // Back to a word's end is a cut too, and may be inside a value with a space in it.
+  const at = space > max * 0.6 ? safeEnd(t, space) : end;
+  // Taking punctuation off is a cut too (a known value can end in a full stop).
+  const tidy = t.slice(0, at).replace(/[\s,;:.-]+$/, '').length;
+  return `${t.slice(0, safeEnd(t, tidy))}…`;
 }
 
 // These read a model's reply, which content it read can steer, so none of
@@ -334,10 +339,15 @@ function nextFrom(item: string): string {
     .replace(/\*\*(.+?)\*\*/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
-  const first = (/^.+?[.!?](?=\s|$)/.exec(t)?.[0] ?? t).replace(/\.$/, '');
+  // Each cut (the first sentence, the length, back to a word) is placed in
+  // the whole text, so none is inside a secret (safe-cut.ts).
+  const sentence = safeEnd(t, /^.+?[.!?](?=\s|$)/.exec(t)?.[0].length ?? t.length);
+  const first = t.slice(0, safeEnd(t, t.slice(0, sentence).replace(/\.$/, '').length));
   if (first.length <= MAX_NEXT_CHARS) return first;
-  const cut = first.slice(0, MAX_NEXT_CHARS);
-  return cut.slice(0, Math.max(cut.lastIndexOf(' '), 1)).replace(/[,;:]$/, '');
+  const end = safeEnd(t, MAX_NEXT_CHARS);
+  const space = t.lastIndexOf(' ', end - 1);
+  const cut = space > 0 ? safeEnd(t, space) : Math.max(end, 1);
+  return t.slice(0, safeEnd(t, t.slice(0, cut).replace(/[,;:]$/, '').length));
 }
 
 // "Open X, add Y, then reply 'done'" names the words to send back.
@@ -347,11 +357,13 @@ const REPLY = /\b(?:reply|send(?: back)?|say|answer|respond)(?: with)?\s+["'“�
 const MORE = /^\s*(?:,\s*(?:or\s+)?|or\s+|\/\s*)["'“‘`]([^"'”’`\n]{1,40})["'”’`]/i;
 
 function askFrom(item: string): Ask {
-  const action = item
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_ACTION);
+  const action = cutSafely(
+    item
+      .replace(/\*\*(.+?)\*\*/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim(),
+    MAX_ACTION,
+  );
   const ask: Ask = { action };
   const reply = REPLY.exec(action);
   if (!reply) return ask;
@@ -568,7 +580,7 @@ const ONE_REPLY_REPLY =
   'If they may have lost track (a long turn, work picked up from another thread, a thread they didn\'t start), open with one line on what the work is for and where it stands, before the latest step. ' +
   'A work report is a few bullets of what changed and the result, each linked to where it can be checked: [tests pass](work:npm test) quotes a few words of a step in your working (the command you ran or its description) and opens it there, lit up; [its own thread](thread:<its id from list_threads>) opens another thread; web pages and files link as usual. ' +
   'An explanation, a draft or an answer to their question is prose, at the length it needs. ' +
-  'When you\'re asking something, end the reply with what they need to know to answer it, in full, as they never see your thinking: the draft to approve, the options you weighed. The question itself, and what each answer would do, are in the card under the reply, so don\'t repeat them. ' +
+  'When you\'re asking something, include the full draft to approve (text to send elsewhere goes in a ```slack, ```email or ```draft block, shown line for line with a Copy button) or the options to choose from in the reply. The question itself, and what each answer would do, are in the card under the reply, so don\'t repeat them. ' +
   'Never write a "What I need from you" section, a "Nothing needed from you" line or a list of follow-ups in the reply: asks and next are those. ';
 
 // Only what the fields' own descriptions don't say (threadbear-mcp.ts):
@@ -604,24 +616,18 @@ export const ONE_REPLY_NEXT = 'Now write your reply';
 export function oneReplyAccepted(needsYou: boolean, restart = '', wroteFirst = false): string {
   const first = wroteFirst ? WROTE_FIRST : '';
   return needsYou
-    ? `${ENDED} will wait in Needs you.${restart} ${ONE_REPLY_NEXT}: it's the only text the user sees from this turn, with the card of asks under it. ${first}${ASKS_NEED_THE_REPLY} Don't repeat the card's questions or answers, and write nothing after your reply.`
+    ? `${ENDED} will wait in Needs you.${restart} ${ONE_REPLY_NEXT}: it's the only text the user sees from this turn, with the card of asks under it. ${first}${ASKS_NEED_THE_REPLY} Leave the question and button labels on the card, and write nothing after your reply.`
     : `${ENDED} is done. ${ONE_REPLY_NEXT}: it's the only text the user sees from this turn. ${first}Write nothing after it.`;
 }
 
-// On 5 Nov 2026 (thread 1d9689e6) Opus wrote a Slack draft for Mike to
-// approve, and another time three designs for him to pick from, before
-// end_turn, as narration blocks (which reach the runner only as a
-// one-line summary), then took "Don't repeat the questions or answers" to
-// mean the draft was already in front of him and wrote one line after
-// it: "Nothing has been sent yet." He got a card asking him to approve a
-// message he couldn't see. Everything before end_turn folds into the
-// working with one reply, so when the turn has words since its last step
-// (turnReply), they were meant as the reply and have to be written again.
-// Asking for more text gets more text (16509f4), which is the point here.
+// Drafts and options written before end_turn are hidden with the work.
+// Ask for the answer the user needs, rather than reproducing that work:
+// the old "write it again in full" result immediately preceded an
+// Anthropic reasoning_extraction refusal (6 Nov 2026, thread ba756ff4).
 const WROTE_FIRST =
-  'What you wrote just before this call folded into your working with the rest, out of sight, so they haven\'t read it: write it again in full as your reply. ';
+  'Give a self-contained answer with the result and supporting evidence. Include any requested draft, explanation or descriptions of choices in full. ';
 const ASKS_NEED_THE_REPLY =
-  'They never see your thinking either, so whatever the asks are about (a draft for them to approve, the options you weighed) goes in the reply in full.';
+  'If the user needs a draft or descriptions of choices to decide, include them in full.';
 
 // For an end_turn the Stop hook asked for, in a turn that has its message:
 // the nudge said "your message above is the reply", and "Now write your reply"
@@ -675,7 +681,7 @@ export const ONE_REPLY_END_TURN_NUDGE =
   "Your message above is the reply: don't write it again.";
 export const ONE_REPLY_WRITE_NUDGE =
   'Write your reply now, as ordinary text: the user sees only what you write after end_turn, with the card under it. ' +
-  "Don't repeat the questions or answers on the card.";
+  'Include any requested draft, explanation or descriptions of choices in full. Leave the question and button labels on the card.';
 
 // What a compaction between an accepted one-reply end_turn and its reply
 // adds after the summary (adapter.ts, onCompact), with the card's
@@ -826,6 +832,14 @@ export function endTurnAccepted(result: { ok: boolean; text: string }): boolean 
   return result.ok && result.text.startsWith(ENDED);
 }
 
+// Added to an accepted end_turn's result while subagents wait on Mike's cards.
+export function openCardsNote(titles: string[]): string {
+  if (!titles.length) return '';
+  const shown = titles.slice(0, 3).map((t) => `"${t.slice(0, 120)}"`).join(', ');
+  const more = titles.length > 3 ? ` and ${titles.length - 3} more` : '';
+  return ` ${titles.length === 1 ? 'A sub-agent of yours is' : `${titles.length} of your sub-agents are`} parked until the user answers an approval card in this thread, not working: ${shown}${more}. Say so in your reply, rather than calling them running.`;
+}
+
 // An end_turn the handler took, Claude's (ENDED) or Codex's ("Noted. Now
 // write your final answer"), as opposed to one it refused.
 export function endTurnTaken(result: { ok: boolean; text: string }): boolean {
@@ -840,6 +854,10 @@ export function endTurnTaken(result: { ok: boolean; text: string }): boolean {
 // cdfccbc3). The message goes in the events before the CLI gets it, so the
 // agent can't have seen one that isn't there yet. One that came while the call
 // ran counts too, as the agent called it without having read that message.
+// A background task finishing mid-turn (a system.note with wake) opens it too,
+// from when the agent has read it (wakeRead). On 7 Nov 2026 a backgrounded
+// `tb land` finished just before the agent's "landing now" end_turn, and the
+// real report's end_turn was refused (thread 46de9389).
 export function takenEndTurn(events: PersistedEvent[], serverName = 'threadbear'): Record<string, unknown> | undefined {
   const endTurn = `mcp__${serverName}__${END_TURN_TOOL}`;
   let start = 0;
@@ -851,15 +869,58 @@ export function takenEndTurn(events: PersistedEvent[], serverName = 'threadbear'
   }
   const calls = new Map<string, Record<string, unknown>>();
   let taken: Record<string, unknown> | undefined;
+  const wake = new WakeRead();
   for (const e of events.slice(start)) {
-    if (e.type === 'user.message') {
+    if (e.type === 'user.message' || wake.see(e)) {
       calls.clear();
       taken = undefined;
     }
     if (e.type === 'tool.call' && e.name === endTurn) calls.set(e.itemId, e.input);
     if (e.type === 'tool.result' && !taken && endTurnTaken(e)) taken = calls.get(e.itemId);
   }
+  // Handed over with no step of the agent's since: the SDK can run this call
+  // before its own frames reach the events, so it is that step (from Codex's
+  // review).
+  if (wake.handed) return undefined;
   return taken;
+}
+
+// When the agent has read a background task's notification that came into
+// its turn (a system.note with wake), fed the turn's events in order. The CLI
+// hands it over with the next request to the model, after the next tool
+// results: the text and calls of the response that was being written when it
+// came weren't written with it, nor were tool results in the same batch, so
+// it counts from the agent's first step after a result (see() is true then).
+// Shared by takenEndTurn, the runner's turn and the Claude adapter's Stop
+// hook, so all three open the turn at the same event.
+export class WakeRead {
+  private state: 'none' | 'unread' | 'handed' = 'none';
+  // One that came while another was handed over: the request may have gone
+  // to the model before it, so it waits for results of its own (from Codex's
+  // review). At worst that opens the turn once more than needed.
+  private next = false;
+  get handed(): boolean {
+    return this.state === 'handed';
+  }
+  see(e: { type: string; itemId?: string; wake?: true }): boolean {
+    if (e.type === 'system.note' && e.wake) {
+      if (this.state === 'handed') this.next = true;
+      else this.state = 'unread';
+      return false;
+    }
+    if (e.type === 'tool.result' && this.state === 'unread') this.state = 'handed';
+    // A Codex child's items (<child>/<id>) aren't the agent's own steps.
+    else if (this.state === 'handed' && (e.type === 'assistant.text' || e.type === 'reasoning' || e.type === 'tool.call') && !e.itemId?.includes('/')) {
+      this.state = this.next ? 'unread' : 'none';
+      this.next = false;
+      return true;
+    }
+    return false;
+  }
+  reset(): void {
+    this.state = 'none';
+    this.next = false;
+  }
 }
 
 export function endedThisTurn(events: PersistedEvent[], serverName = 'threadbear'): boolean {
