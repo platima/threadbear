@@ -17,6 +17,11 @@
 
 set -e
 
+# Work in the checkout this script lives in, whatever the current folder is.
+# Every path below, and every git command, is then about that checkout, not
+# one the script was merely started from.
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
