@@ -3,7 +3,7 @@
 // and browser, "Pair a phone"), or is pasted. Either way the person is asked
 // before anything is kept, because the token goes to the address in the link.
 import { useEffect, useState } from 'react';
-import { savePairing, watchLinks } from './deployment';
+import { note, savePairing, watchLinks } from './deployment';
 import { parsePairing, type Pairing } from './pairing';
 
 export function PairScreen({ expired }: { expired?: boolean }) {
@@ -15,6 +15,8 @@ export function PairScreen({ expired }: { expired?: boolean }) {
   useEffect(() => {
     watchLinks((url) => {
       const found = parsePairing(url);
+      // Only its shape goes to the log: the first characters and the length
+      note(`a link of ${url.length} characters, beginning ${JSON.stringify(url.slice(0, 14))}, ${found ? 'is' : 'is not'} a pairing`);
       if (found) setOffer(found);
     });
   }, []);

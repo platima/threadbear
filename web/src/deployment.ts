@@ -40,15 +40,18 @@ export function unpair(): void {
 // The link that opened the app, or arrives while it is open: Tauri's deep-link
 // plugin, through the globals the Android shell's withGlobalTauri gives the
 // page (links.ts says how). Nothing in a browser.
+type TauriWindow = { __TAURI__?: TauriGlobal; __TAURI_INTERNALS__?: { invoke(command: string, args?: unknown): Promise<unknown> } };
+
+// What the page found goes to the shell's log (`adb logcat`): a few words, and
+// never a link or a token.
+export function note(text: string): void {
+  try {
+    void (window as unknown as TauriWindow).__TAURI_INTERNALS__?.invoke('page_note', { note: text }).catch(() => undefined);
+  } catch {
+    // not in the app
+  }
+}
+
 export function watchLinks(onLink: (url: string) => void): void {
-  const w = window as unknown as { __TAURI__?: TauriGlobal; __TAURI_INTERNALS__?: { invoke(command: string, args?: unknown): Promise<unknown> } };
-  // What the page found goes to the shell's log (`adb logcat`), never a link
-  const note = (text: string) => {
-    try {
-      void w.__TAURI_INTERNALS__?.invoke('page_note', { note: text }).catch(() => undefined);
-    } catch {
-      // not in the app
-    }
-  };
-  watchLinksWith(w.__TAURI__, onLink, note);
+  watchLinksWith((window as unknown as TauriWindow).__TAURI__, onLink, note);
 }
