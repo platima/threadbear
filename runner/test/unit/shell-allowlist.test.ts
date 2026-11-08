@@ -860,13 +860,14 @@ test("R5: a repo's filter drivers don't run: its own are refused, and your own d
   }
   // (The same global filter does run for git status, which isn't on the list.)
   // Git decides from the file's stat whether to run it, and on a busy Windows
-  // runner it once didn't (8 Nov), so the file is changed again and it looks
-  // again, a few times, before the test calls its own set-up wrong.
+  // runner it twice didn't (8 Nov), even with the file changed again. So the
+  // set-up is proved with a command that always filters: hash-object runs the
+  // clean filter the .gitattributes names for the path, whatever the stat says.
   let ran = false;
-  for (let i = 0; i < 3 && !ran; i++) {
-    if (i > 0) fs.appendFileSync(path.join(repo, 'a.txt'), `again ${i}\n`);
-    spawnSync(SHELL[0]!, [SHELL[1]!, 'git status --porcelain'], { cwd: repo, env: e, timeout: 20_000 });
+  for (const cmd of ['git status --porcelain', 'git hash-object --path=a.txt a.txt']) {
+    spawnSync(SHELL[0]!, [SHELL[1]!, cmd], { cwd: repo, env: e, timeout: 20_000 });
     ran = fs.existsSync(marker);
+    if (ran) break;
   }
   assert.equal(ran, true, 'the test plays it right');
 });
