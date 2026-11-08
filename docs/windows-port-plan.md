@@ -647,7 +647,7 @@ control has a tooltip.
 
 | PR | What | Size | Stands alone | Status |
 |---|---|---|---|---|
-| 1. Runner: run on Windows | `runner/src` (25 files, mostly small branches behind `IS_WINDOWS`), the Task Scheduler install, the unit tests made to run on Windows, the `windows` CI job | First cut: 82 files, +1,151 -263 | Yes | **Out of date, and to be cut again before anything is sent.** The first cut is the local branch `pr/windows-runner` (`ea4b296`) on `d488512`, from before the review fixes. Upstream is now 48 commits on (`efc0c9e`) and a merge conflicts in `claude-trust.ts`, `patch-trust.ts`, `schedule-check.ts` and `claude-trust.test.ts`: upstream now JSON-quotes a path that has a backslash in the trust hash input, which the Windows hashing has to be reconciled with. The fork branch has the fixes and passes here and on GitHub's Windows runner (1,957 tests, none fail); the cut has to take the same fixes, be merged with upstream, and be run again on Windows. Not run on a Mac |
+| 1. Runner: run on Windows | `runner/src` (25 files, mostly small branches behind `IS_WINDOWS`), the Task Scheduler install, the unit tests made to run on Windows, the `windows` CI job | First cut: 82 files, +1,151 -263 | Yes | **Open as a draft: [mikecann/threadbear#13](https://github.com/mikecann/threadbear/pull/13)** (8 Nov 2026), two commits from the fork's `windows-runner` branch, rebased three times as upstream moved (172 commits in two days, then 9 more; now on `b6c46e1`). On Windows 11 and on GitHub's `windows-latest`: 2,433 tests, 2,297 pass, none fail, 136 skip with reasons. On GitHub's macOS and Linux machines the same tests fail as on upstream's own main (one on macOS, three on Linux), and the PR's extra tests are 43 that pass there and 41 Windows-only skips. Not run on a real Mac: a `./check.sh` from Mike is still the real test. No review yet |
 | 2. Desktop app for Windows | `desktop/`: the UI, the bridge, the Tauri shell (a window, tray, toasts) | 97 files, about 18.7k lines before the review (8.2k of it lockfiles), mostly UI | Needs 1 (the bridge imports `runner/src/platform.ts`) | Built and checked, except in a real window: nobody has clicked a link, dropped a picture or seen the setup-failure dialog. Raise it with Mike before a PR: it is a second UI for him to look after |
 | 3. Windows packages and releases | `installer/`, `installers.yml`, `release.yml`, the version script, the update check | 15 files, about 1.6k lines before the review | Needs 2 | Mostly belongs in the fork: the publisher, the two product GUIDs, the signing set-up and the update check's repository are the maintainer's own (docs/forking.md lists them). Offer it only if he wants Windows downloads from his repo |
 
@@ -805,14 +805,34 @@ left out: `docs/android.md` has the details, and `android/` and `web/` the code.
 The website is installable (a manifest), and built with `TB_APP=1` it is the
 page of a Tauri 2 Android shell that is told which deployment to use by the
 `threadbear://pair` link or the website's sign-in link (`web/src/pairing.ts`,
-with tests). The `android` workflow builds a debug-signed APK on GitHub's Ubuntu
-image (no Android Studio here): it installs, and its manifest holds the link's
-intent filter and the INTERNET permission. Not run on a phone, and no
-notifications while the app is closed.
+with tests). The `android` workflow builds a release APK on GitHub's Ubuntu
+image (no Android Studio here), signed by `android/scripts/sign-apk.sh` with the
+release key when the repository has the `ANDROID_KEYSTORE_*` secrets and with a
+key made for the run when it has not. `release.yml` attaches it only when the
+release key signed it. No notifications while the app is closed.
+
+**Run on an emulator, 8 Nov 2026.** A second job installs the release build on
+an Android 14 x86_64 emulator (KVM), opens it from the launcher and sends it a
+`threadbear://pair` link, and keeps the screenshots. Getting it to pass found
+real bugs that the unit tests could not: the page looked for a
+`window.__TAURI__.deepLink` global that the plugin does not have (the app could
+be paired only by pasting); and the emulator's WebView is Chrome 113, which
+reads a `threadbear://pair?x` link with an empty hostname, so the page turned
+down every link it was given (`web/src/pairing.ts` reads the link by hand now,
+with a test that swaps in a URL class that behaves like Chrome 113). It now
+shows "Pair with demo.example.test?" with Pair and Not now. Still not a phone:
+no camera, no notification shade, and nothing past the pairing question (it
+would need a deployment to pair with).
 
 ## Linux
 
-The M5 of the plan, as a tarball: the same shell, a Node and the runner in one
-folder, the runner as a systemd user service, built on Ubuntu x64 and arm64 by
-the `linux` workflow. `docs/linux.md` says what it does and what it leaves out
-(a `.deb`, an AppImage, a real desktop's look at Wayland and HiDPI).
+The M5 of the plan: the same shell, a Node and the runner in one folder, the
+runner as a systemd user service, built on Ubuntu x64 and arm64 by the `linux`
+workflow as a `.tar.gz` and a `.deb` (`installer/linux/deb.mjs`). The workflow
+installs the `.deb` on its runner, starts the window from `/usr/bin` as an
+ordinary user and removes it again. `release.yml` calls the workflow and
+attaches both packages of both architectures to a release, checked by
+`installer/validate-release-assets.sh` (ELF machine of the shell and the Node,
+the `.deb`'s fields and files), with their SHA-256 in `CHECKSUMS.txt`. They are
+not signed. `docs/linux.md` says what it does and what it leaves out (an `.rpm`
+or AppImage, a signature, a real desktop's look at Wayland and HiDPI).
