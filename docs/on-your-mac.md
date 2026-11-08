@@ -490,6 +490,12 @@ puts nothing outside that folder until you let it. What it adds, and when:
   (else `~/.local/state/...`).
 - **When you run `install.sh`:** `~/.local/share/applications/threadbear.desktop`,
   pointing at the unpacked folder. `install.sh --uninstall` removes it.
+- **If you install the `.deb` instead of unpacking the tarball:** `apt` puts
+  the same folder in `/opt/threadbear`, a `threadbear-desktop` link in
+  `/usr/bin`, `/usr/share/applications/threadbear.desktop`, an icon in
+  `/usr/share/icons/hicolor/256x256/apps`, and a copyright file in
+  `/usr/share/doc/threadbear`. It has no install scripts and starts nothing.
+  Removing it takes those away and leaves the per-user things above.
 - **On the runner's first start:** the Claude Agent SDK from `registry.npmjs.org`
   into `~/.cache/threadbear/sdk`, checked against the hash in
   `runner/package-lock.json` (it is Anthropic's, so the package doesn't carry it).

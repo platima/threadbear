@@ -43,6 +43,26 @@ The service's PATH is the one of the program that installed it, with
 `~/.local/bin` (where `claude` is) and the app's Node first, because a systemd
 user service starts with almost none.
 
+### The .deb
+
+The same folder as a Debian package, `threadbear-v<version>-linux-<x64|arm64>.deb`
+(installer/linux/deb.mjs, built by the same workflow). It puts the folder in
+`/opt/threadbear`, a menu entry and icon where the desktop looks, and a
+`threadbear-desktop` command in `/usr/bin`:
+
+    sudo apt install ./threadbear-v0.1.0-linux-x64.deb
+
+It needs `libwebkit2gtk-4.1-0`, `libgtk-3-0`, `git`, `bash` and `ca-certificates`
+(apt fetches them), and recommends `libayatana-appindicator3-1` for the tray.
+A pre-release's version is spelled with a `~` (`0.1.0~rc.1`), so apt sorts it
+before the release it leads to. The package has no install scripts. The runner's
+systemd user service is set up per user by the app when it first opens, as from
+the tarball, so `apt remove threadbear` takes the program away and leaves each
+user's data and service for them to decide about (`systemctl --user disable
+--now threadbear-runner` and `~/.local/bin/tb` are theirs to remove). The
+workflow installs it on an Ubuntu runner, starts the window from `/usr/bin` as
+an ordinary user, and removes it again.
+
 ## What it needs
 
 WebKitGTK 4.1 (Debian and Ubuntu: `libwebkit2gtk-4.1-0`), a desktop session,
@@ -63,15 +83,16 @@ than hiding it (on Windows it hides to the tray). The runner goes on either way.
 | Logs | `%LOCALAPPDATA%\Threadbear\Logs` | `~/Library/Logs` |
 | Window | WebView2 | WebKitGTK |
 | Close button | hides to the tray | ends the app |
-| Packages | setup exe, MSI, portable zip | `.tar.gz` |
+| Packages | setup exe, MSI, portable zip | `.tar.gz`, `.deb` |
 | Signing | Azure Artifact Signing (optional) | none: a tarball, and a SHA-256 beside it |
 
 ## Not done
 
-- A `.deb`, an `.rpm` or an AppImage. Tauri's bundler can make them, but the
-  package here carries the runner and a Node beside the shell, which the
-  bundler's resource folders put elsewhere than `find_desktop_dir` looks; that
-  needs a pass on a real distribution.
+- An `.rpm` or an AppImage. Tauri's bundler can make them, but the package here
+  carries the runner and a Node beside the shell, which the bundler's resource
+  folders put elsewhere than `find_desktop_dir` looks. The `.deb` is made
+  from the same folder by hand instead (installer/linux/deb.mjs); an `.rpm` could
+  be made the same way.
 - Wayland and X11 differences, and HiDPI, were not looked at on a real desktop:
   the workflow shows the window starts under a virtual X screen, no more.
 - A release on GitHub with these attached: `release.yml` makes the Windows ones.

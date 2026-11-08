@@ -67,11 +67,15 @@ jobs:
         run: npx tauri build --no-bundle
       - name: Package
         run: node installer/linux/stage.mjs --arch ${{ matrix.arch }} --shell desktop/src-tauri/target/release/threadbear-desktop
+      - name: The .deb
+        run: node installer/linux/deb.mjs --arch ${{ matrix.arch }}
       - name: What was made
         run: |
           ls -l build/linux-${{ matrix.arch }}
           cat build/linux-${{ matrix.arch }}/*.sha256
           tar -tzf build/linux-${{ matrix.arch }}/*.tar.gz | head -40
+          dpkg-deb --info build/linux-${{ matrix.arch }}/*.deb
+          dpkg-deb --contents build/linux-${{ matrix.arch }}/*.deb | grep -v ' opt/threadbear/\(runner\|desktop\|node\|docs\)/' | head -40
       - name: It starts
         run: |
           set -eu
@@ -95,10 +99,48 @@ jobs:
           set -e
           cat "$dir/app.log"
           test "$code" = 124
+      # The .deb is installed and used as an ordinary user would, then removed.
+      # Its files are root's, so the app running as this (unprivileged) user also
+      # shows nothing under /opt has to be written to.
+      - name: The .deb installs, starts and goes
+        run: |
+          set -eu
+          deb=$(echo build/linux-${{ matrix.arch }}/*.deb)
+          test "$(dpkg-deb --field "$deb" Architecture)" = "$(dpkg --print-architecture)"
+          # A pre-release sorts before the release it leads to
+          version=$(dpkg-deb --field "$deb" Version)
+          dpkg --compare-versions "0.1.0~rc.1" lt "0.1.0"
+          echo "Package version: $version"
+          sudo apt-get install -y --no-install-recommends "./$deb"
+          dpkg -L threadbear | head -12
+          test -x /opt/threadbear/threadbear-desktop
+          test "$(readlink -f /usr/bin/threadbear-desktop)" = /opt/threadbear/threadbear-desktop
+          test -f /usr/share/applications/threadbear.desktop
+          test -f /usr/share/icons/hicolor/256x256/apps/threadbear.png
+          test -f /usr/share/doc/threadbear/copyright
+          test ! -e /opt/threadbear/install.sh
+          # Nothing in the package is writable by anyone but root
+          test -z "$(find /opt/threadbear -not -type l -perm /022 -print -quit)"
+          desktop-file-validate /usr/share/applications/threadbear.desktop || true
+          /opt/threadbear/node/bin/node --version
+          home=$(mktemp -d)
+          HOME="$home" /opt/threadbear/node/bin/node /opt/threadbear/runner/scripts/install-linux.mjs --dry-run
+          export HOME="$home" THREADBEAR_NO_RUNNER_OFFER=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1
+          set +e
+          timeout 15 dbus-run-session -- xvfb-run -a /usr/bin/threadbear-desktop > "$home/app.log" 2>&1
+          code=$?
+          set -e
+          cat "$home/app.log"
+          test "$code" = 124
+          sudo apt-get remove -y threadbear
+          test ! -e /opt/threadbear/threadbear-desktop
+          test ! -e /usr/bin/threadbear-desktop
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: threadbear-linux-${{ matrix.arch }}
           path: |
             build/linux-${{ matrix.arch }}/*.tar.gz
             build/linux-${{ matrix.arch }}/*.tar.gz.sha256
+            build/linux-${{ matrix.arch }}/*.deb
+            build/linux-${{ matrix.arch }}/*.deb.sha256
           if-no-files-found: error
