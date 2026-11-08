@@ -497,3 +497,29 @@ said otherwise.
   shells are stuck aren't nudged), the idle check, the screen-dialog and secret
   checks, docker sandboxes, stopping a crashed CLI's leftover tool commands
   (`taskkill /T` needs the parent alive), BrowserBear and ComputerCub.
+
+## On Linux (the desktop app)
+
+The Linux desktop app (docs/linux.md) is a `.tar.gz` that is unpacked anywhere; it
+puts nothing outside that folder until you let it. What it adds, and when:
+
+- **Always:** the runner's data folder `~/Library/Application Support/Threadbear`
+  and log `~/Library/Logs/threadbear-runner.log`, as a runner on Linux has (the
+  folders keep their macOS names), and the app's window state in the folder the
+  window plugin keeps it in.
+- **When you let the app set the runner up** (the first time it opens, the tray
+  menu, or `threadbear-desktop --runner`; `--dry-run` says first):
+  `~/.config/systemd/user/threadbear-runner.service` (started at login, run with
+  `systemctl --user enable --now`), and `~/.local/bin/tb`, a two-line script. A
+  `tb` of yours that this didn't write is left alone. `--uninstall` removes both.
+  A "no thanks" is a marker file, `$XDG_STATE_HOME/Threadbear/declined-runner-task`
+  (else `~/.local/state/...`).
+- **When you run `install.sh`:** `~/.local/share/applications/threadbear.desktop`,
+  pointing at the unpacked folder. `install.sh --uninstall` removes it.
+- **On the runner's first start:** the Claude Agent SDK from `registry.npmjs.org`
+  into `~/.cache/threadbear/sdk`, checked against the hash in
+  `runner/package-lock.json` (it is Anthropic's, so the package doesn't carry it).
+- **What it runs:** the package's own Node (`node/bin/node`, checked against its
+  SHA-256 when the package is built), the runner, your own `claude`, `git`,
+  `bash`, `systemctl --user`, and `xdg-open` (through the opener plugin) for a
+  web link. Nothing is started as root and nothing is written outside your home.
