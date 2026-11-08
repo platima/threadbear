@@ -103,6 +103,10 @@ Every change in this release: [CHANGELOG.md](https://github.com/$repo/blob/$tag/
 - \`threadbear-$tag-msi-win-x64.msi\` / \`threadbear-$tag-msi-win-arm64.msi\`: MSI for silent or managed deployment (\`msiexec /i <file> /qn\`)
 - \`threadbear-$tag-portable-win-x64.zip\` / \`threadbear-$tag-portable-win-arm64.zip\`: portable, unzip anywhere and run \`Threadbear.exe\`
 
+**Linux** (\`x64\` or \`arm64\`; a desktop with WebKitGTK 4.1, and systemd for the runner's service). It needs [Claude Code](https://claude.com/claude-code) signed in, git and bash; Node comes inside. These are not signed: the SHA-256 in \`CHECKSUMS.txt\` is what to check. [docs/linux.md](https://github.com/$repo/blob/$tag/docs/linux.md) says what it adds and leaves out.
+- \`threadbear-$tag-linux-x64.deb\` / \`threadbear-$tag-linux-arm64.deb\`: for Debian and Ubuntu (\`sudo apt install ./<file>\`)
+- \`threadbear-$tag-linux-x64.tar.gz\` / \`threadbear-$tag-linux-arm64.tar.gz\`: unpack anywhere and run \`./threadbear-desktop\`, or \`./install.sh\` for a menu entry
+
 **Verification:** \`CHECKSUMS.txt\` lists the SHA-256 of every file. On Linux or in Git Bash, \`sha256sum -c --ignore-missing CHECKSUMS.txt\` (you will not have every file). On Windows, in the folder you downloaded to:
 
 \`\`\`powershell

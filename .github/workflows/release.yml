@@ -1,8 +1,9 @@
 name: Release
 
-# Publishes Threadbear for Windows: a GitHub release for the tag, with the
-# setup exe, MSI and portable zip for x64 and arm64, a SHA-256 for each, and a
-# CHECKSUMS.txt. Semantic versioning: the tag is v<version>, and <version> is
+# Publishes Threadbear for Windows and Linux: a GitHub release for the tag, with
+# the setup exe, MSI and portable zip for x64 and arm64, the Linux tarball and
+# .deb for each, a SHA-256 for each, and a CHECKSUMS.txt. Semantic
+# versioning: the tag is v<version>, and <version> is
 # the one in desktop/package.json (installer/release.sh checks that before it
 # tags, and this workflow checks it again, for tags pushed by hand). A tag with
 # a hyphen (v0.2.0-rc.1) is a pre-release: GitHub marks it so, and releases/latest
@@ -14,6 +15,7 @@ name: Release
 #   2. ci-validation    the Windows tests (windows.yml)
 #   3. build-installers every architecture builds its packages into workflow
 #                       artifacts (installers.yml). Nothing touches a release.
+#      build-linux      the same for the Linux packages (linux.yml)
 #   4. publish          after ALL of that succeeded: checks the whole set,
 #                       writes CHECKSUMS.txt from the final bytes, creates the
 #                       release as a DRAFT with every file, checks what GitHub
@@ -136,15 +138,25 @@ jobs:
       contents: read
       id-token: write
 
+  # The Linux packages (docs/linux.md): a tarball and a .deb for each
+  # architecture, built, installed and started by linux.yml on Ubuntu runners of
+  # that architecture. Unsigned: a SHA-256 beside each is what there is.
+  build-linux:
+    needs: [ci-validation, meta]
+    uses: ./.github/workflows/linux.yml
+    permissions:
+      contents: read
+
   # Nothing releasable can execute on this runner, so validation asserts the
   # complete expected asset set is there, with plausible sizes, checksums that
-  # verify, the right architecture in each portable zip, and every installer
-  # the app's update check can ask for (installer/validate-release-assets.sh).
+  # verify, the right architecture in each portable zip and each Linux package,
+  # and every installer the app's update check can ask for
+  # (installer/validate-release-assets.sh).
   # No `if: always()` here: it runs only if every job above succeeded, so a
   # failed architecture, a red CI or a skipped job all stop it.
   publish:
     name: publish
-    needs: [meta, ci-validation, build-installers]
+    needs: [meta, ci-validation, build-installers, build-linux]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -161,10 +173,17 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Download the packages of every architecture
+    - name: Download the Windows packages of every architecture
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         pattern: threadbear-installers-*
+        merge-multiple: true
+        path: assets
+
+    - name: Download the Linux packages of every architecture
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        pattern: threadbear-linux-*
         merge-multiple: true
         path: assets
 
@@ -187,9 +206,12 @@ jobs:
           for kind in "setup-win-$arch.exe" "msi-win-$arch.msi" "portable-win-$arch.zip"; do
             sha256sum --text "threadbear-$VERSION-$kind" >> CHECKSUMS.txt
           done
+          for kind in "linux-$arch.tar.gz" "linux-$arch.deb"; do
+            sha256sum --text "threadbear-$VERSION-$kind" >> CHECKSUMS.txt
+          done
         done
         cat CHECKSUMS.txt
-        [ "$(wc -l < CHECKSUMS.txt | tr -d ' ')" -eq 6 ] || { echo "::error::CHECKSUMS.txt should have 6 lines"; exit 1; }
+        [ "$(wc -l < CHECKSUMS.txt | tr -d ' ')" -eq 10 ] || { echo "::error::CHECKSUMS.txt should have 10 lines"; exit 1; }
         if grep -Evq '^[0-9a-f]{64}  [^ /\\]+$' CHECKSUMS.txt; then
           echo "::error::CHECKSUMS.txt has a line that is not '<sha256>  <file name>'"; exit 1
         fi

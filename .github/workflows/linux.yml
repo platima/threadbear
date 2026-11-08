@@ -5,14 +5,17 @@ name: linux
 # (installer/linux/stage.mjs), and shown to start. x64 on GitHub's x64 Ubuntu,
 # arm64 on its Arm one, each building natively, so nothing is cross-compiled.
 #
-# It runs on changes to what goes in the package, and by hand. It publishes
-# nothing: the tarball is an artifact of the run.
+# It runs on changes to what goes in the package, by hand, and as a part of
+# release.yml (which takes the artifacts of its run into a release, once every
+# package is built and checked). It publishes nothing itself: the tarball and
+# the .deb are artifacts of the run.
 
 on:
   push:
     branches: [main, 'linux/**']
     paths: ['desktop/**', 'runner/**', 'installer/linux/**', 'installer/node.json', 'installer/make-notices.mjs', 'docs/guide.md', 'docs/protocol.md', 'docs/on-your-mac.md', '.github/workflows/linux.yml']
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

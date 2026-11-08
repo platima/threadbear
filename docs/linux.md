@@ -15,7 +15,11 @@ Two things, and they are separate:
 
 `threadbear-v<version>-linux-<x64|arm64>.tar.gz`, from the **linux** workflow
 (`.github/workflows/linux.yml`), which builds each architecture on GitHub's
-Ubuntu image of that kind and attaches the tarball to its run:
+Ubuntu image of that kind and attaches the tarball to its run. A release
+(`release.yml`) runs that workflow too, checks both packages of both
+architectures (`installer/validate-release-assets.sh`), and attaches them to
+the GitHub release beside the Windows ones, with their SHA-256 in
+`CHECKSUMS.txt`. They are not signed.
 
     threadbear-desktop         the shell (Tauri 2, WebKitGTK)
     node/bin/node              the pinned Node (installer/node.json)
@@ -95,5 +99,8 @@ than hiding it (on Windows it hides to the tray). The runner goes on either way.
   be made the same way.
 - Wayland and X11 differences, and HiDPI, were not looked at on a real desktop:
   the workflow shows the window starts under a virtual X screen, no more.
-- A release on GitHub with these attached: `release.yml` makes the Windows ones.
+- A signature. The Windows packages are signed with Azure Artifact Signing; a
+  Linux package would be signed with a key the person publishing it makes and
+  keeps (a GPG key and a repository, for `apt` to trust it). Today the SHA-256
+  beside each file is what there is.
 - It was built and started on GitHub's runners, not used on a desktop.

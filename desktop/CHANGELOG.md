@@ -17,10 +17,11 @@ release stops before anything is published if it is missing.
 
 - Threadbear for Windows: a window and a tray icon around the threads, asks and approvals the Mac app has, and most of its panels. Closing the window keeps it in the tray, and Quit ends it.
 - The runner runs on Windows 11, with Claude Code. It starts when you sign in, through a Task Scheduler task the app offers to set up the first time you open it, and the app starts it again after an update.
-- Toasts when a thread needs you or finishes, a folder picker for new threads, and links that open in your browser.
+- Toasts when a thread needs you or finishes, a folder picker for new threads, and links that open in your browser. Several approvals at once come as one card with a tick on each call, as on the Mac, so a reply with eight edits is one click and not eight.
 - Setup exe, MSI and a portable zip, for x64 and for Windows on Arm (the Arm builds are made by the same workflow but have not been run on an Arm PC yet). Node comes inside, so nothing else has to be installed except Claude Code itself and Git for Windows. The Claude Agent SDK is Anthropic's and is not in the package: the runner downloads it from npm (about 4 MB, checked against its hash) the first time it starts, so that start needs an internet connection.
 - Codex works too, when its `codex.exe` is on your PATH. Threadbear does not install or update it on Windows.
 - Not on Windows: BrowserBear, ComputerCub, docker sandboxes, spotting a stuck CLI, and runner updates that follow `main`.
+- Linux too: a `.deb` and a `.tar.gz` for x64 and arm64, with the same window and its own Node, and the runner as a systemd user service (`docs/linux.md`). They are not signed, and have been started on GitHub's Ubuntu machines but not used on a desktop yet.
 
 ### Added
 

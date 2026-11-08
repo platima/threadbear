@@ -1,12 +1,13 @@
 #!/bin/sh
 # Check that <dir> holds a complete, consistent set of release assets for
-# <tag> (e.g. v0.1.0): every Windows package for x64 and arm64, each with a
-# .sha256 that verifies, each plausibly sized, and the programs inside each zip
-# built for the architecture its name claims. Also proves the app's update
+# <tag> (e.g. v0.1.0): every Windows package for x64 and arm64, and the Linux
+# tarball and .deb for each, each with a .sha256 that verifies, each plausibly
+# sized, and the programs inside each zip, tarball and .deb built for the
+# architecture its name claims. Also proves the app's update
 # check can find its download on this release, for every architecture it knows,
 # and that nothing else is in the folder.
 # If <dir>/CHECKSUMS.txt is there it is checked too: exactly one line for each
-# of the six packages, in the form `sha256sum -c` reads (hash, two spaces, name;
+# of the ten packages, in the form `sha256sum -c` reads (hash, two spaces, name;
 # no comments, no blank lines, no carriage returns), each hash the file's own.
 # --checksums makes CHECKSUMS.txt required.
 # Usage: installer/validate-release-assets.sh [--checksums] <dir> <tag>   (run from the repo root)
@@ -105,6 +106,57 @@ for arch in x64 arm64; do
 		for inner in Threadbear/runner/src/main.ts Threadbear/desktop/bridge/bridge.ts Threadbear/desktop/dist/index.html Threadbear/docs/guide.md; do
 			unzip -l "$zip" "$inner" >/dev/null 2>&1 || fail "$(basename "$zip") has no $inner"
 		done
+	fi
+done
+
+# Linux: threadbear-v<version>-linux-<arch>.tar.gz and .deb (docs/linux.md)
+# The ELF machine field, two bytes at offset 18 (little-endian): 62 0 for x86-64,
+# 183 0 for aarch64.
+elf_machine() {
+	od -An -t u1 -j 18 -N 2 "$1" | tr -s ' ' | sed 's/^ //'
+}
+debver=${tag#v}
+debver=$(printf '%s' "$debver" | sed 's/-/~/') # a pre-release sorts first: 0.1.0-rc.1 is 0.1.0~rc.1
+for arch in x64 arm64; do
+	check "threadbear-$tag-linux-$arch.tar.gz" 20000000
+	check "threadbear-$tag-linux-$arch.deb" 20000000
+	want_elf="62 0"
+	debarch=amd64
+	if [ "$arch" = arm64 ]; then
+		want_elf="183 0"
+		debarch=arm64
+	fi
+	tgz=$dir/threadbear-$tag-linux-$arch.tar.gz
+	if [ -f "$tgz" ]; then
+		top=threadbear-$tag-linux-$arch
+		tar -tzf "$tgz" >"$tmp/tar-list" 2>/dev/null || fail "$(basename "$tgz") is not a readable tarball"
+		# The shell and the Node it carries must both be this architecture
+		for inner in threadbear-desktop node/bin/node; do
+			if tar -xzOf "$tgz" "$top/$inner" 2>/dev/null | head -c 64 >"$tmp/elf-head" && [ -s "$tmp/elf-head" ]; then
+				elf_got=$(elf_machine "$tmp/elf-head")
+				[ "$elf_got" = "$want_elf" ] || fail "$inner in $(basename "$tgz") has ELF machine '$elf_got', expected '$want_elf'"
+			else
+				fail "$(basename "$tgz") has no $top/$inner"
+			fi
+		done
+		for inner in runner/src/main.ts desktop/bridge/bridge.ts desktop/dist/index.html docs/guide.md install.sh; do
+			grep -Fxq "$top/$inner" "$tmp/tar-list" || fail "$(basename "$tgz") has no $top/$inner"
+		done
+	fi
+	deb=$dir/threadbear-$tag-linux-$arch.deb
+	if [ -f "$deb" ]; then
+		if command -v dpkg-deb >/dev/null 2>&1; then
+			[ "$(dpkg-deb --field "$deb" Package)" = threadbear ] || fail "$(basename "$deb") is not the threadbear package"
+			[ "$(dpkg-deb --field "$deb" Architecture)" = "$debarch" ] || fail "$(basename "$deb") is not built for $debarch"
+			[ "$(dpkg-deb --field "$deb" Version)" = "$debver" ] || fail "$(basename "$deb") has version '$(dpkg-deb --field "$deb" Version)', expected $debver"
+			dpkg-deb --contents "$deb" >"$tmp/deb-list" 2>/dev/null || fail "$(basename "$deb") has no readable contents"
+			for inner in ./opt/threadbear/threadbear-desktop ./opt/threadbear/runner/src/main.ts ./usr/share/applications/threadbear.desktop ./usr/bin/threadbear-desktop; do
+				# A line is "mode owner size date time name", and "name -> target" for a link
+				awk -v p="$inner" '{ for (i = 1; i <= NF; i++) if ($i == p) found = 1 } END { exit !found }' "$tmp/deb-list" || fail "$(basename "$deb") has no $inner"
+			done
+		else
+			echo "note: dpkg-deb is not on this machine, so $(basename "$deb")'s fields were not read"
+		fi
 	fi
 done
 
