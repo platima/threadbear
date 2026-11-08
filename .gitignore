@@ -17,3 +17,9 @@ ios/**/xcuserdata/
 # Windows packages (installer/): staged files, downloads and finished installers
 /build/
 /dist/
+dist-app/
+
+# Android app (android/): the generated Gradle project and the shell's build output
+android/node_modules/
+android/src-tauri/target/
+android/src-tauri/gen/
