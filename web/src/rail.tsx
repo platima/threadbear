@@ -11,6 +11,7 @@ import { MenuChoice, Pop } from './menu';
 import { go, type RailView, type Route, viewPath } from './route';
 import { build, wakesOf } from './sections';
 import { useTheme } from './pages';
+import { PushRow } from './push-row';
 import { signOut } from './token';
 import { day } from './format';
 import { isOnline, runnersShown, runnerState } from './view-logic';
@@ -121,6 +122,7 @@ function GearMenu({ token }: { token: string }) {
           <MenuChoice icon={<Icon.Gear />} label="Follow the system" on={theme === 'system'} pick={() => pick('system')} />
           <MenuChoice icon={<Icon.Sun />} label="Always light" on={theme === 'light'} pick={() => pick('light')} />
           <MenuChoice icon={<Icon.Moon />} label="Always dark" on={theme === 'dark'} pick={() => pick('dark')} />
+          <PushRow token={token} apiVersion={me?.apiVersion} />
           <hr />
           <div className="note-line" title="How long this browser stays signed in">
             <Icon.Globe />

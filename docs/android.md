@@ -12,9 +12,8 @@ without the browser's bar. `web/public/manifest.webmanifest` is what makes
 Chrome offer it.
 
 What it can't do: a notification while it isn't open. A web page can only show
-one if the browser delivers a Web Push to it, which needs the sealed push the
-backend sends to an iPhone through Apple (docs/push-relay.md) made for a
-second kind of device. That is the same work the app needs (below).
+one if the browser delivers a Web Push to it, which would need a third kind of
+sender. The app has notifications (below).
 
 ## 2. The app (`android/`)
 
@@ -85,16 +84,55 @@ set. Then, in `android/`:
 
 `npx tauri android dev` runs it on a phone with USB debugging, or an emulator.
 
+### Notifications
+
+A thread that needs the person becomes a notification, with the app closed, as
+on the iPhone: the text is sealed on the person's own backend with a key only
+that phone and the backend hold, and the push relay (docs/push-relay.md) carries
+only the sealed bytes through Firebase Cloud Messaging.
+
+- **On the phone**: the gear menu's **Notifications on this phone**, in the app
+  (not the browser), once it is paired. It asks Android for the permission, then
+  registers the phone's Firebase token and its own push key with the backend
+  (`phone:registerDevice` with `platform: "android"`, API 63). The same row turns
+  it off. Android is asked only when the row is turned on, never at start.
+- **The plugin** is `android/plugins/push`: Kotlin that starts Firebase from the
+  project's `google-services.json`, makes the push key (kept wrapped by a key in
+  the Android Keystore), and receives the message in a `FirebaseMessagingService`
+  that opens the sealed text and posts the notification, with the app running or
+  not. A thin Rust side lets the page call it. Tapping a notification opens the
+  app; going to the thread from it is not done.
+- **Which backend and relay**: the backend needs API 63 (the gear row says so
+  when it is older) and the relay needs its Firebase sender (`relay/convex/fcm.ts`)
+  and `FCM_SERVICE_ACCOUNT`. Deploy the relay first: an old relay turns an
+  Android token down as a bad request, and the backend would report its pushes as
+  failing.
+
+Whoever publishes the app owns the Firebase project, since the relay's key sends
+for every phone that has the app built for it. To set one up:
+
+1. In the Firebase console, make a project and add an Android app with the
+   package name in `android/src-tauri/tauri.conf.json` (`com.tinkerware.threadbear`
+   here). Download its `google-services.json`.
+2. Add it to the repository as the secret `ANDROID_GOOGLE_SERVICES_JSON` (the
+   file's contents). Builds without it have no notifications and work as before.
+   To build by hand, put the file in
+   `android/plugins/push/android/src/main/assets/`.
+3. Make a service account key (Project settings, Service accounts, Generate new
+   private key). Give its contents to the relay as `FCM_SERVICE_ACCOUNT`
+   (`npx convex env set FCM_SERVICE_ACCOUNT -- "$(cat key.json)"` in `relay/`).
+   Keep the file out of every repository.
+4. Optionally the same contents as the repository secret `FIREBASE_SERVICE_ACCOUNT`:
+   the emulator job then sends the app a sealed notification and looks for it in
+   the notification shade. It builds its own copy of the app for that, with a
+   push key it knows and the token logged; the app people install has neither.
+
 ### What is not done
 
-- **Notifications while the app is closed.** The iPhone gets a notification
-  sealed with a key only that phone and the backend hold, sent through Apple by
-  the push relay. Android needs the same through Firebase Cloud Messaging: a
-  second sender beside `convex/push.ts` and `relay/`, a Kotlin service that
-  opens the sealed message, a platform on the device row (`phone:registerDevice`
-  takes an `apnsToken` and an environment), and a Firebase project whose key the
-  relay holds, so whoever publishes the app owns it. That is a change to the
-  backend and the protocol document, and a pull request of its own.
+- **Going to the thread from a notification**, and grouping several.
+- **Notifications on a real phone.** They have been seen on an emulator only
+  (the check above); Firebase's delivery to a sleeping phone, its battery
+  savers and a manufacturer's own app killers are not tested here.
 - **Scanning the code inside the app.** The phone's camera does it today.
 - **A Play Store listing.** It needs a release signing key, a developer
   account, the data safety form and a privacy policy; none of that is in the

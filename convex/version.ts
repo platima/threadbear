@@ -282,4 +282,10 @@
 //    threads.commands list), and phone:command returns that list as
 //    `result`. An older runner fails it as unknown, and the phone shows no
 //    palette; an older phone never asks.
-export const API_VERSION = 62;
+// 63: phone:registerDevice takes `platform: "android"`, for a phone whose
+//    token is a Firebase one (apnsToken keeps its name), and devices:targets
+//    carries it. A push for such a phone goes through the push relay to
+//    Firebase, whatever Apple key the backend has (docs/push-relay.md). An
+//    older backend refuses the argument, so an Android phone registers only
+//    with a backend of 63 or later.
+export const API_VERSION = 63;

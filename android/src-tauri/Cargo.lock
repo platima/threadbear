@@ -3206,6 +3206,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-threadbear-push"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+]
+
+[[package]]
 name = "tauri-runtime"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3361,6 +3370,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-deep-link",
+ "tauri-plugin-threadbear-push",
 ]
 
 [[package]]

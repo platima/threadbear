@@ -25,6 +25,7 @@ fn page_note(note: String) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_threadbear_push::init())
         .invoke_handler(tauri::generate_handler![page_note])
         .setup(|app| {
             let handle = app.handle().clone();

@@ -11,6 +11,15 @@ name: android
 # key is the workflow's `signed` output, which release.yml reads to decide
 # whether the APK goes on a release.
 #
+# Notifications go through Firebase (android/plugins/push). The app gets its
+# Firebase project from the ANDROID_GOOGLE_SERVICES_JSON secret, the contents of
+# the project's google-services.json: without it the app builds with no
+# notifications, as a fork or a pull request does. With it and the
+# FIREBASE_SERVICE_ACCOUNT secret (a service account key's contents), the
+# emulator job also sends the app a sealed notification and looks for it in
+# the notification shade. Those two need the repository's secrets, so a pull
+# request from a fork skips that part.
+#
 # A second job runs the app once on an emulator.
 #
 # It runs on changes to the app or to the website it wraps, by hand, and as a
@@ -35,6 +44,8 @@ on:
       ANDROID_KEY_ALIAS:
         required: false
       ANDROID_KEY_PASSWORD:
+        required: false
+      ANDROID_GOOGLE_SERVICES_JSON:
         required: false
     outputs:
       signed:
@@ -94,6 +105,17 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-phone-${{ hashFiles('android/src-tauri/Cargo.lock', 'android/package-lock.json') }}
           restore-keys: gradle-${{ runner.os }}-phone-
+      - name: The Firebase project, when the repository has one
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            mkdir -p android/plugins/push/android/src/main/assets
+            printf '%s' "$GOOGLE_SERVICES_JSON" > android/plugins/push/android/src/main/assets/google-services.json
+            node -e "const j = JSON.parse(require('fs').readFileSync('android/plugins/push/android/src/main/assets/google-services.json', 'utf8')); const n = j.client.map((c) => c.client_info.android_client_info.package_name); if (!n.includes('com.tinkerware.threadbear')) { console.error('::error::google-services.json is not for com.tinkerware.threadbear, but for ' + n.join(', ')); process.exit(1); } console.log('The app has a Firebase project')"
+          else
+            echo "No ANDROID_GOOGLE_SERVICES_JSON: the app is built without notifications"
+          fi
       - name: Make the Gradle project
         working-directory: android
         run: |
@@ -196,6 +218,31 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-emulator-${{ hashFiles('android/src-tauri/Cargo.lock', 'android/package-lock.json') }}
           restore-keys: gradle-${{ runner.os }}-emulator-
+      # With both Firebase secrets this copy of the app is built to be tested:
+      # given a push key of its own to seal against (the key is made here, not
+      # kept anywhere) and told to log its Firebase token, so the check below
+      # knows where to send. The app people install is built without either
+      # (android/plugins/push/android/build.gradle.kts).
+      - name: The Firebase project, and a key for the check
+        id: firebase
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            mkdir -p android/plugins/push/android/src/main/assets
+            printf '%s' "$GOOGLE_SERVICES_JSON" > android/plugins/push/android/src/main/assets/google-services.json
+          fi
+          if [ -n "$GOOGLE_SERVICES_JSON" ] && [ -n "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            key=$(openssl rand -base64 32)
+            echo "::add-mask::$key"
+            echo "TB_PUSH_TEST_KEY=$key" >> "$GITHUB_ENV"
+            echo "TB_PUSH_LOG_TOKEN=1" >> "$GITHUB_ENV"
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Without both Firebase secrets the emulator check leaves out notifications"
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Make the Gradle project and build for x86_64
         working-directory: android
         run: |
@@ -284,6 +331,9 @@ jobs:
           adb exec-out screencap -p > shots/2-pairing-link.png
           adb exec-out uiautomator dump /dev/tty > shots/2-pairing-link.xml || true
           adb logcat -d > shots/logcat.txt
+          # The copy built for the check logs its Firebase token, which is no
+          # use without the project's key, but is not for an artifact either
+          sed -i 's/test token .*/test token (removed)/' shots/logcat.txt
           # What the shell and the page said about the link (never the link itself)
           echo "--- the app's own lines:"
           grep -E 'RustStdoutStderr: threadbear' shots/logcat.txt || echo "(none)"
@@ -307,6 +357,64 @@ jobs:
             fi
             echo "The screen changed after the pairing link"
           fi
+      # The notification a thread that needs the person becomes, end to end but
+      # for the backend: sealed with the app's key as the backend seals it, sent
+      # through Firebase with the service account (as the relay does), to an
+      # app that is in the background, and found in the notification shade with
+      # the sealed words opened. A delivery through Google can be slow on an
+      # emulator, so it waits up to three minutes.
+      - name: A notification arrives while the app is in the background
+        if: steps.firebase.outputs.push == 'true'
+        timeout-minutes: 15
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -eu
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          pkg=com.tinkerware.threadbear
+          adb shell pm grant "$pkg" android.permission.POST_NOTIFICATIONS
+          adb logcat -c
+          # Started again from the launcher, so the app says which token it has
+          adb shell am force-stop "$pkg"
+          adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1
+          token=""
+          for i in $(seq 1 40); do
+            token=$(adb logcat -d -s ThreadbearPush:I | sed -n 's/.*test token //p' | tail -n 1 | tr -d '\r')
+            [ -z "$token" ] || break
+            sleep 5
+          done
+          if [ -z "$token" ]; then
+            echo "::error::The app gave no Firebase token in 200 seconds"
+            adb logcat -d | grep -E 'ThreadbearPush|FirebaseApp|FirebaseMessaging|FATAL' | sed 's/test token .*/test token (removed)/' | tail -n 40
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "The app has a Firebase token"
+          # Away from the app, and its process stopped as Android stops an idle
+          # one (not a force stop, which keeps Android from delivering anything)
+          adb shell input keyevent KEYCODE_HOME
+          sleep 3
+          adb shell am kill "$pkg" || true
+          title="Emulator check $GITHUB_RUN_ID"
+          body="Sealed by the server, opened on the phone"
+          node android/scripts/send-test-push.mjs "$token" "$TB_PUSH_TEST_KEY" "$title" "$body"
+          found=0
+          for i in $(seq 1 36); do
+            if adb shell dumpsys notification --noredact | grep -q "$title"; then found=1; break; fi
+            sleep 5
+          done
+          adb exec-out screencap -p > shots/3-after-push.png || true
+          adb logcat -d | sed 's/test token .*/test token (removed)/' > shots/logcat-push.txt
+          echo "--- the app's lines about it:"
+          grep ThreadbearPush shots/logcat-push.txt || echo "(none)"
+          echo "---"
+          if [ "$found" != 1 ]; then
+            echo "::error::No notification appeared within three minutes of Firebase accepting the message"
+            exit 1
+          fi
+          echo "The notification is in the shade"
+          adb shell dumpsys notification --noredact | grep -q "$body"
+          echo "and it carries the sealed words, opened"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

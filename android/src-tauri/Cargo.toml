@@ -14,6 +14,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-deep-link = "2"
+# Notifications through Firebase (Kotlin, with a thin Rust side), in this repository
+tauri-plugin-threadbear-push = { path = "../plugins/push" }
 # generate_context!() expands to code that names serde_json.
 serde_json = "1"
 
