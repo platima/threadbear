@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
-import { ConvexSync, forBackend, ASKED_API_VERSION, LINKS_API_VERSION, PROJECTS_DIFF_API_VERSION, STARS_API_VERSION, NETWORK_WAIT_API_VERSION, BACKEND_API_VERSION, MAC_RUNNER_STATS_API_VERSION, TURNS_API_VERSION, ICONS_API_VERSION, RUNNER_ICON_API_VERSION, SCHEDULES_API_VERSION, SHARE_API_VERSION, WOKE_API_VERSION, STARTED_BY_API_VERSION, SECTIONS_API_VERSION, MODELS_API_VERSION, REPLY_IMAGES_API_VERSION, REPLY_IMAGES_LOOKBACK_MS, REPLY_IMAGES_SCANS_PER_FLUSH, toAccountDoc, PRESENCE_MS, SYNC_COALESCE_MS, HEARTBEAT_MS, SHARED_USAGE_POLL_MS, SYNC_BATCH, ensureRunnerId, toThreadDoc, convexPoster, convexUploader, pictureName, type ThreadDoc } from '../../src/sync.ts';
+import { ConvexSync, forBackend, ASKED_API_VERSION, LINKS_API_VERSION, PROJECTS_DIFF_API_VERSION, STARS_API_VERSION, NETWORK_WAIT_API_VERSION, OPTION_NOTES_API_VERSION, BACKEND_API_VERSION, MAC_RUNNER_STATS_API_VERSION, TURNS_API_VERSION, ICONS_API_VERSION, RUNNER_ICON_API_VERSION, SCHEDULES_API_VERSION, SHARE_API_VERSION, WOKE_API_VERSION, STARTED_BY_API_VERSION, SECTIONS_API_VERSION, MODELS_API_VERSION, REPLY_IMAGES_API_VERSION, REPLY_IMAGES_LOOKBACK_MS, REPLY_IMAGES_SCANS_PER_FLUSH, toAccountDoc, PRESENCE_MS, SYNC_COALESCE_MS, HEARTBEAT_MS, SHARED_USAGE_POLL_MS, SYNC_BATCH, ensureRunnerId, toThreadDoc, convexPoster, convexUploader, pictureName, type ThreadDoc } from '../../src/sync.ts';
 import type { Project } from '../../src/protocol.ts';
 import type { ScheduleBackend } from '../../src/schedules.ts';
 import { nullLogger, type Logger } from '../../src/log.ts';
@@ -197,6 +197,18 @@ test('view follows hibernate and den; cost is to the cent; working comes from ba
   assert.ok(!('waitingForNetwork' in inbox));
   assert.ok(!('waitingForNetwork' in forBackend(offline, NETWORK_WAIT_API_VERSION - 1, now)));
   assert.equal(forBackend(offline, NETWORK_WAIT_API_VERSION, now), offline);
+  // What each answer does goes up with the card, so a Mac reading this
+  // thread through the relay draws rows, not plain buttons (8 Nov).
+  const card = toThreadDoc({ ...base, needs: 'you', asksSeq: 50, asks: [
+    { action: 'Same thread or new?', options: ['Same thread', 'New thread'], optionNotes: ['One thread that moves.', 'The old one is archived.'], suggested: 0 },
+    { action: 'Ship it?', options: ['Yes', 'No'], optionNotes: ['Only one', 'lines up', 'wrongly'] },
+  ] }, 'r', now);
+  assert.deepEqual(card.asks?.[0]?.optionNotes, ['One thread that moves.', 'The old one is archived.']);
+  assert.ok(!('optionNotes' in card.asks![1]!), 'a list that does not line up with the options stays home');
+  const noNotes = forBackend(card, OPTION_NOTES_API_VERSION - 1, now);
+  assert.ok(noNotes.asks?.every((a) => !('optionNotes' in a)));
+  assert.deepEqual(noNotes.asks?.[0]?.options, ['Same thread', 'New thread']);
+  assert.equal(forBackend(card, OPTION_NOTES_API_VERSION, now), card);
   // Nothing the phone doesn't need.
   assert.ok(!('lastSeq' in inbox) && !('contextTokens' in inbox) && !('panels' in inbox));
 });
@@ -502,6 +514,10 @@ function setupFull(opts: { heads?: { threadId: string; lastSeq: number }[]; take
       update: (p) => {
         applied.push(`update ${JSON.stringify(p)}`);
         return h.runner.update(p);
+      },
+      hibernateWhen: (p) => {
+        applied.push(`hibernateWhen ${p.threadId} ${p.said}`);
+        return h.runner.update({ threadId: p.threadId, snoozedUntil: '2026-11-08T00:00:00.000Z' });
       },
       markSeen: (id) => {
         applied.push(`markSeen ${id}`);
@@ -3140,4 +3156,22 @@ test('which cards the phone may allow: a short one-line command, or a threadbear
   assert.equal(remoteCardShowsAll('mcp__threadbear__send_message', { threadId: 'abc', text: 'hi' }), false, 'its line would be the id, not the message');
   assert.equal(remoteCardShowsAll('mcp__threadbear__create_thread', { text: 'go', folder: '/x' }), false, 'two things to read');
   assert.equal(remoteCardShowsAll('mcp__threadbear__schedule_message', { text: 'x', options: ['a'] } as never), false);
+});
+
+test('commands: an update with snooze.said hibernates the thread in those words (the main Mac\'s "Hibernate until…")', async () => {
+  const { h, sync, calls, push, applied } = setupFull();
+  sync.start();
+  await sync.flushNow();
+  const t = h.runner.create({ text: 'hello', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  const s = session(h, t.id);
+  s.init();
+  s.result('completed');
+  await tick();
+  push([{ commandId: 'w1', kind: 'update', threadId: t.id, args: { snooze: { said: 'at the weekend', untilRestart: true }, from: 'mac' }, createdAt: 1 }]);
+  await tick(10);
+  assert.deepEqual(applied, [`hibernateWhen ${t.id} at the weekend`]);
+  assert.equal(h.runner.get(t.id).snoozedUntil, '2026-11-08T00:00:00.000Z');
+  const finished = calls.filter((c) => c.fn === 'sync:finishCommand').map((c) => c.args);
+  assert.equal(finished.length, 1);
+  assert.equal(finished[0]!.ok, true);
 });

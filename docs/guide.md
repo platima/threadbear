@@ -133,7 +133,7 @@ block shows as the diagram (drawn with [Pele](https://pele.run/), in
 Threadbear's colours, light or dark), and an ```` ```html ```` block as the
 page, each in a box with the language on the left. Its Diagram / Source
 switch (Preview / Source for a page) flips it to the code, the copy button
-copies the code, and the arrows open it full size in the side pane. A
+copies the code, and the arrows open it full size in a window of its own. A
 diagram that can't be drawn says why above its code. A page is only shown,
 never run: its scripts are off, it can't reach the internet or your files,
 and it can't open anything, so only its own styles, SVG and `data:`
@@ -511,15 +511,20 @@ the thread. The Archived section at the foot of the list has
 them, most recently archived first, with the older ones behind Show more
 (the search at the top finds any of them). Unarchive, or the same swipe
 there, puts one back.
+To get rid of one for good, hover it there and click the trash, or
+right-click it and choose Delete…; after you confirm, it goes to the
+runner's trash folder, with no Undo in the app.
 
 Back and Forward (⌘[ and ⌘], in the Go menu) step through the threads and
 pages you've had open, as a browser does. A mouse's side buttons do the same,
-and so does a trackpad swipe, as in Safari: right for Back, left for Forward,
-with an arrow at the window's edge that follows your fingers and turns blue
-once letting go will go. A swipe that starts mostly up or down is a scroll, so
-a long thread still scrolls. It
-follows Swipe between pages in System Settings > Trackpad (two or three
-fingers). Over a thread's row a swipe left still archives it.
+and so does a trackpad swipe, as in Safari: with natural scrolling right for
+Back and left for Forward, and the other way round without it. A card in the
+middle of the window says which thread or page you'll land on, and its bar fills
+and turns blue once letting go will go. A swipe that starts mostly up or down is a scroll, so a long thread still
+scrolls. It follows Swipe between pages in System Settings > Trackpad (two or
+three fingers). Over a thread's row a swipe left still archives it. A thread
+you start takes the place of the new-thread screen, so Back from it goes to
+wherever you were before you pressed New thread.
 
 Hibernating or archiving a thread that's partway through a turn stops
 that turn. From the row's hover buttons, Threadbear asks first.
@@ -659,8 +664,15 @@ click one for its page, with its threads, state and notes. The search at
 the top of the Projects page looks through their names, state, goals, notes
 and folders: Return opens the top result and Escape clears it.
 
-A thread gets into a project in one of three ways: the librarian files it
-(below), its agent joins one, or you put it there, from Projects in its
+To start a thread in a project, press New Thread at the top of its page
+(or New thread… by its Threads). The message box opens with the project's
+folder picked and an "In" chip naming the project (its x starts the thread
+outside it instead). The thread is in the project from its first message,
+so its agent starts with the project's goals, state and notes; it shows
+in your Inbox like any other, and under the project's Threads.
+
+A thread also gets into a project when the librarian files it (below),
+when its agent joins one, or when you put it there, from Projects in its
 right-click menu. A thread can be in more than one. Its agent is told a
 little about each project it's in, and gets the panels and Patches from
 the projects' folders. If one is wrong, Take out in its Highlights keeps
@@ -777,7 +789,11 @@ An agent on one of those other Macs can still ask for a thread on this
 one (to try something only your Mac can, say): a card in its thread shows
 who's asking, the folder, its access and the whole brief, and Start it
 starts it here, from this Mac. Answer it in the Mac app; the phone shows it
-but can't start it. The new thread is told which thread asked, and can
+but can't start it. The agent can't see this Mac's folders, so a guess
+like `/home/mike/x` or `/Users/mike/x` starts in `x` under your home here
+if that's a folder; if no such folder is here, the card says so, and
+Start it sends the request back for the agent to ask again with one that
+is. The new thread is told which thread asked, and can
 message it back. Agents on this Mac start threads on the other Macs
 without asking.
 With the direct link on, its pictures and files come from that Mac as you open them. To start a
@@ -799,7 +815,9 @@ means one is offline or updating. Click a runner's name to see its CPU,
 memory and disk, what machine it is and how long that machine has been
 up. A bar turns orange when memory is 90% used or disk is under 10 GB free.
 The figures come every 10 seconds while the details are open and the
-window can be seen; a runner too old to send them says so.
+window can be seen; a runner too old to send them says so. The runners are
+in your order, the same as in Settings > Runners and on the phone: drag one
+to change it.
 
 ## Accounts, pools and Usage
 <!-- slug: accounts -->
@@ -1160,6 +1178,8 @@ which keeps working while your Mac is asleep, sends your phone
 notifications, and needs nothing else installed. The free plan is enough
 for one Mac's ordinary use.
 
+<!-- video: /video/self-hosting.mp4 poster: /video/self-hosting.webp title: Setting up a self-hosted backend, read out by the Threadbear bear -->
+
 If you'd rather keep everything on your own machine, setup can run
 Convex's open source backend in Docker on your Mac instead, and reach it
 over Tailscale. It's the same backend and the same features, with these
@@ -1387,48 +1407,6 @@ plays wherever you are, in Threadbear or another app, and stays quiet for
 a thread you stopped yourself. Several threads finishing at once make one
 ding. Pick Chime, Bell or Droplet (each plays as you pick it), set the
 volume, and press Play to hear it again.
-
-### Talking with a thread
-
-This is an experiment, off until you turn it on (see Experiments): there's
-no button, no download and no microphone prompt while it's off.
-
-Press the waveform button beside Send to talk with the thread out loud.
-It's on a new thread's composer too: there, what you say first starts the
-thread, and you carry on talking in it.
-It turns red while Voice is on. Say what you want as you would to a
-person; when you pause for about a second it goes to the thread as your
-message, and the agent's reply is read out. You can keep talking while it
-works (what you say goes into the turn it's on, as typing does), and if
-you talk over it, it stops to listen. It's the same thread with the same
-memory, tools and approvals. When it needs your OK it asks out loud, and
-you can just say "yes", "go ahead", "no" or "always allow"; anything
-longer ("no, use the other folder") goes to it as your message, as
-typing would. Your answer only counts once it has finished reading the
-request out and stopped talking: if another one comes in first, or you
-answer before it's done, nothing is answered and it reads the newest one
-to you. It only takes an answer by voice for a request it can read out
-whole, a plain one-line command. Anything more (a longer command, an edit,
-a plan, another Mac asking to start a thread) it names and leaves for you
-to answer on screen, as you do question cards.
-While Voice is on, the bear sits over the message box with what you're
-saying beside it: it perks up while it listens, nods along as you talk,
-looks up with thought dots while it works, and talks along with its
-voice. Code and tables aren't read out; it
-tells you they're on screen. Press the button again, or go to another
-thread, to end Voice.
-
-Use Voice in Settings (⌘,) > Voice turns it off, which takes the
-waveform button away everywhere. The same tab picks who it sounds like (Emily, Mike and about
-twenty more), how fast it talks, the language, and the microphone. Play
-a Sample tries a voice. The first time you use Voice, Threadbear
-downloads its voice engine (Kyutai's pocket-tts) and a voice model of
-about 240 MB, and macOS asks to let it use the microphone. Listening is
-done on your Mac by macOS; nothing you say is recorded or kept in a log. On headphones
-(AirPods and the like) you can talk over it any time. On the Mac's
-speakers you can too, as long as macOS's echo cancellation starts; when
-it won't, Voice stops listening while it speaks, so it doesn't hear
-itself.
 
 ### The activity log
 

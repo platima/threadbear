@@ -30,14 +30,13 @@ export function renameWithRetry(from: string, to: string, retryMs: number[] = RE
 
 // Write to a temp file in the same folder, fsync, then rename, so a crash
 // never leaves a half-written thread.json behind. On Windows the rename is
-// tried again if another program has the file open, and a write that still
-// fails takes its temp file with it.
+// tried again if another program has the file open.
 export function atomicWriteFileSync(file: string, data: string | Buffer, mode?: number): void {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+  const fd = fs.openSync(tmp, 'w', mode ?? 0o644);
   try {
-    const fd = fs.openSync(tmp, 'w', mode ?? 0o644);
     try {
       if (typeof data === 'string') fs.writeSync(fd, data);
       else fs.writeSync(fd, data);
@@ -48,12 +47,13 @@ export function atomicWriteFileSync(file: string, data: string | Buffer, mode?: 
     if (IS_WINDOWS) renameWithRetry(tmp, file);
     else fs.renameSync(tmp, file);
   } catch (e) {
-    if (IS_WINDOWS) {
-      try {
-        fs.rmSync(tmp, { force: true });
-      } catch {
-        // removeTempFiles finds it at the next start
-      }
+    // A save that's tried again (Runner.flush) would otherwise leave one
+    // behind each time, say while the disk is full.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // (Windows can refuse while another program has it open.) removeTempFiles
+      // finds it at the next start.
     }
     throw e;
   }
@@ -75,10 +75,13 @@ export function isDirectory(p: string): boolean {
   }
 }
 
-// Removes the `.<name>.<pid>.<hex>.tmp` files atomicWriteFileSync leaves if
-// the process dies between writing and renaming. dirs are scanned one
-// level down as well (the thread folders). Only safe while holding the
-// runner lock, when nothing else is writing.
+// Removes the `.<name>.<pid>.<hex>.tmp` files atomicWriteFileSync (and
+// token-tally.ts) leave if the process dies between writing and renaming.
+// dirs are scanned one level down as well (the thread folders). A file whose
+// pid is still running is left alone: during a handover the draining runner
+// goes on saving without the runner lock, and sweeping its temp file
+// mid-save made the save fail (THREADBEAR-9). A recycled pid only keeps a
+// stale file until a later start.
 export function removeTempFiles(...dirs: string[]): number {
   let removed = 0;
   const clean = (dir: string, depth: number) => {
@@ -90,7 +93,9 @@ export function removeTempFiles(...dirs: string[]): number {
     }
     for (const d of names) {
       const p = path.join(dir, d.name);
-      if (d.isFile() && /^\..+\.\d+\.[0-9a-f]{8}\.tmp$/.test(d.name)) {
+      const m = d.isFile() ? /^\..+\.(\d+)\.[0-9a-f]{8}\.tmp$/.exec(d.name) : null;
+      if (m) {
+        if (pidAlive(Number(m[1]))) continue;
         try {
           fs.unlinkSync(p);
           removed++;
@@ -102,4 +107,17 @@ export function removeTempFiles(...dirs: string[]): number {
   };
   for (const d of dirs) clean(d, 1);
   return removed;
+}
+
+function pidAlive(pid: number): boolean {
+  // 0 or less would ask about a process group, which is always there.
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM: it's there, just not ours to signal. Anything else (ESRCH, or
+    // a number too big to be a pid) means no such process.
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }

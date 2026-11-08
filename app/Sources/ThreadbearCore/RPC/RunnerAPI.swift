@@ -19,6 +19,10 @@ public extension RPCClient {
         return try await call("threads.list", params, as: ThreadsResult.self).threads
     }
 
+    func deleteThread(_ threadId: String) async throws {
+        _ = try await call("threads.delete", .object(["threadId": .string(threadId)]), as: EmptyResult.self)
+    }
+
     func searchThreads(_ query: String, limit: Int? = nil) async throws -> [ThreadSummary] {
         var params: [String: JSONValue] = ["query": .string(query)]
         if let limit { params["limit"] = .number(Double(limit)) }
@@ -36,6 +40,7 @@ public extension RPCClient {
         if let mode = request.permissionMode { params["permissionMode"] = .string(mode.rawValue) }
         if let title = request.title { params["title"] = .string(title) }
         if let runnerId = request.runnerId { params["runnerId"] = .string(runnerId) }
+        if !request.projectIds.isEmpty { params["projectIds"] = .array(request.projectIds.map { .string($0) }) }
         return try await call("threads.create", .object(params), as: ThreadResult.self, timeout: RPCClient.sendTimeout).thread
     }
 
@@ -338,6 +343,9 @@ public struct NewThreadRequest: Sendable, Hashable {
     /// Another runner, when this Mac's runner makes it there through
     /// Convex (docs/protocol.md, "Other runners' threads through the backend").
     public var runnerId: String?
+    /// Projects it starts in, joined before its first turn (New Thread on
+    /// a project's page).
+    public var projectIds: [String] = []
 
     public init(text: String, images: [ImageRef] = [], cwd: String? = nil, accountId: String? = nil, poolId: String? = nil, model: String? = nil, effort: String? = nil, permissionMode: PermissionMode? = nil, title: String? = nil) {
         self.text = text

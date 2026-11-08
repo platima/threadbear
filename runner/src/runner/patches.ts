@@ -173,6 +173,12 @@ export const patchesPart = {
     }
     entry.refreshing = false;
     entry.at = this.clock.now();
+    // Asked for again while this read ran (rereadPatches): it may be stale.
+    if (entry.again) {
+      entry.again = false;
+      entry.at = -Infinity;
+      if (rt.patches === entry && !rt.deleted) void this.refreshPatches(st);
+    }
     // The folder moved on meanwhile: the next summary starts over.
     if (rt.patches !== entry || rec.cwd !== cwd || rt.deleted) return;
     // The projects changed meanwhile: read again.
@@ -220,7 +226,8 @@ export const patchesPart = {
     this.claudeChecks.clear();
     this.sharedPatchSets.clear();
     // A turn may have changed what they read (comments resolved, a handback).
-    this.liveRuns.clear();
+    // One still running is kept, so it isn't started again beside itself.
+    this.dropFinishedLiveRuns();
   },
 
   // A live state command (when, badge), shared by every thread that runs
@@ -477,6 +484,22 @@ export const patchesPart = {
 
   // Every thread whose patches have been read reads them again now: a
   // trusted file can matter to threads in other folders (a project's).
+  // Forgets the live commands' finished output (it may be out of date),
+  // keeping any still running for the reads that join them.
+  dropFinishedLiveRuns(this: Runner): void {
+    for (const [key, run] of this.liveRuns) if (run.doneAt !== undefined) this.liveRuns.delete(key);
+  },
+
+  // Reads one thread's patches again now. A read already under way may have
+  // started before whatever asked for this, so it goes again once it ends.
+  rereadPatches(this: Runner, st: ThreadState): void {
+    const entry = st.rt.patches;
+    if (!entry) return;
+    entry.at = -Infinity;
+    if (entry.refreshing) entry.again = true;
+    else void this.refreshPatches(st);
+  },
+
   rereadAllPatches(this: Runner): void {
     this.forgetFolders();
     for (const st of this.threads.values()) {
@@ -729,6 +752,16 @@ export const patchesPart = {
       this.markDirty(st);
       // Land (or any command) may have moved the branch or the files.
       this.recheckLooseEnds(st);
+      // What a command did is often what its chips' `when` and badges ask
+      // (a Run that starts a server swaps for its Stop): read them now,
+      // rather than at the next poll up to LIVE_POLL_MS later. The live
+      // commands' finished output is from before it ran, so it goes too;
+      // one still running is kept, so a slow command shared by many
+      // threads isn't started again beside itself.
+      if (st.rt.patches) {
+        this.dropFinishedLiveRuns();
+        this.rereadPatches(st);
+      }
       return { ok: outcome.ok, exitCode: outcome.exitCode, durationMs: outcome.durationMs, seq: event.seq };
     } finally {
       running.delete(actionId);

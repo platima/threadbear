@@ -623,6 +623,8 @@ async function dispatch(client, method, p) {
     }
     case 'threads.create': {
       if (!p.text) throw rpcError(-32602, 'text is required');
+      // New Thread on a project's page: every project checked first, as the runner does.
+      const startIn = (p.projectIds ?? []).map((id) => needProject(id));
       const threadId = 'th_' + crypto.randomBytes(6).toString('hex');
       const now = iso();
       // Like the runner: a login named pins the thread; otherwise a pool
@@ -644,7 +646,9 @@ async function dispatch(client, method, p) {
       // `fresh`: started this session, so the librarian files it after its first turn
       // (librarianFiles). The demo fixtures never are, so nothing they show changes.
       threads.set(threadId, { summary, events: [], inProgress: new Map(), timers: [], fresh: true, ...(client.as ? { runnerId: client.as } : {}) });
+      for (const project of startIn) join(summary, project, 'mike', true);
       broadcastSummary(threadId);
+      if (startIn.length) broadcastProjects();
       setTimeout(() => fakeTurn(threadId, p.text, p.images ?? []), 10);
       return { thread: summary };
     }
@@ -686,6 +690,13 @@ async function dispatch(client, method, p) {
       const turnId = 'turn_' + crypto.randomBytes(4).toString('hex');
       setTimeout(() => fakeTurn(t.summary.id, p.text ?? '', p.images ?? [], turnId, undefined, { editOf: p.seq }), 10);
       return { turnId, rewound: { seq: rewound.seq, fromSeq: rewound.fromSeq, toSeq: rewound.toSeq, files } };
+    }
+    case 'threads.delete': {
+      const t = need(p.threadId);
+      if (t.interrupt) t.interrupt();
+      threads.delete(t.summary.id);
+      broadcast('thread.deleted', { threadId: t.summary.id });
+      return {};
     }
     case 'threads.interrupt': {
       const t = need(p.threadId);
@@ -1160,7 +1171,8 @@ async function dispatch(client, method, p) {
           ...(r.self
             ? { version: '0.1.0+20261105T064853Z-c4d90ca', release: '20261105T064853Z-c4d90ca', startedAt: iso(-16 * 60_000) }
             : { version: '0.1.0+20261104T221010Z-51ae514', release: '20261104T221010Z-51ae514', startedAt: iso(-26 * 3_600_000) }),
-        })),
+        })).concat(MORE_RUNNERS.map((r) => ({ id: r.id, name: r.name, icon: r.icon, online: true, lastSeenAt: iso(), self: false,
+          version: '0.1.0+20261104T221010Z-51ae514', release: '20261104T221010Z-51ae514', startedAt: iso(-3 * 3_600_000) }))),
       };
     case 'runners.stats': {
       // Each runner's machine figures, a little different each ask.

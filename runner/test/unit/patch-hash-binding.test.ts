@@ -69,12 +69,20 @@ const timed = <T>(fn: () => T): { ms: number; out: T } => {
 // against under 2 ms for the plain pass, beyond a limit of 200 times, so the
 // limit there is three times as wide and counts the pass as at least 3 ms:
 // still far short of what a quadratic one took.
+// Up to three tries: a busy Mac (a build or another suite running) can
+// stall one timing for a second, which failed the runner's build of main
+// on 6 Nov with this test passing alone. Quadratic work is slow every
+// time, so one quick try is enough to show it's linear.
 function assertLinear<T>(label: string, ref: () => unknown, fn: () => T, factor = 50): T {
-  const base = Math.min(timed(ref).ms, timed(ref).ms, timed(ref).ms);
-  const { ms, out } = timed(fn);
-  const limit = IS_WINDOWS ? 3 * factor * Math.max(base, 3) + 50 : factor * base + 50;
-  assert.ok(ms < limit, `${label}: ${Math.round(ms)} ms, against ${Math.round(base)} ms for one pass`);
-  return out;
+  let last = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const base = Math.min(timed(ref).ms, timed(ref).ms, timed(ref).ms);
+    const { ms, out } = timed(fn);
+    const limit = IS_WINDOWS ? 3 * factor * Math.max(base, 3) + 50 : factor * base + 50;
+    if (ms < limit) return out;
+    last = `${label}: ${Math.round(ms)} ms, against ${Math.round(base)} ms for one pass`;
+  }
+  assert.fail(`${last} (three tries)`);
 }
 
 // The same for a shell script's parse, measured against itself on an eighth

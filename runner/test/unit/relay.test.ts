@@ -63,6 +63,11 @@ test("the open card is the last turn's end, and an approval sits at its own seq"
   const end = ev.find((e) => e.seq === 119)!;
   assert.equal(end.needs, 'you');
   assert.deepEqual(end.asks, [{ action: 'Pick one', options: ['A', 'B'], ticked: true }]);
+  // What each answer does comes through, so the Mac draws rows as it does
+  // for its own runner's threads, not plain buttons (8 Nov).
+  const noted = relayEvents(T, rows, { ...asksRow, asks: [{ action: 'Pick one', options: ['A', 'B'], optionNotes: ['Does A', 'Does B'] }] }, [], false, 'bruce');
+  const notedEnd = noted.filter((e) => e.type === 'turn.completed').at(-1) as { asks?: unknown };
+  assert.deepEqual(notedEnd.asks, [{ action: 'Pick one', options: ['A', 'B'], optionNotes: ['Does A', 'Does B'] }]);
   const ap = ev.find((e) => e.type === 'approval.requested')!;
   assert.equal(ap.seq, 13 * SCALE + 1);
   assert.equal(ap.turnId, 'bbbb2222');
@@ -466,4 +471,47 @@ test('a new thread there keeps every mode; Plan first goes as Ask plus a flag, a
   const h = harness();
   await assert.rejects(h.relay.create('bruce', { text: 'Start', permissionMode: 'yolo' }), /permissionMode must be one of/);
   assert.equal(h.calls.filter((c) => c.fn === 'relay:queueCommand').length, 0, 'nothing queued');
+});
+
+test("hibernating in words goes as an update with the words, and answers the row once that runner has worked out when", async () => {
+  // 7 Nov: "Hibernate until…" on another Mac's thread showed "Hibernating
+  // until something happens isn't possible through Convex yet".
+  const h = harness();
+  const p = h.relay.call(T, 'threads.hibernateWhen', { threadId: T, said: 'at the weekend' });
+  await new Promise((r) => setImmediate(r));
+  const queued = h.calls.find((c) => c.fn === 'relay:queueCommand')!;
+  assert.equal(queued.args.kind, 'update');
+  // untilRestart: what an older runner, which doesn't read the words, does instead of waking it.
+  assert.deepEqual(queued.args.args, { snooze: { said: 'at the weekend', untilRestart: true } });
+  // That runner put it away at once, and its row says so before the model answers.
+  h.remote.threads[0]!.snoozedUntil = at(3600);
+  h.subs.get('relay:commandState')![0]!.onUpdate({ state: 'done' });
+  const { thread } = (await p) as { thread: Record<string, unknown> };
+  assert.equal(thread.id, T);
+  assert.equal(thread.snoozedUntil, at(3600));
+  // The model couldn't say: the note comes back as the error.
+  const bad = h.relay.call(T, 'threads.hibernateWhen', { threadId: T, said: 'whenever' });
+  await new Promise((r) => setImmediate(r));
+  h.subs.get('relay:commandState')![1]!.onUpdate({ state: 'failed', note: "Couldn't work out when to wake it: no time in that" });
+  await assert.rejects(bad, /Couldn't work out when/);
+  await assert.rejects(h.relay.call(T, 'threads.hibernateWhen', { threadId: T, said: '  ' }), /Say when/);
+});
+
+test('hibernating in words: done before the row has its time still answers it as put away', async () => {
+  // Codex's review: done can beat the row, and the app then put an awake row over its guess.
+  const h = harness();
+  const p = h.relay.call(T, 'threads.hibernateWhen', { threadId: T, said: 'tomorrow morning' });
+  await new Promise((r) => setImmediate(r));
+  h.subs.get('relay:commandState')![0]!.onUpdate({ state: 'done' });
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setImmediate(r));
+    h.clock.advance(1000);
+  }
+  const { thread } = (await p) as { thread: Record<string, unknown> };
+  assert.equal(thread.snoozedUntilRestart, true);
+  assert.ok(thread.snoozedUntil);
+  // Later replies keep it put away until a snoozed row comes, then show the row's time.
+  assert.equal((h.relay as any).summary(T).snoozedUntilRestart, true);
+  h.remote.threads[0]!.snoozedUntil = at(7200);
+  assert.equal((h.relay as any).summary(T).snoozedUntil, at(7200));
 });

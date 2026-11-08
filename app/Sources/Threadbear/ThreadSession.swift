@@ -345,7 +345,6 @@ final class ThreadSession {
 
     func receive(_ event: Event) {
         guard state == .loaded else { return }
-        if subagentId == nil { VoiceMode.shared.receive(event) }
         handle(feed.receive(event))
     }
 
@@ -775,6 +774,12 @@ final class ThreadSession {
             } catch {
                 self.stopAnswering(approvalId)
                 app?.show(error)
+                // Read it again, so the card shows what's true now and a
+                // second click answers that: a request refused as changed
+                // since the card showed it (a folder made since, or a
+                // runner updated in between) never starts on the old card,
+                // which would otherwise be all a retry could send.
+                self.loadStartRequest(approvalId)
             }
         }
         return true
@@ -813,15 +818,6 @@ final class ThreadSession {
                 app?.show(error)
             }
         }
-    }
-
-    /// The approval card as this thread shows it now, nil once it's settled
-    /// or not there (Voice checks a spoken answer against it).
-    func openApproval(_ approvalId: String) -> ApprovalRequest? {
-        guard !answering.contains(approvalId),
-              case .approval(let item)? = feed.model.item(id: "ap:\(approvalId)")?.content,
-              item.resolution == nil else { return nil }
-        return item.request
     }
 
     /// Go ahead on a "Plan first" plan card (docs/protocol.md).
