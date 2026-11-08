@@ -1,0 +1,104 @@
+name: linux
+
+# The Linux desktop app (docs/linux.md): the shell built on Ubuntu, packaged with its
+# own Node and the runner into threadbear-v<version>-linux-<arch>.tar.gz
+# (installer/linux/stage.mjs), and shown to start. x64 on GitHub's x64 Ubuntu,
+# arm64 on its Arm one, each building natively, so nothing is cross-compiled.
+#
+# It runs on changes to what goes in the package, and by hand. It publishes
+# nothing: the tarball is an artifact of the run.
+
+on:
+  push:
+    branches: [main, 'linux/**']
+    paths: ['desktop/**', 'runner/**', 'installer/linux/**', 'installer/node.json', 'installer/make-notices.mjs', 'docs/guide.md', 'docs/protocol.md', 'docs/on-your-mac.md', '.github/workflows/linux.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            os: ubuntu-24.04
+          - arch: arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            runner/package-lock.json
+            desktop/package-lock.json
+      - name: System libraries the shell is built from
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential pkg-config xz-utils xvfb
+      - name: Dependencies
+        run: |
+          npm ci --prefix runner
+          npm ci --prefix desktop
+      - name: The runner's checks that matter here
+        working-directory: runner
+        run: |
+          npm run typecheck
+          node --test test/unit/install-linux.test.ts test/unit/agent-sdk.test.ts test/unit/platform.test.ts
+      - name: The desktop UI's checks
+        working-directory: desktop
+        run: |
+          npm run typecheck
+          npm test
+      - name: Build the shell
+        working-directory: desktop
+        run: npx tauri build --no-bundle
+      - name: Package
+        run: node installer/linux/stage.mjs --arch ${{ matrix.arch }} --shell desktop/src-tauri/target/release/threadbear-desktop
+      - name: What was made
+        run: |
+          ls -l build/linux-${{ matrix.arch }}
+          cat build/linux-${{ matrix.arch }}/*.sha256
+          tar -tzf build/linux-${{ matrix.arch }}/*.tar.gz | head -40
+      - name: It starts
+        run: |
+          set -eu
+          dir=$(mktemp -d)
+          tar -xzf build/linux-${{ matrix.arch }}/*.tar.gz -C "$dir"
+          app=$(echo "$dir"/threadbear-v*-linux-${{ matrix.arch }})
+          "$app/node/bin/node" --version
+          # The runner, from the package's own Node and packages: tb answers.
+          HOME="$dir/home" "$app/node/bin/node" "$app/runner/bin/tb" --help | head -5
+          # The installer script, without touching this machine's systemd.
+          HOME="$dir/home" "$app/node/bin/node" "$app/runner/scripts/install-linux.mjs" --dry-run
+          # The window, under a virtual screen: it is still there after 15 seconds
+          # (timeout ends it with 124), and the bridge it started answered.
+          # (A session bus for the single-instance check, and software drawing, as a
+          # runner has no GPU.)
+          export HOME="$dir/home" THREADBEAR_NO_RUNNER_OFFER=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1
+          mkdir -p "$HOME"
+          set +e
+          timeout 15 dbus-run-session -- xvfb-run -a "$app/threadbear-desktop" > "$dir/app.log" 2>&1
+          code=$?
+          set -e
+          cat "$dir/app.log"
+          test "$code" = 124
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: threadbear-linux-${{ matrix.arch }}
+          path: |
+            build/linux-${{ matrix.arch }}/*.tar.gz
+            build/linux-${{ matrix.arch }}/*.tar.gz.sha256
+          if-no-files-found: error

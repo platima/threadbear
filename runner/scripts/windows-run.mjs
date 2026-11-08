@@ -1,4 +1,5 @@
-// Keeps the runner up on Windows: what launchd's KeepAlive does on a Mac.
+// Keeps the runner up on Windows: what launchd's KeepAlive does on a Mac. (On
+// Linux the desktop app's systemd service, install-linux.mjs, runs it too.)
 // The logon task (install-windows.mjs) runs this; it runs the runner from
 // the checkout it sits in, and starts it again after it exits, whether it
 // crashed or restarted itself (runner.restart exits 0 and expects a
@@ -47,7 +48,9 @@ export function nextWait(lastWaitMs, ranMs, { first = FIRST_WAIT_MS, max = MAX_W
 const LOG_LIMIT_BYTES = 2 * 1024 * 1024;
 
 function run() {
-  const logDir = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Threadbear', 'Logs');
+  // (Linux runs this too, as the desktop app's service: the runner's log is
+  // in ~/Library/Logs there, platform.ts logFileFor, and this one beside it.)
+  const logDir = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Threadbear', 'Logs') : path.join(os.homedir(), 'Library', 'Logs');
   fs.mkdirSync(logDir, { recursive: true });
   const logFile = path.join(logDir, 'runner-supervisor.log');
   // Only for tests: a stand-in for the runner, and a shorter first wait.
