@@ -130,23 +130,40 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
+      # Every step that waits has a limit of its own, and says where it is, so a
+      # hang fails in minutes with its log, not after the job's hour with nothing.
       - name: An emulator
+        timeout-minutes: 25
         run: |
           set -eu
-          sdk="$ANDROID_HOME/cmdline-tools/latest/bin"
-          yes | "$sdk/sdkmanager" --licenses > /dev/null || true
-          "$sdk/sdkmanager" "emulator" "platform-tools" "system-images;android-34;google_apis;x86_64" > /dev/null
-          echo no | "$sdk/avdmanager" create avd --force -n ci -k "system-images;android-34;google_apis;x86_64" --device pixel_6
-          nohup "$ANDROID_HOME/emulator/emulator" -avd ci -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 3072 -cores 2 > emulator.log 2>&1 &
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
-          adb wait-for-device
-          for i in $(seq 1 90); do
-            [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && break
+          sdk="$ANDROID_HOME/cmdline-tools/latest/bin"
+          image="system-images;android-34;google_apis;x86_64"
+          say() { echo "$(date -u +%H:%M:%S) $*"; }
+          say "licences"
+          yes | timeout 120 "$sdk/sdkmanager" --licenses > /dev/null || true
+          say "the system image"
+          timeout 900 "$sdk/sdkmanager" "emulator" "platform-tools" "$image" | tail -n 5
+          say "the virtual device"
+          echo no | "$sdk/avdmanager" create avd --force -n ci -k "$image" --device pixel_6
+          say "starting the emulator"
+          nohup "$ANDROID_HOME/emulator/emulator" -avd ci -no-window -no-audio -no-boot-anim -no-snapshot -accel on -gpu swiftshader_indirect -memory 3072 -cores 2 > emulator.log 2>&1 &
+          emulator_pid=$!
+          booted=0
+          for i in $(seq 1 120); do
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then say "the emulator stopped"; break; fi
+            if [ "$(timeout 20 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then booted=1; break; fi
+            [ $((i % 6)) -ne 0 ] || say "still booting ($(adb devices | tail -n +2 | tr '\n' ' '))"
             sleep 5
           done
-          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
-          adb shell getprop ro.build.version.sdk
+          if [ "$booted" -ne 1 ]; then
+            echo "The emulator did not finish booting. Its log:"
+            tail -n 60 emulator.log || true
+            exit 1
+          fi
+          say "booted: Android API $(adb shell getprop ro.build.version.sdk)"
       - name: It installs, opens and takes a pairing link
+        timeout-minutes: 10
         run: |
           set -eu
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
