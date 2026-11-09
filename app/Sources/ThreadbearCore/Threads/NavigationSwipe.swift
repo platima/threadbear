@@ -40,18 +40,23 @@ public struct NavigationSwipe: Sendable, Equatable {
     /// deciding. Not over a sidebar row, which needs the whole gesture.
     public private(set) var holds = true
     private var allowed: Set<Direction> = []
+    /// Ways it can swipe with nowhere in the history to go: the card says
+    /// so and springs back, rather than nothing showing at all, which Mike
+    /// took for Forward not working (8 Nov).
+    private var empty: Set<Direction> = []
     private var sumX = 0.0
     private var sumY = 0.0
     /// Points a second the swipe's way, at the last movement.
     private var lastSpeed = 0.0
 
     /// How far the fingers go before letting go goes there.
-    public static let threshold = 110.0
+    /// 110 at first, then 150; Mike found both too sensitive (8 and 9 Nov).
+    public static let threshold = 220.0
     /// Moving this fast the swipe's way at the end is a flick: it goes even
     /// short of the line, once it's `flickTravel` along. In points a second,
     /// as how far one event moves depends on how often the trackpad sends them.
-    static let flickSpeed = 840.0
-    static let flickTravel = 40.0
+    static let flickSpeed = 1200.0
+    static let flickTravel = 100.0
     /// How far across before a gesture that's being held is a swipe. Small,
     /// as nothing happens yet but the arrow starting to show.
     static let across = 5.0
@@ -66,13 +71,23 @@ public struct NavigationSwipe: Sendable, Equatable {
     }
 
     /// 0 at the start, 1 at the line, for drawing the arrow.
-    public var progress: Double { direction == nil ? 0 : min(1, max(0, travel / Self.threshold)) }
+    public var progress: Double {
+        guard direction != nil else { return 0 }
+        let along = min(1, max(0, travel / Self.threshold))
+        // With nowhere to go it only gives a little, as a row does.
+        return isEmpty ? along * 0.25 : along
+    }
+
+    /// Swiping a way with nowhere to go: it never goes.
+    public var isEmpty: Bool { direction.map { empty.contains($0) } ?? false }
 
     /// Far enough along that letting go goes there.
-    public var armed: Bool { direction != nil && travel >= Self.threshold && travel >= abs(sumY) }
+    public var armed: Bool { direction != nil && !isEmpty && travel >= Self.threshold && travel >= abs(sumY) }
 
     /// Fingers touched the trackpad, with the ways there's somewhere to go.
-    public mutating func begin(allowed: Set<Direction>, holds: Bool = true) {
+    /// `empty`: more ways it can swipe, with nowhere to go.
+    public mutating func begin(allowed: Set<Direction>, empty: Set<Direction> = [], holds: Bool = true) {
+        self.empty = empty.subtracting(allowed)
         phase = .deciding
         travel = 0
         sumX = 0
@@ -107,7 +122,7 @@ public struct NavigationSwipe: Sendable, Equatable {
     }
 
     private mutating func decide() -> Verdict {
-        guard !allowed.isEmpty else { return .scroll }
+        guard !allowed.isEmpty || !empty.isEmpty else { return .scroll }
         let x = abs(sumX), y = abs(sumY)
         if holds {
             // Anything more across than up and down, as a real swipe drifts,
@@ -124,7 +139,7 @@ public struct NavigationSwipe: Sendable, Equatable {
             guard x >= y * RowSwipe.across else { return .scroll }
         }
         let way: Direction = sumX > 0 ? .back : .forward
-        guard allowed.contains(way) else { return .scroll }
+        guard allowed.contains(way) || empty.contains(way) else { return .scroll }
         phase = .tracking(way)
         travel = abs(sumX)
         return .swipe
@@ -135,7 +150,7 @@ public struct NavigationSwipe: Sendable, Equatable {
     /// the arrow and a lift isn't a flick (seen on Tinker Desk, 7 Nov).
     public mutating func end(stillMoving: Bool = true) -> Direction? {
         defer { reset() }
-        guard let direction else { return nil }
+        guard let direction, !isEmpty else { return nil }
         // A gesture that went on to be mostly up and down was a scroll that
         // started sideways, however far across it got.
         guard travel >= abs(sumY) else { return nil }

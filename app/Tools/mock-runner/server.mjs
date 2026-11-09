@@ -1107,9 +1107,11 @@ async function dispatch(client, method, p) {
       list.highlights = list.highlights.filter((h) => h.id !== id);
       list.highlights.unshift({
         id, kind, title: p.title ?? (p.path ? path.basename(p.path) : p.url), path: p.path, url: p.url, how: 'pinned',
-        note: p.note, ...(p.show ? { show: true } : {}), seq: t.summary.lastSeq, lastSeq: t.summary.lastSeq, at: iso(),
+        note: p.note, seq: t.summary.lastSeq, lastSeq: t.summary.lastSeq, at: iso(),
       });
       t.summary.highlightsAt = iso();
+      // show is a panel request naming the pin, as the runner's (docs/protocol.md, "Highlights").
+      if (p.show) t.summary.panelRequest = { id: 'pr_' + crypto.randomBytes(4).toString('hex'), panel: 'highlights', title: list.highlights[0].title, highlight: id, at: iso() };
       broadcastSummary(t.summary.id);
       return { highlight: list.highlights[0] };
     }

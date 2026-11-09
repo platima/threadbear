@@ -15,7 +15,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG=${CONFIG:-Release}
 DEVICE=${DEVICE:-00008130-001939C80483401C}   # 15 Pro Max
-DD=${DD:-/tmp/threadbear-dd-device}
+# Derived data: this account's alone (scripts/private-dir.mjs). It was /tmp/threadbear-dd-device
+# until 8 Nov, where another account on the Mac could make it first and leave build products in
+# it for this build to reuse and sign.
+DD=${DD:-$HOME/Library/Caches/Threadbear/ios-builds/dd-device}
 ASC_KEY_ID=${ASC_KEY_ID:-7SS6J9F98P}
 ASC_ISSUER_ID=${ASC_ISSUER_ID:-69a6de6f-a06e-47e3-e053-5b8c7c11a4d1}
 ASC_KEY=${ASC_KEY:-$HOME/.config/poddle/AuthKey_$ASC_KEY_ID.p8}
@@ -27,7 +30,8 @@ else
   echo "No API key at $ASC_KEY: signing with whatever Xcode has (sign in to Xcode if this fails)"
   extra+=(-allowProvisioningUpdates)
 fi
-# The derived data lives in /tmp and is shared by every thread, and on
+DD=$(node scripts/private-dir.mjs "$DD") || exit 1  # mode 700, nobody else can get in
+# The derived data is shared by every thread, and on
 # 5 Nov it was left with package checkouts and binary frameworks half gone
 # (convex-swift with no Package.swift, Sentry's xcframework with no
 # Info.plist), which fails every build until it's cleared. Packages are

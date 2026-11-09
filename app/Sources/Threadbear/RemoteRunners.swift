@@ -183,6 +183,18 @@ extension AppModel {
     /// editor draws runners.
     func runnerIcon(of thread: ThreadSummary) -> String { RunnerIcon.symbol(remoteRunner(of: thread)?.icon) }
 
+    /// Why pictures can't go in a message for `thread` (a new thread's
+    /// runner when nil), or nil when they can. A picture is a file this
+    /// Mac's runner imported, so another runner hasn't got it: through
+    /// Convex this Mac's runner uploads it with the message (docs/protocol.md,
+    /// "Other runners' threads through the backend", Pictures), but the
+    /// direct link would hand that runner a path on this Mac. Mike pasted
+    /// one for Hetzner Cloud on 8 Nov and every remote runner refused them.
+    func picturesRefusal(for thread: ThreadSummary?) -> String? {
+        guard directRemoteLink, let name = thread.flatMap(runnerName(of:)) ?? (thread == nil ? newThreadRunner?.name : nil) else { return nil }
+        return "Pictures can't go to \(name) over the direct link yet. Turn off Connect to other machines directly in Settings > Runners to send them through Convex."
+    }
+
     /// "On bruce", and whether it's offline, for a remote row's tooltip.
     func runnerPlace(of thread: ThreadSummary) -> String? {
         guard let name = runnerName(of: thread) else { return nil }
@@ -359,11 +371,8 @@ extension AppModel {
     /// reached the draft stays and the banner says why.
     func sendNewThread(on runnerId: String, text: String, draft: Draft) {
         let name = remoteRunners.first { $0.id == runnerId }?.name ?? "that Mac"
-        guard draft.images.isEmpty else {
-            errorMessage = "Pictures can't go to \(name) from this Mac yet."
-            return
-        }
-        ActivityRecorder.shared.sent(threadId: nil, images: 0, answers: 0)
+        let images = draft.normalized.images
+        ActivityRecorder.shared.sent(threadId: nil, images: images.count, answers: 0)
         creatingThread = true
         Task {
             defer { creatingThread = false }
@@ -371,7 +380,9 @@ extension AppModel {
                 guard let runner = remoteRunners.first(where: { $0.id == runnerId }) else {
                     throw RemoteUnreachable(runnerId: runnerId, runnerName: name, online: false, reason: .unknownRunner)
                 }
-                var request = newThreadRequest(text: text, images: [])
+                // Through Convex this Mac's runner uploads the pictures; the
+                // direct link never gets here with any (picturesRefusal).
+                var request = newThreadRequest(text: text, images: images)
                 let made0: ThreadSummary
                 if directRemoteLink {
                     made0 = try await remoteClients.client(for: runner).createThread(request)
@@ -520,6 +531,9 @@ extension AppModel {
                     next[thread.id] = thread
                 }
                 if next != threads { threads = next }
+                // The table's row has no panelRequest, so one waiting on the
+                // thread he already has open only turns up here.
+                if let selection, threads[selection]?.runnerId == runnerId, threads[selection]?.panelRequest != nil { servePanelRequest() }
             }
             // A transcript still loaded from before picks up where it was.
             for session in openSessions where session.state == .loaded && threads[session.threadId]?.runnerId == runnerId {

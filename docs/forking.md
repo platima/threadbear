@@ -25,7 +25,10 @@ Mike's copy (reporting to his Sentry, uploading his debug symbols).
 | Mike's deployments in docs | `docs/convex-backend.md`, `docs/website.md`, `docs/push-relay.md` | Names of Mike's Convex deployments, for his own use. The code never reads them; yours come from setup. |
 
 Code comments that say "Mike's releases" or tell a story from Mike's
-setup are kept on purpose, as the history of why a line is there.
+setup are kept on purpose, as the history of why a line is there. Text
+the app shows or sends to an agent says "the user" instead, except where
+it means Mike himself (his releases, the About credit);
+`runner/test/unit/fork-view.test.ts` checks that too.
 
 ## 2. Where each feature lives, and how to take it out
 

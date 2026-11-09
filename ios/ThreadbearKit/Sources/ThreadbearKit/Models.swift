@@ -655,6 +655,39 @@ public struct ThreadPictures: Sendable, Hashable {
         return matching.first { $0.seq == seq } ?? matching.last { $0.seq <= seq } ?? matching.last
     }
 
+    /// The photos Mike sent with his message at `seq`, in their order, as
+    /// the runner put them up (`src` picture:N, share-images.ts
+    /// pastedImagesInEvent). Empty when they stayed on the Mac.
+    public func pasted(seq: Int) -> [MessageImage] {
+        images
+            .compactMap { image -> (Int, MessageImage)? in
+                guard image.seq == seq, let n = Self.pictureNumber(image.src) else { return nil }
+                return (n, image)
+            }
+            .sorted { $0.0 < $1.0 }
+            .map(\.1)
+    }
+
+    /// His message's words for the bubble, with the runner's "[2 pictures]"
+    /// line (sync.ts toMessageDoc) taken off once every picture it counts
+    /// is here to show instead. While any of them is missing the line stays,
+    /// so a photo kept on the Mac still says it was there.
+    public func words(of text: String, seq: Int) -> String {
+        guard let match = text.firstMatch(of: /(?:\n\n)?\[([1-9]\d{0,2}) pictures?\]$/),
+              let count = Int(match.1) else { return text }
+        let placed = Set(InlinePictures.pieces(text).compactMap { piece -> Int? in
+            if case .picture(let n) = piece { n } else { nil }
+        })
+        let unplaced = pasted(seq: seq).filter { !placed.contains(Self.pictureNumber($0.src) ?? 0) }
+        guard unplaced.count >= count else { return text }
+        return String(text[..<match.range.lowerBound])
+    }
+
+    static func pictureNumber(_ src: String?) -> Int? {
+        guard let src, src.hasPrefix("picture:"), let n = Int(src.dropFirst(8)), n > 0 else { return nil }
+        return n
+    }
+
     /// A web picture needs nothing uploaded. Anything else unmatched is on
     /// the Mac.
     public static func webURL(_ src: String) -> URL? {

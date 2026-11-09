@@ -24,7 +24,8 @@ import { ErrorCode, RpcError } from './protocol.ts';
 import type { PermissionMode, ThreadSummary } from './protocol.ts';
 import type { Notification, Runner } from './runner.ts';
 import type { UsageReading } from './usage.ts';
-import type { AgentApprovalRequest, ProjectControl, ScheduleControl, ThreadControl } from './threadbear-mcp.ts';
+import type { AgentApprovalRequest, ProjectControl, RemoteControl, ScheduleControl, ThreadControl } from './threadbear-mcp.ts';
+import type { RemoteThreads } from './thread-index.ts';
 import type { ToolApprovalAnswer } from './adapters/types.ts';
 import type { Scheduler } from './schedules.ts';
 import type { CommandHost } from './sync.ts';
@@ -539,6 +540,24 @@ export function primaryElsewhere(link: PrimaryLink, runner: Pick<Runner, 'has'>)
     list: async (include) => (await link.call<{ threads: ThreadSummary[] }>('threads.list', { include })).threads,
     search: async (query, limit) => (await link.call<{ threads: ThreadSummary[] }>('threads.search', { query, limit })).threads,
     call: (method, params) => link.call(method, params),
+  };
+}
+
+// Other runners' threads for a draining runner's agent tools, through the
+// primary: a draining runner has stopped its own sync, but its kept turns
+// still have to reach them. On 8 Nov a thread started from the cloud runner
+// finished its turn on a draining M5 runner and couldn't send_message the
+// cloud thread its brief said to report to. The primary lists them as its
+// own tools have them (remoteThreads.list with forTools, which waits there
+// for the backend's rows), and passes a call for one of them on through its
+// relay (rpc.ts, THREAD_METHODS).
+export function primaryRemote(link: Pick<PrimaryLink, 'call'>): RemoteControl {
+  return {
+    list: async () => {
+      const r = await link.call<RemoteThreads>('remoteThreads.list', { forTools: true });
+      return { runners: r?.runners ?? [], threads: r?.threads ?? [], ...(r?.order ? { order: r.order } : {}) };
+    },
+    call: (threadId, method, params) => link.call(method, { threadId, ...params }),
   };
 }
 

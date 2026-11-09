@@ -16,8 +16,9 @@
 #                                     in the pool for the next thread, and its
 #                                     borrow branch deleted
 #
-# Unlocking a spare is the claim, the same as the runner's, so a thread and
-# the runner never take the same one.
+# Taking a spare is a rename of git's lock file, the same as the runner's
+# (claimSpare in runner/src/worktrees.ts), so only one of two at once wins
+# and a thread and the runner never take the same one.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,10 +34,23 @@ KEEP=(-e /app/.build -e /dock/.build)
 
 if [ "${1:-}" = "--give-back" ]; then
   dir="${2:?--give-back needs the folder to give back}"
-  if [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ]; then
-    echo "$dir has uncommitted changes; commit and land them, or git -C $dir reset --hard, first." >&2
+  # Only a borrow still out: given back twice, the slot may be another
+  # thread's by now, and locking it would hand its folder to the next one.
+  if [ -e "$(git -C "$dir" rev-parse --absolute-git-dir)/locked" ]; then
+    echo "$dir is already a spare." >&2
     exit 1
   fi
+  # Untracked files too: a slot given back twice may be another borrow's
+  # now, and the next taker's git clean would lose its new files.
+  if [ -n "$(git -C "$dir" status --porcelain)" ]; then
+    echo "$dir has uncommitted or untracked files; commit and land them, or remove them, first." >&2
+    exit 1
+  fi
+  current="$(git -C "$dir" symbolic-ref -q --short HEAD || true)"
+  case "$current" in
+    thread/borrow-*|"") ;;
+    *) echo "$dir is on $current, not a borrowed branch: it's someone else's now, so it wasn't given back." >&2; exit 1 ;;
+  esac
   if ! git -C "$dir" merge-base --is-ancestor HEAD main; then
     echo "$dir has commits that aren't on main; land them first." >&2
     exit 1
@@ -58,7 +72,11 @@ borrow_branch() { echo "thread/borrow-$(basename "$1")-$(date +%Y%m%d-%H%M%S)"; 
 claimed=""
 for dir in $(git -C "$MAIN" worktree list --porcelain | awk -v RS= -v d="$THREADS/" '
   /\nlocked threadbear spare/ { sub(/^worktree /, ""); sub(/\n.*/, ""); if (index($0, d) == 1) print }'); do
-  if git -C "$MAIN" worktree unlock "$dir" 2>/dev/null; then
+  # One that can't be read is skipped, as the runner does.
+  admin="$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null)" || continue
+  lock="$admin/locked"
+  if mv "$lock" "$lock.claimed-$$" 2>/dev/null; then
+    rm -f "$lock.claimed-$$"
     claimed="$dir"
     break
   fi

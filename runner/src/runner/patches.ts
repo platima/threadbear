@@ -17,7 +17,7 @@ import { CLAUDE_PATCH_ID, claudeCommands, claudeOptions, settingsCommands, setti
 import { canonicalPath, runsAsCodeByName, type CodeWrite } from '../code-writes.ts';
 import { IS_WINDOWS } from '../platform.ts';
 import type { PatchInfo } from '../protocol.ts';
-import { actionRunProblem, automaticTrust, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, projectRoots, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, type CommandOutcome, type PanelRender, type PatchSet, type ProjectFolder, projectPatchFiles } from '../patches.ts';
+import { actionRunProblem, automaticTrust, isInside, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, projectRoots, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, type CommandOutcome, type PanelRender, type PatchSet, type ProjectFolder, projectPatchFiles } from '../patches.ts';
 import { liveCommandEnv } from '../shell-allowlist.ts';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -713,6 +713,15 @@ export const patchesPart = {
       await this.openUrl(action.url ?? '');
       return { ok: true, durationMs: Date.now() - started };
     }
+    // A thread whose worktree was removed hasn't moved out of it until its
+    // next message (leaveRemovedWorktree), and the folder may be another
+    // thread's or a borrower's by now, so nothing runs there (Codex, 8 Nov).
+    // An archive's cleanup running now decides whether the folder stays.
+    while (st.rt.cleaning) await st.rt.cleaning;
+    const gone = st.rec.worktree;
+    if (gone?.removedAt && isInside(action.folder ?? st.rec.cwd, gone.path)) {
+      throw new RpcError(ErrorCode.other, `Didn't run ${action.title}: this thread's worktree at ${gone.path} was removed when it was archived, and the folder may be another thread's now. Send the thread a message first, and it carries on in the main checkout.`);
+    }
     const running = (st.rt.runningActions ??= new Set());
     if (running.has(actionId)) throw new RpcError(ErrorCode.busy, `${action.title} is already running.`);
     // It runs from the folder, so what the patch's hash covered must still
@@ -765,6 +774,8 @@ export const patchesPart = {
       return { ok: outcome.ok, exitCode: outcome.exitCode, durationMs: outcome.durationMs, seq: event.seq };
     } finally {
       running.delete(actionId);
+      // An archive held for it (archiveWhenGone) goes ahead now.
+      if (running.size === 0) this.archiveWhenGone(st);
     }
   },
 };

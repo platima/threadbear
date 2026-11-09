@@ -282,6 +282,13 @@
 //    threads.commands list), and phone:command returns that list as
 //    `result`. An older runner fails it as unknown, and the phone shows no
 //    palette; an older phone never asks.
+// 63: relay:queueCommand takes `images` (storage ids the main Mac's runner
+//    uploaded through relay:pictureUploadUrl and /relay/upload, recorded in
+//    relayUploads) on a send or a create, and gives the command a URL for
+//    each, as a phone's photos have; relay:discardPictures deletes ones that
+//    weren't queued, and sync:pruneFiles any left after a day. A runner
+//    sends pictures to another runner only from 63: an older backend would
+//    drop them and send the words alone.
 // 64: phone:registerDevice takes `platform: "android"`, for a phone whose
 //    token is a Firebase one (apnsToken keeps its name), and devices:targets
 //    carries it. A push for such a phone goes through the push relay to

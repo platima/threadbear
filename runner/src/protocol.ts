@@ -286,8 +286,11 @@ export type PanelPlace = 'tab' | 'left' | 'right' | 'top' | 'bottom' | 'window';
 export type PanelRequest = {
   id: string;
   panel: string; // "highlights", "patches", "usage", "updates", "connectors", or one of the thread's panels' ids
-  title: string; // "Highlights", "Convex"
+  title: string; // "Highlights", "Convex"; with highlight, the pin's title
   where?: PanelPlace;
+  // pin with show: the highlight to open in the pane, over Highlights. An
+  // app that doesn't know this opens Highlights.
+  highlight?: string;
   at: string;
 };
 

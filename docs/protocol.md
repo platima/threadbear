@@ -991,7 +991,7 @@ the summary and then the reply.
 | `requests.get` | `{ threadId, approvalId }` | `{ request, target?, runners, fingerprint, missingFolder? }`: another runner's request for a new thread (Asking another runner), exactly as it was filed (`relay:runnerRequest`) but for a folder starting on this Mac, which is the folder it would start in here ("The folder" there), the runner it names if this runner can find it (`{ id, name, self }`), and every runner to pick from instead. `missingFolder` is the folder as filed when it would start here and isn't a folder on this Mac. Main Mac's runner only; `-32602` for no such request on that thread |
 | `requests.answer` | `{ threadId, approvalId, allow: boolean, runnerId?: string }` | `{ thread?: { id, runnerId, runnerName } }`. `allow` starts the filed request (on `runnerId` if given, else the runner it named), marks it allowed and answers its card; otherwise marks it denied and declines the card. `-32602` once the card has closed (answered, expired, declined from the phone) or the request was already answered. Main Mac's runner only |
 | `runners.stats` | `{}` | `{ stats: RunnerMachineStats[] }`: each runner's latest machine figures, `{ runnerId, at, cpuPercent, cores, memUsed, memTotal, diskFree, diskTotal, load1?, uptimeSec, machine?, os? }` (bytes; `uptimeSec` is the machine's). Asking marks them wanted (`sync:watchRunnersFromMac`, at most every 20 s), so every runner reports every 10 s until nobody has asked for 45 s. The Mac app asks only while a runner's details are open in the Runners panel and its window can be seen. Empty with sync off, on an older backend, or on a runner key. A runner older than this answers `-32601`. The app leaves out a row with a figure past `setRunnerStats`'s limits, as one stored before those were checked would be |
-| `remoteThreads.list` | `{}` | `RemoteThreads`: other runners' threads for the sidebar (see "Other runners' threads"). Empty with sync off, or before the backend (API 12) has answered. A runner older than this answers `-32601` |
+| `remoteThreads.list` | `{ forTools?: boolean }` | `RemoteThreads`: other runners' threads for the sidebar (see "Other runners' threads"). `forTools` is a draining runner's agent tools asking the primary: it answers as for its own tools, waiting up to 3 seconds for the backend's rows (Agent tools). Empty with sync off, or before the backend (API 12) has answered. A runner older than this answers `-32601` |
 | `runners.setOrder` | `{ runnerIds: string[] }` | `{}`. Mike's runner order, every runner's id with this one's: the same order the phone sets (`phone:setRunnerOrder`), which a phone's new thread follows, saved with `sync:setRunnerOrder` (backend API 58, the owner key only). It comes back as `RemoteThreads.order` in `remoteThreads.updated`. `-32602` for a list that isn't one of strings; an error on a runner key or an older backend. A runner older than this answers `-32601` |
 | `files.read` | `{ path: string, maxBytes?: number, known?: { size, modifiedAt } }` | `{ path, size, modifiedAt, mediaType, data, truncated }` (`data` base64, at most `maxBytes`, default 16 MB, never over 48 MB; `truncated` when the file is longer), or `{ path, unchanged: true, size, modifiedAt }` when `known` matches the file. A file on this runner's Mac, for a Mac app showing one of its threads from another Mac (see "Other runners' threads"). `-32602` for a relative path, a missing file or a folder |
 | `files.list` | `{ path: string }` | `{ path, entries: [{ name, isFolder, hidden, size?, modifiedAt? }], truncated }` (`size` for a file only; `isFolder` follows a symlink; `hidden` is a dotfile; at most 5000 entries, in no set order, `truncated` when the folder has more; a `size` that isn't a whole number of bytes is read as none). A folder on this runner's Mac, for the side pane's folder browser on another Mac (see "Other runners' threads"). `-32602` for a relative path, a missing folder or a file |
@@ -1879,7 +1879,9 @@ thread to another login when the one it's on runs out of room.
   to the API partway through that turn. This thread carries on by itself
   once it's back."). The runner probes the provider's API host (a TCP
   connection to api.anthropic.com or chatgpt.com on 443, or a CONNECT
-  through `HTTPS_PROXY`) 5, 10, 20, 40 seconds apart and then every
+  through `HTTPS_PROXY`, over TLS with its certificate checked when that's
+  an `https://` URL; each probe gets 5 seconds in all and reads at most
+  1 KB of the proxy's answer) 5, 10, 20, 40 seconds apart and then every
   minute, and once it answers sends a runner-origin message: "The
   connection to the API dropped partway through that turn and is back
   now. Carry on from where you left off." A carry-on that can't get
@@ -1917,8 +1919,10 @@ where the cursor is (where it was dropped, for a drop), drawn as a chip
 with the picture's thumbnail, and his bubble draws the markers as chips
 too. The pictures still show over the text, as before. The iPhone
 app's composer does the same with photos pasted, taken or chosen, and
-its bubbles draw any `[Picture N]` as a chip with the photo symbol, as
-the phone isn't given a message's pictures. The runner sends pictures pasted
+its bubbles draw any `[Picture N]` as a chip with the photo symbol. From
+8 Nov 2026 the phone also draws the pictures the runner sent up (below)
+over the bubble, and drops the runner's "[2 pictures]" line once every
+picture it counts is there (ThreadPictures.words). The runner sends pictures pasted
 into a message to the backend as they're sent, unless `sync.pastedPictures` is
 false in `runner.json`, each with `src` `picture:N`; the website draws them in
 place of the marker, and a chip where one didn't go up. An ask's
@@ -1968,6 +1972,16 @@ second after Allow, which looked like the same card coming back (Mike,
 - **Other clients.** The phone and another Mac's view of the runner
   don't get the list: they answer the card's own call, and the rest ask
   one by one.
+- **Never on a start request.** Another runner's request for a thread
+  (`threadbear.start_thread`, "Asking another runner") always shows as
+  this Mac's runner read it, and is answered with `requests.answer`
+  alone. The app ignores an `approval.queued` for that card, and leaves
+  any such call out of another card's list (it asks with its own card),
+  as both come from the runner that owns the thread, which may be one
+  the app doesn't trust with this Mac. For the same reason one approval
+  id is one card: an `approval.requested` under an id the app already
+  shows replaces that card while it waits, unless it's a start request,
+  and changes nothing once it's answered.
 
 ## Plan first
 
@@ -2620,6 +2634,37 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   `check` from API 51 and `checkTimeoutSecs` from API 55; the agent
   tools take `check` and `checkTimeoutSecs` only while the experiment
   is on.
+- **Card reviewer** (experiment `cardReviewer`, off unless `runner.json`
+  has `"experiments": { "cardReviewer": true }`;
+  `runner/src/runner/card-review.ts`). In a thread whose `permissionMode`
+  is `auto`, a Claude tool approval (`requestApproval`, except
+  `ExitPlanMode`; a Codex one isn't reviewed, as its file change card names
+  the files but not the change)
+  or a threadbear tool's own card (`requestAgentApproval`, except
+  `create_thread`, `update_thread`, `schedule_message`, `update_schedule`
+  and `move_thread`, whose access lasts past the call) first goes to a
+  small-jobs `generate` with `strong` (Opus, no tools), shown the card's
+  title, the call's whole input (`wholeInput` on the request, as the card's
+  `input` may have parts cut short), the thread's opening message, Mike's
+  latest message and any newer one not from him, labelled as such (a brief
+  over 12,000 characters means the card goes to Mike),
+  under a system prompt that treats all of that as data, each piece between
+  `BEGIN <tag>` and `END <tag>` lines with a random tag per call. Only an answer
+  whose JSON has `"verdict": "allow"` allows: the call goes ahead with a
+  `system.note` "Allowed by the reviewer: <title>. <why>" and no
+  `approval.requested` is ever sent. Anything else (`ask`, unreadable, the
+  call failing, a private folder, input over 40,000 characters) puts the
+  card up as before, after a `system.note` with the reviewer's reason when
+  it gave one. The answer must be that JSON object alone (a code fence at
+  most) with a non-empty `why`. The thread stays `running` while the
+  reviewer thinks, and the call sits in `rt.reviews`: Stop or the turn
+  ending answers it `expired` at once, and a message from Mike `deny`
+  (as for a card he wrote instead of answering; a subagent's call, which
+  his message doesn't decline, gets a card rather than the verdict made
+  before he wrote), and deleting the thread
+  `expired`, with no card. A thread
+  switched out of Auto meanwhile gets the card. Ask, Full access and plans
+  are never reviewed.
 - **Review by another lab** (experiment `labReview`, off unless
   `runner.json` has `"experiments": { "labReview": true }`;
   `runner/src/runner/lab-review.ts`). A turn that would count as finished
@@ -2829,10 +2874,10 @@ action runs on the thread (Land), when a client subscribes to it (at most
 every 5 seconds), and when a thread it started completes a turn or is
 archived. Clients show an unknown `kind` as its `text`.
 
-The Mac app draws "Nothing left open" beside Done when no end other than
-`scheduled` is left, else lists them under "Still open" (a `thread` one
-links `thread:<id>`); `scheduled` ones alone go under "Coming back". The
-phone doesn't show them yet.
+The Mac app lists them under "Still open" (a `thread` one links
+`thread:<id>`); `scheduled` ones alone go under "Coming back". With none
+left it shows just Done (a "Nothing left open" label beside it was cut on
+9 Nov). The phone doesn't show them yet.
 
 ## Secrets
 
@@ -3875,7 +3920,7 @@ type Highlight = {
   path?: string         // file: absolute
   how: "pinned" | "written" | "opened" | "mentioned" | "created" | "committed"
   note?: string         // a pin's reason, in the agent's words
-  show?: true           // a pin the agent asked to have shown straight away
+  show?: true           // no longer sent: an older runner's pin asked to be shown
   sha?: string          // commit: short sha
   branch?: string       // commit
   pushed?: true         // commit: a later git push in the thread sent its branch
@@ -3916,8 +3961,17 @@ time a client asks and then from where it got to:
 note?, show? }` (a path relative to its folder is fine; it must exist;
 a url is at most 2,000 characters).
 A pin of something already found is the same item, now pinned. `show`
-asks the app to open it in the pane now, so an agent shows Mike a
-mockup there instead of running `open`. Only the pane: a file shown this
+asks the app to open it in the pane, so an agent shows Mike a mockup
+there instead of running `open`. It's a `panelRequest` (see Showing
+panels) with `panel: "highlights"` and `highlight` naming the pin, so it
+opens when Mike is looking at the thread, now or later, and every pin
+with `show` asks again: the same page pinned after an edit comes up
+again. (It was a `show` flag on the item until 8 Nov 2026, which the app
+only acted on the first time it saw it, and never for a thread it hadn't
+fetched yet.) The app opens the pin over Highlights, fetching the
+thread's highlights first if it hasn't got that one, then calls
+`threads.panelShown`; one that's gone opens Highlights. The tool waits
+up to 2 seconds for that, as `show_panel` does, and says which. Only the pane: a file shown this
 way never opens in its app (a project file included), and a link only
 opens by itself if it's a web page, where a click on it would go. `unpin { id }` takes one off
 again. The tools' descriptions say when to use them.
@@ -4013,6 +4067,7 @@ type PanelRequest = {
   panel: string         // "highlights", "patches", "usage", "updates", "connectors", or one of the thread's panels' ids
   title: string         // the panel's name: "Highlights", "Convex"
   where?: "tab" | "left" | "right" | "top" | "bottom" | "window"
+  highlight?: string    // pin with show: the pin to open (panel is "highlights")
   at: string            // when the agent asked
 }
 ```
@@ -4299,7 +4354,12 @@ project in an `icons/` folder, then favicons and logos. Wide pictures,
 template (menu bar) icons, other image sets, and anything under
 `node_modules`, build output, docs or tests are passed over, as is one
 under a folder named for something else (`public/inventory/icon.svg` is
-the inventory's). The best is copied in, so the app never reads a repo. It
+the inventory's). A manifest's icon counts only if it's named like a
+picture and is a file of the repo's own, not a link out of it. The best is
+copied in, so the app never reads a repo, and only if its bytes say it's a
+picture; on Linux ImageMagick gets it with its decoder named (never one it
+picks, as its MSL and MVG ones are scripts), and an SVG is drawn only by
+rsvg-convert. It
 looks again a few seconds after a project is made or its folders change,
 and every hour at all of them, copying again when the file has changed or
 a better one has turned up. A project with no picture gets an SF Symbol:
@@ -4664,7 +4724,7 @@ default).
   which `relay:queueCommand` keeps only on an archive, and that runner
   records the archive as an agent's. From an older backend it's dropped and
   the archive reads as Mike's, as before.
-- `threads.send` (text and `answers`; pictures are `-32000`;
+- `threads.send` (text, `answers` and pictures, below;
   the answer has `queued: true` when that runner hasn't taken it in the 20
   seconds),
   `threads.interrupt`, `approvals.respond`, `secrets.answer` (sealed to the
@@ -4709,8 +4769,8 @@ default).
 - **New threads there.** (A request from a runner key, "Asking another
   runner", files Plan first as `ask`: its row has no room for the flag.)
   `threads.create` with `runnerId` is a `create`
-  command (text, `cwd`, `accountId`, `model`, `effort`, `permissionMode`;
-  pictures are `-32000`). Every mode goes, as a missing one is full access
+  command (text, `cwd`, `accountId`, `model`, `effort`, `permissionMode`
+  and pictures, below; with pictures the text can be empty). Every mode goes, as a missing one is full access
   there: Plan first as `permissionMode: "ask", plan: true`, which a runner or
   backend from before Plan first reads as Ask. A mode one of them doesn't
   know is refused, here, in the backend and by that runner, never dropped
@@ -4719,6 +4779,38 @@ default).
   sidebar list has it. `remoteThreads.logins { runnerId }` gives that runner's
   logins for the pickers, from the backend's `accounts` rows (no pools;
   `defaults.cwd` is the folder of its newest thread).
+- **Pictures** (backend API 63, 8 Nov 2026). A `threads.send` or
+  `threads.create` for another runner can carry `images`, as for this one:
+  the `ImageRef`s `media.import` made, in this runner's `inbox/`. A picture
+  anywhere else is `-32602` (a client can't have any other file here sent to
+  Convex by naming it), and so are more than 6 or one that isn't an image.
+  This runner uploads each to `/relay/upload` with a one-use ticket from
+  `relay:pictureUploadUrl` (at most 10 MB; the backend records it in
+  `relayUploads`) and queues the command with `images: [storageId, ...]` in
+  order; `relay:queueCommand` takes only those uploads, and only ones nothing
+  else names (a picture row, another command's), and stores
+  `images: [{ storageId, url }]`, the shape a phone's photos have, with
+  `commandFiles` rows. So the other runner fetches them as it does the
+  phone's (Sync, the `send` and `create` commands), even one from before
+  this, and `sync:finishCommand` deletes them once it's done, whether it went
+  or failed. If the command couldn't be queued, this runner calls
+  `relay:discardPictures` with the ids, which deletes only those uploads that
+  nothing names; whatever's left (a lost reply, a runner that quit between
+  the two) goes after a day with its `relayUploads` row (`sync:pruneFiles`).
+  That runner marks a send taken before it fetches the pictures, so a send
+  with pictures waits past taken for done and fails if the fetch does. It
+  answers within 100 seconds of being asked, as the app gives up on a send
+  at 120 and then puts the draft back while it may still go: no upload
+  starts after the first minute and they must all be up by 75 seconds, or
+  nothing is queued (the error says so), every wait after that ends by 100
+  seconds, and taken and still not done then counts as sent. A new thread
+  with pictures waits for done in the same 100 seconds. So a fetch there
+  that fails after 100 seconds (six pictures each taking over 7 seconds to
+  download) still looks sent here. A backend before 61 would drop them and send the words
+  alone, so this runner says the backend needs updating instead (it updates
+  with the runner), and an offline runner is said before anything uploads.
+  The direct link sends no pictures yet: the app says to turn it off to send
+  them through Convex.
 - **Answers from another runner.** `files.list` with `runnerId` and `path`
   is a `call` command, `{ method: "files.list", params: { path } }`, which
   that runner answers in the command's `result` (at most 500 entries; JSON
@@ -4882,6 +4974,16 @@ the mirror back as state. The Mac app doesn't use it.
   removes any whose thread is gone (after the same two minutes) and writes
   again any it has stopped sharing, so a stop or a delete the mirror never
   got (a write lost after it landed, a crash) can't leave a link readable.
+  A thread ever shared has its row written as soon as sync starts, settling
+  or not, and a share change never waits for the settle. Until the mirror's
+  row has the link the thread has now (written, not just sent: a write that
+  failed or was left out doesn't count, and a row with a link counts as
+  there from when it's sent), none of that thread's messages go
+  up, by any path (a phone's page of earlier ones included), and its row is
+  tried again every minute; its whole history goes once the row is there.
+  `share:view` reads the
+  row's share, so a message going first was readable through a link
+  already stopped.
   Each write in flight is tracked as that write's own, so a flush that
   fails after its rows went never forgets another write's row on its way,
   and a row write that fails may have landed, so the next change to that
@@ -5370,7 +5472,12 @@ schedule on it, and mint phone tokens. Now there are two kinds of key, and
   - Messages: 12 KB a row and 48 MB a runner key in all. Past that its
     oldest anywhere go first, before a new one goes in, a few hundred a
     write; one there's still no room for waits (`skipped`) and is sent
-    again, so a new thread's are never the ones lost.
+    again, so a new thread's are never the ones lost. A row sent again
+    that grows (its buttons) is counted the same way (never evicting
+    itself), must still fit a row's 12 KB whole, and gives the bytes back
+    when it shrinks. Each runner key's count is checked against its rows
+    once, started by its heartbeat (`recountMessageBytes`), and only ever
+    raised by that.
   - A waiting question keeps exactly what its answer is matched on (its
     text, header and option labels); only option descriptions are cut, and
     if it still doesn't fit the card says to answer it on the Mac.
@@ -5557,6 +5664,8 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `remoteThread` | owner only | another runner's thread row, its open approval and card |
 | `queueCommand` | owner only | work for another runner: a thread's command goes to the runner the backend says has it |
 | `commandState` | owner only | |
+| `pictureUploadUrl` | owner only | a one-use `/relay/upload` URL for a picture going to another runner's thread, recorded in `relayUploads` |
+| `discardPictures` | owner only | deletes pictures uploaded through `pictureUploadUrl` for a command that wasn't queued, only ones nothing names |
 | `remoteAccounts` | owner only | another runner's logins |
 | `remoteBody` | owner only | one tool's output on another runner's thread (full sync) |
 | `fileRequest` | its own | a request for a thread on another runner, from one of its own threads (Asking another runner); never changed after; at most 5 waiting (one over two hours old doesn't count) and 50 kept, oldest going first, for a week at most |
@@ -5738,9 +5847,12 @@ say it's on that runner rather than that it's missing. A
 runner that isn't watching the list (no app connected lately) starts the
 watch and waits up to 3 seconds for its answer, rows and all (a refusal or
 an error ends the wait); one that runs out isn't waited for again for a
-minute. With sync off, a runner key, the backend failing, or
-on a draining runner (its sync has stopped), they see this runner's threads
-only.
+minute. A draining runner has stopped its sync, so its kept turns ask the
+primary instead: `remoteThreads.list` with `forTools: true` over its link
+for the list (the primary answers as for its own tools, the wait
+included), and the other calls passed on to the primary, whose relay
+takes them as it does the Mac app's. With sync off, a runner key or the backend failing, they see this
+runner's threads only.
 
 | Variable | Value |
 |---|---|
@@ -5772,6 +5884,10 @@ Either side may be upgraded first, so each tolerates the other:
 - An app older than Showing panels ignores `panelRequest`, so a request
   waits until Mike's next message clears it, and `show_panel` says it's
   waiting. A newer app never sees one from an older runner.
+- An app older than a pin's `highlight` request opens Highlights for it,
+  and no longer opens the pin by itself (the runner stopped sending
+  `show`). A newer app talking to an older runner never opens a shown pin
+  by itself; it's in Highlights.
 - An app older than pools sends `accountId` with every `threads.create`,
   so its threads are pinned as before, and it ignores `pools`, `poolId`,
   `waitingForRoom` and `pools.updated`. A newer app talking to a runner

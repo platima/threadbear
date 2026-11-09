@@ -411,6 +411,12 @@ type Runtime = {
   taskEndedInTurn?: boolean;
   activeAt: number; // last turn start or end, for picking which CLI to release
   approvals: Map<string, PendingApproval>;
+  // Calls the card reviewer is deciding on (runner/card-review.ts), which
+  // have no card yet: Stop, the turn ending or Mike writing settles them as
+  // it would a card. `main`: the agent's own call, not a subagent's.
+  // `stale`: a subagent's, which Mike wrote during: its verdict was made
+  // without his message, so it goes to him as a card.
+  reviews?: Map<string, { main: boolean; cancel: (a: ToolApprovalAnswer) => void; stale?: boolean }>;
   idleTimer?: TimerHandle;
   releaseWhenIdle: boolean;
   inProgress: Map<string, InProgressItem>;
@@ -1462,6 +1468,14 @@ export class Runner {
         if (!pending.main) continue;
         this.resolveApproval(st, approvalId, 'deny', WROTE_INSTEAD);
         settleDeclined(pending, 'deny', WROTE_INSTEAD);
+      }
+    }
+    // The same for a call the card reviewer is still deciding on: he may be
+    // taking it back, and the reviewer read the thread before he wrote.
+    if (rt.reviews?.size && fromMike(text, opts)) {
+      for (const r of [...rt.reviews.values()]) {
+        if (r.main) r.cancel({ decision: 'deny', message: WROTE_INSTEAD });
+        else r.stale = true;
       }
     }
     // A slash command waits for the turn to end rather than going into it:
@@ -2889,6 +2903,7 @@ export class Runner {
       settleDeclined(p, 'expired', 'The thread was deleted.');
     }
     rt.approvals.clear();
+    for (const r of [...(rt.reviews?.values() ?? [])]) r.cancel({ decision: 'expired', message: 'The thread was deleted.' });
     const session = rt.session;
     rt.session = undefined;
     const ended = session?.end({ hard: true }).catch((e: unknown) => this.log.warn('stopping a deleted thread failed', { threadId, error: String(e) }));
@@ -2969,10 +2984,11 @@ export class Runner {
   // folder the cleanup would remove or hand on, and on 7 Nov a typecheck
   // lost its files that way, "failed", and woke the thread just archived.
   // Waiting also means a real failure finds the worktree still there, as
-  // sendTo brings the thread back before the cleanup looks.
+  // sendTo brings the thread back before the cleanup looks. A patch action
+  // still running holds it the same way (runAction comes back here).
   archiveWhenGone(st: ThreadState): void {
     const { rec, rt } = st;
-    if (!rt.archivePending || rt.session || rt.closing || rt.deleted || rt.hooksRunning) return;
+    if (!rt.archivePending || rt.session || rt.closing || rt.deleted || rt.hooksRunning || rt.runningActions?.size) return;
     rt.archivePending = false;
     if (rec.archivedAt) {
       this.archiveNative(st);

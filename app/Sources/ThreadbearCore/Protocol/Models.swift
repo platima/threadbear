@@ -973,13 +973,17 @@ public struct PanelRequest: Sendable, Hashable, Codable {
     /// Where a closed one opens: "tab", "left", "right", "top", "bottom" or
     /// "window". Nil for its usual place.
     public var `where`: String?
+    /// `pin` with `show`: the highlight to open in the pane, over
+    /// Highlights (`panel` is "highlights", `title` the pin's).
+    public var highlight: String?
     public var at: String
 
-    public init(id: String, panel: String, title: String, where: String? = nil, at: String = "") {
+    public init(id: String, panel: String, title: String, where: String? = nil, highlight: String? = nil, at: String = "") {
         self.id = id
         self.panel = panel
         self.title = title
         self.where = `where`
+        self.highlight = highlight
         self.at = at
     }
 }

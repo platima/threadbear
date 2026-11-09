@@ -473,7 +473,7 @@ import UniformTypeIdentifiers
     @Test func sampleDataHasNothingPersonal() throws {
         let sample = FakeBackend.sample(now: .now)
         let encoder = JSONEncoder()
-        let text = (String(decoding: try encoder.encode(sample.threads), as: UTF8.self)
+        let text = (String(decoding: try encoder.encode(sample.threads + FakeBackend.manyThreads(now: .now)), as: UTF8.self)
             + String(decoding: try encoder.encode(sample.messages), as: UTF8.self)
             + String(decoding: try encoder.encode(FakeBackend.sampleProjects), as: UTF8.self)).lowercased()
         for word in ["poddle", "walkies", "quick ask", "stash it", "cannvas", "bruce", "tinker", "backblaze",

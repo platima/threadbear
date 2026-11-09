@@ -140,8 +140,13 @@ final class ReviewWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         // The app, for a page's Open in Browser (LocalPagePreview).
+        // A window of its own doesn't inherit the main window's openURL, and
+        // the agent's notes in it are Markdown with links: they go through
+        // OpenGate as links from the thread (Codex's review, 8 Nov).
         window.contentView = NSHostingView(rootView: ReviewWindow(session: session, back: back, close: { [weak self] in self?.close() })
-            .environment(app).allowsWindowActivationEvents())
+            .environment(app)
+            .environment(\.openURL, OpenGate.urlAction(files: .thread(session.threadId)))
+            .allowsWindowActivationEvents())
         // Up in the title bar rather than a row of their own, so the images
         // and the choices get that height. Wide enough for all of them, as an
         // accessory doesn't resize when some come and go.

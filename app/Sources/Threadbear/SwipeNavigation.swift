@@ -25,9 +25,9 @@ import WebKit
 /// same way (seen with real events on Tinker Desk, 7 Nov).
 ///
 /// Over a sidebar row nothing's held back, as the row (RowSwipeController)
-/// needs the whole gesture: a swipe left is its archive, and it gives up a
-/// swipe the other way to Back or Forward while there's somewhere to go
-/// (`takesFingersRight`).
+/// needs the whole gesture: moving it left is its archive, and it gives up a
+/// swipe the other way to Back while there's somewhere to go back to
+/// (`takesBack`).
 ///
 /// Which way is Back follows System Settings' natural scrolling, as Safari's
 /// does: the page moves with the content, so with natural scrolling fingers
@@ -40,6 +40,9 @@ final class SwipeNavigation {
     static let shared = SwipeNavigation()
 
     private(set) var swipe = NavigationSwipe()
+    /// Natural scrolling, for the gesture under way: the content and the
+    /// fingers go the same way. The card fills the way the fingers go.
+    private(set) var natural = true
     @ObservationIgnored weak var app: AppModel?
     @ObservationIgnored private var monitor: Any?
     /// The events held back while deciding, to hand on if it's a scroll.
@@ -75,12 +78,12 @@ final class SwipeNavigation {
         }
     }
 
-    /// Whether fingers going right go Back or Forward just now: a row
-    /// deciding what a swipe is asks, so the two never both take it.
-    /// `inverted`: natural scrolling, where that's Back.
-    func takesFingersRight(inverted: Bool) -> Bool {
-        guard scrollSwipesOn(), let app else { return false }
-        return inverted ? app.canGoBack : app.canGoForward
+    /// Whether a swipe moving the content right goes Back just now: a row
+    /// deciding what a swipe is asks, so the two never both take it. Rows
+    /// go by the content too, so archiving (the row going left) is never
+    /// Back, whichever way the system scrolls.
+    var takesBack: Bool {
+        scrollSwipesOn() && (app?.canGoBack ?? false)
     }
 
     /// Whether the event was ours (held back, or a page swipe's).
@@ -142,11 +145,15 @@ final class SwipeNavigation {
         eatingMomentum = false
         release()
         guard scrollSwipesOn() else { return swipe.reset() }
-        // A row only ever lets fingers going right by.
+        natural = event.isDirectionInvertedFromDevice
         let overRow = RowSwipeController.listening?.isHovered == true
-        let ways = ways(at: event.locationInWindow, in: window, scrolls: true, app: app)
-        let fingersRight: NavigationSwipe.Direction = event.isDirectionInvertedFromDevice ? .back : .forward
-        swipe.begin(allowed: overRow ? ways.intersection([fingersRight]) : ways, holds: !overRow)
+        let free = freeWays(at: event.locationInWindow, in: window, scrolls: true)
+        let ways = free.intersection(historyWays(app))
+        // Over a row, content going left is the row's (archive) and a way
+        // with nowhere to go is too (it gives a little and stops);
+        // elsewhere the card says there's nowhere to go.
+        swipe.begin(allowed: overRow ? ways.intersection([.back]) : ways,
+                    empty: overRow ? [] : free.subtracting(ways), holds: !overRow)
     }
 
     /// A movement with no gesture under way, or after a scroll that went
@@ -223,7 +230,7 @@ final class SwipeNavigation {
     /// AppKit's swipe event, one per gesture: a positive deltaX is the
     /// fingers going left, which is Forward, as Safari has it.
     private func threeFingers(_ event: NSEvent, in window: NSWindow, app: AppModel) -> Bool {
-        let ways = ways(at: event.locationInWindow, in: window, scrolls: false, app: app)
+        let ways = freeWays(at: event.locationInWindow, in: window, scrolls: false).intersection(historyWays(app))
         if event.deltaX < 0, ways.contains(.back) { go(.back, app: app); return true }
         if event.deltaX > 0, ways.contains(.forward) { go(.forward, app: app); return true }
         return false
@@ -237,18 +244,23 @@ final class SwipeNavigation {
         }
     }
 
-    /// The ways a swipe at `point` can go: somewhere in the history that
-    /// way, and nothing under the pointer that scrolls sideways that way
-    /// first (a wide table, a row of chips), as Safari leaves a wide page
-    /// to scroll until it's at its edge. Back moves the content right, which
-    /// shows what's to its left, whichever way the system scrolls. A web page
-    /// in a panel keeps every swipe, as it scrolls (and goes back) by itself.
-    /// `scrolls`: false for a three-finger swipe, which doesn't scroll
-    /// anything, so only a web page can want it first.
-    private func ways(at point: NSPoint, in window: NSWindow, scrolls: Bool, app: AppModel) -> Set<NavigationSwipe.Direction> {
+    private func historyWays(_ app: AppModel) -> Set<NavigationSwipe.Direction> {
         var ways: Set<NavigationSwipe.Direction> = []
         if app.canGoBack { ways.insert(.back) }
         if app.canGoForward { ways.insert(.forward) }
+        return ways
+    }
+
+    /// The ways a swipe at `point` is the window's rather than what's under
+    /// the pointer: nothing there scrolls sideways that way first (a wide
+    /// table, a row of chips), as Safari leaves a wide page to scroll until
+    /// it's at its edge. Back moves the content right, which shows what's to
+    /// its left, whichever way the system scrolls. A web page in a panel
+    /// keeps every swipe, as it scrolls (and goes back) by itself.
+    /// `scrolls`: false for a three-finger swipe, which doesn't scroll
+    /// anything, so only a web page can want it first.
+    private func freeWays(at point: NSPoint, in window: NSWindow, scrolls: Bool) -> Set<NavigationSwipe.Direction> {
+        var ways: Set<NavigationSwipe.Direction> = [.back, .forward]
         // The frame view has no superview, so the window's point is its own.
         var view = (window.contentView?.superview ?? window.contentView)?.hitTest(point)
         while let v = view, !ways.isEmpty {
@@ -267,67 +279,79 @@ final class SwipeNavigation {
 }
 
 /// The card in the middle of the window while a page swipe is under way:
-/// which thread or page letting go will open, with a bar that fills to the
-/// line and turns blue there, as the arrow and the bar both do. Mike picked
-/// this from four designs on 8 Nov (big arrow, this, a ring at the pointer,
-/// a pill sliding in) for saying where Back goes, as it crosses views.
+/// which thread or page letting go will open. The card fills as the fingers
+/// go, from the side they start on, and is blue at the line. Mike picked the
+/// card from four designs on 8 Nov for saying where Back goes, as it crosses
+/// views; its first bar filled left to right whichever way he swiped, which
+/// he found confusing, and he picked this fill from four more the same day.
 struct SwipeNavigationArrow: View {
     @Environment(AppModel.self) private var app
-    private var swipe: NavigationSwipe { SwipeNavigation.shared.swipe }
+    private var nav: SwipeNavigation { SwipeNavigation.shared }
 
     var body: some View {
-        if let direction = swipe.direction, let place = app.destination(back: direction == .back) {
-            card(back: direction == .back, place: place)
+        if let direction = nav.swipe.direction {
+            let back = direction == .back
+            // Nowhere to go: said, rather than nothing showing at all.
+            let place = app.destination(back: back) ?? (back ? "Nothing to go back to" : "Nothing to go forward to", nil)
+            card(back: back, place: place, empty: nav.swipe.isEmpty || app.destination(back: back) == nil)
                 // In as soon as it's clear it's a swipe, not with the line.
-                .opacity(min(1, 0.4 + swipe.progress * 2))
+                // A nowhere-to-go card only gives a little, so it's solid at once.
+                .opacity(nav.swipe.isEmpty ? 1 : min(1, 0.4 + nav.swipe.progress * 2))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
     }
 
-    private func card(back: Bool, place: (title: String, detail: String?)) -> some View {
-        let armed = swipe.armed
+    private func card(back: Bool, place: (title: String, detail: String?), empty: Bool) -> some View {
+        let armed = nav.swipe.armed
         let accent = Color(nsColor: .controlAccentColor)
         let shape = RoundedRectangle(cornerRadius: zoomed(14), style: .continuous)
-        return VStack(alignment: .leading, spacing: zoomed(14)) {
-            HStack(spacing: zoomed(12)) {
-                Image(systemName: back ? "chevron.left" : "chevron.right")
-                    .font(.system(size: zoomed(14), weight: .semibold))
-                    .foregroundStyle(armed ? Color.white : Color.secondary)
-                    .frame(width: zoomed(34), height: zoomed(34))
-                    .background(Circle().fill(armed ? accent : Color.primary.opacity(0.08)))
-                VStack(alignment: .leading, spacing: zoomed(2)) {
+        // Back moves the content right; the fingers go that way too with
+        // natural scrolling, the other way without.
+        let fingersLeft = back != nav.natural
+        return HStack(spacing: zoomed(12)) {
+            Image(systemName: back ? "chevron.left" : "chevron.right")
+                .font(.system(size: zoomed(14), weight: .semibold))
+                .foregroundStyle(armed ? Color.white : Color.secondary)
+                .frame(width: zoomed(34), height: zoomed(34))
+                .background(Circle().fill(armed ? accent : Color.primary.opacity(0.08)))
+            VStack(alignment: .leading, spacing: zoomed(2)) {
+                if !empty {
                     Text(back ? "Back to" : "Forward to")
                         .font(.system(size: TypeScale.label))
                         .foregroundStyle(.secondary)
-                    Text(place.title)
-                        .font(.system(size: zoomed(14), weight: .semibold))
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let detail = place.detail {
-                        Text(detail)
-                            .font(.system(size: TypeScale.label))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
                 }
-                Spacer(minLength: 0)
-            }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.1))
-                    Capsule().fill(armed ? accent : Color.primary.opacity(0.45))
-                        .frame(width: geo.size.width * swipe.progress)
+                Text(place.title)
+                    .font(.system(size: zoomed(14), weight: empty ? .regular : .semibold))
+                    .foregroundStyle(empty ? Color.secondary : Color.primary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = place.detail {
+                    Text(detail)
+                        .font(.system(size: TypeScale.label))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
-            .frame(height: 3)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, zoomed(18))
         .padding(.vertical, zoomed(16))
         .frame(width: zoomed(340))
         .background {
-            shape.fill(.regularMaterial)
+            // The fill, from the side the fingers start on.
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(armed ? accent.opacity(0.32) : Color.primary.opacity(0.07))
+                    .frame(width: geo.size.width * nav.swipe.progress)
+                    .frame(maxWidth: .infinity, alignment: fingersLeft ? .trailing : .leading)
+            }
+            .clipShape(shape)
+        }
+        .background {
+            // Solid: the transcript mustn't show through behind the name.
+            shape.fill(Color(nsColor: .windowBackgroundColor))
                 .shadow(color: .black.opacity(0.4), radius: zoomed(20), y: zoomed(6))
         }
         .overlay(shape.strokeBorder(armed ? accent : Color(nsColor: .separatorColor), lineWidth: armed ? 1 : 0.5))

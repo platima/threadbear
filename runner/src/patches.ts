@@ -62,7 +62,7 @@ import { hasLineBreak, stripEnvComment } from './linear-text.ts';
 import { actionCommandProblem, automaticCommand, liveCommandProblem, TRUST_ALL, worktreeOf, type PatchGate } from './patch-trust.ts';
 import { verifiedUrl } from './verified-imports.ts';
 import { inBackground } from './background.ts';
-import { CUT_LOOKAHEAD, dropPartialEnd, safeEnd } from './safe-cut.ts';
+import { CUT_LOOKAHEAD, safeEnd, safeEndOfPartial } from './safe-cut.ts';
 import { groupAlive, killGroup } from './proc.ts';
 
 export const CONVEX_DASHBOARD = 'https://dashboard.convex.dev';
@@ -1328,12 +1328,13 @@ export function runCommand(
     const finish = (code: number | null, error?: string) => {
       clearTimeout(timer);
       let text = Buffer.concat(chunks).toString('utf8');
-      // Stopped reading part way: what was cut there was never seen whole.
-      if (truncated) text = dropPartialEnd(text);
-      if (Buffer.byteLength(text, 'utf8') > LIMITS.toolResultText) {
+      // What fits in the limit, cut where no secret is split; stopped reading
+      // part way, never in the run reading stopped in either (safe-cut.ts).
+      const fits = Buffer.byteLength(text, 'utf8') > LIMITS.toolResultText ? Buffer.from(text, 'utf8').subarray(0, LIMITS.toolResultText).toString('utf8').replace(/\uFFFD$/, '').length : text.length;
+      if (truncated) text = text.slice(0, safeEndOfPartial(text, fits));
+      else if (fits < text.length) {
         truncated = true;
-        const kept = Buffer.from(text, 'utf8').subarray(0, LIMITS.toolResultText).toString('utf8').replace(/\uFFFD$/, '');
-        text = text.slice(0, safeEnd(text, kept.length));
+        text = text.slice(0, safeEnd(text, fits));
       }
       if (error) text = text ? `${text}\n${error}` : error;
       if (timedOut) {

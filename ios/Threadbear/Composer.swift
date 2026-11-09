@@ -103,6 +103,23 @@ struct Composer: View {
             let args = ProcessInfo.processInfo.arguments
             if args.contains("-ThreadbearDictating") { dictation.fakeListening() }
             if args.contains("-ThreadbearTypingOut") { dictation.fakeTypingOut() }
+            // Whisper finishing: the words land as the bar goes, as after a real
+            // dictation, so a shot shows the box grown to fit them.
+            if args.contains("-ThreadbearTypedOut") {
+                dictation.fakeTypingOut()
+                try? await Task.sleep(for: .seconds(1.5))
+                text = "Can you also make the date picker work on the small phones, and check it in landscape while you are there"
+                dictation.fakeTypedOut()
+            }
+            // Apple's dictation: words typing in above the bar as he talks, then stop.
+            if args.contains("-ThreadbearHeardLive") {
+                dictation.fakeListening()
+                text = "Can you also make"
+                try? await Task.sleep(for: .seconds(0.6))
+                text = "Can you also make the date picker work on the small phones, and check it in landscape while you are there"
+                try? await Task.sleep(for: .seconds(0.6))
+                dictation.fakeStopped()
+            }
         }
         #endif
         .task {

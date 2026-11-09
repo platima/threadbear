@@ -626,7 +626,6 @@ final class AppModel {
     /// Bumped by each request for a thread's highlights, so a change that
     /// lands while a fetch is out gets fetched again after it.
     @ObservationIgnored var highlightWanted: [String: Int] = [:]
-    @ObservationIgnored var highlightAutoShow = HighlightAutoShow()
     /// The agents' show_panel requests shown this run (PanelRequestModel).
     @ObservationIgnored var panelRequestGate = PanelRequestGate()
     /// What's waiting on the runner, by `BusyKey`, with how many of each

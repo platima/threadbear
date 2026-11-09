@@ -122,6 +122,9 @@ final class AppModel {
     /// `-ThreadbearSearch <text>` (Debug only): start with this in the
     /// inbox's search, for the screenshots.
     var searchText: String?
+    /// `-ThreadbearScrollTo <threadId>` (Debug only): start with the inbox
+    /// scrolled to this row, for seeing the headings stick.
+    var scrollToThreadId: String?
     /// `-ThreadbearPhoto <path>` (Debug only): start the composers with this
     /// photo, for the screenshots, as nothing can tap the system picker.
     /// With `-ThreadbearSlowPhoto` it takes a few seconds, to see the spinner tile.
@@ -400,7 +403,8 @@ final class AppModel {
             // -ThreadbearRunners: the Mac asleep and two more runners, for the runner picker.
             // -ThreadbearOffline: the Mac's been asleep for hours, so messages wait, and a3 has two waiting.
             let offline = args.contains("-ThreadbearOffline")
-            let fake = FakeBackend(runnerOnline: !offline, listDelay: args.contains("-ThreadbearSlowLoad") ? .seconds(6) : .zero, pictures: args.contains("-ThreadbearPictures"), long: args.contains("-ThreadbearLong"), secret: args.contains("-ThreadbearSecret"), diagrams: args.contains("-ThreadbearDiagrams"), runners: args.contains("-ThreadbearRunners"), queued: offline)
+            // -ThreadbearManyThreads: and a long inbox, a few more running and starred, to scroll.
+            let fake = FakeBackend(runnerOnline: !offline, listDelay: args.contains("-ThreadbearSlowLoad") ? .seconds(6) : .zero, pictures: args.contains("-ThreadbearPictures"), long: args.contains("-ThreadbearLong"), secret: args.contains("-ThreadbearSecret"), diagrams: args.contains("-ThreadbearDiagrams"), runners: args.contains("-ThreadbearRunners"), queued: offline, many: args.contains("-ThreadbearManyThreads"))
             // -ThreadbearSlowStart: a new thread takes a minute to start, so its Starting row stays.
             if args.contains("-ThreadbearSlowStart") { fake.startDelay = .seconds(60) }
             // -ThreadbearShortInbox: one thread in the inbox, one running, one of each put away.
@@ -428,6 +432,8 @@ final class AppModel {
         if let i = args.firstIndex(of: "-ThreadbearCompose"), i + 1 < args.count { composeText = args[i + 1] }
         if let i = args.firstIndex(of: "-ThreadbearDraft"), i + 1 < args.count { draftText = args[i + 1] }
         if let i = args.firstIndex(of: "-ThreadbearSearch"), i + 1 < args.count { searchText = args[i + 1] }
+        // `-ThreadbearScrollTo <threadId>`: start with the inbox scrolled to that row, to see the headings stick.
+        if let i = args.firstIndex(of: "-ThreadbearScrollTo"), i + 1 < args.count { scrollToThreadId = args[i + 1] }
         // `-ThreadbearStart <text>`: start a thread with it, as the sheet's Start does.
         if let i = args.firstIndex(of: "-ThreadbearStart"), i + 1 < args.count, let backend {
             let text = args[i + 1]
@@ -459,6 +465,11 @@ final class AppModel {
 
     private func sections(of list: [PhoneThread]) -> InboxSections {
         InboxSections.build(list.filter { !archiving.contains($0.threadId) && !tucks.hidden.contains($0.threadId) }, now: now, wakes: wakes)
+    }
+
+    /// A thread this phone has a row for (inbox, hibernating, archived).
+    func knownThread(_ id: String) -> PhoneThread? {
+        inbox.first { $0.threadId == id } ?? hibernating.first { $0.threadId == id } ?? den.first { $0.threadId == id }
     }
 
     /// A pasted thread id as the `[title](thread:<id>)` link it goes in as,
@@ -681,10 +692,43 @@ final class AppModel {
     /// there: it's the row arriving that says the thread's finished.
     private(set) var landing: Set<String> = []
 
-    private func popMarksAfterLanding() {
+    /// Rows flying from one heading to another over the list (RowFlight.swift),
+    /// each hiding its real row until it's there.
+    private(set) var flights: [String: RowFlight] = [:]
+    @ObservationIgnored let rowFrames = RowFrames()
+
+    /// The moving rows that can fly: those on show now, or under a folded
+    /// heading that is. None under Reduce Motion, or with a thread open over the
+    /// list, where the change just happens.
+    private func flights(for moves: [String: InboxMove], in list: [PhoneThread]) -> [String: RowFlight] {
+        guard Juice.rows != nil, !threadOpen else { return [:] }
+        var flights: [String: RowFlight] = [:]
+        for (id, move) in moves where !(folds.isFolded(move.from) && folds.isFolded(move.to)) {
+            guard let thread = list.first(where: { $0.threadId == id }) else { continue }
+            if !folds.isFolded(move.from), let from = rowFrames.visible(RowFrames.row(id, under: move.from)) {
+                flights[id] = RowFlight(id: id, thread: thread, move: move, from: from, fromHeading: false)
+            } else if folds.isFolded(move.from), let from = rowFrames.visible(RowFrames.heading(move.from)) {
+                flights[id] = RowFlight(id: id, thread: thread, move: move, from: from, fromHeading: true)
+            }
+        }
+        return flights
+    }
+
+    /// A row's there: its real one shows in place of the picture, and its tick
+    /// or dot pops in.
+    func endFlight(_ id: String) {
+        guard flights.removeValue(forKey: id) != nil else { return }
+        withAnimation(Juice.pop) { _ = landing.remove(id) }
+    }
+
+    private func popMarksAfterLanding(flying: Set<String>) {
         Task {
             try? await Task.sleep(for: Juice.landing)
-            withAnimation(Juice.pop) { landing = [] }
+            // A row still flying pops its own when it lands.
+            withAnimation(Juice.pop) { landing = landing.filter { flights[$0] != nil } }
+            // However its flight went, never leave a row hidden.
+            try? await Task.sleep(for: .seconds(1))
+            for id in flying { endFlight(id) }
         }
     }
 
@@ -715,6 +759,10 @@ final class AppModel {
                     // leaves the list still under his thumb.
                     let (old, new) = (model.sections, model.sections(of: list))
                     let glides = model.loaded.contains(.inbox) && old.changedHeadings(to: new)
+                    // Outside the animation, so the pictures are there at once,
+                    // over the rows they stand in for.
+                    let flying = glides ? model.flights(for: old.moves(to: new), in: list) : [:]
+                    model.flights.merge(flying) { $1 }
                     withAnimation(glides ? Juice.rows : nil) {
                         model.inbox = list
                         // Gone from the list means it's done, so a later unarchive shows.
@@ -722,7 +770,7 @@ final class AppModel {
                         model.tucks.inboxArrived(list, now: .now)
                         if glides { model.landing.formUnion(old.landed(in: new)) }
                     }
-                    if glides { model.popMarksAfterLanding() }
+                    if glides { model.popMarksAfterLanding(flying: Set(flying.keys)) }
                     model.inboxAnswers += 1
                 case .hibernating: model.hibernating = list
                 case .den: model.den = list

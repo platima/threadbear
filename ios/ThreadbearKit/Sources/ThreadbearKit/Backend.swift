@@ -91,6 +91,9 @@ public protocol Backend: Sendable {
     /// (backend API 2). Reads Convex alone, so it works while the Mac sleeps;
     /// more history is a bigger limit.
     func messages(_ threadId: String, limit: Int) -> AsyncThrowingStream<MessagePage, Error>
+    /// API 2: up to `limit` messages and tool lines before `beforeSeq`, once,
+    /// for scrolling back past what the live page holds (MessageHistory).
+    func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int) async throws -> MessagePage
     /// For a backend before API 2: asks the runner for up to 50 text messages older than `beforeSeq`;
     /// they turn up in `thread(_:)` once it has written them.
     func loadEarlier(threadId: String, beforeSeq: Int) async throws -> String
@@ -281,6 +284,11 @@ public final class ConvexBackend: Backend, @unchecked Sendable {
 
     public func messages(_ threadId: String, limit: Int) -> AsyncThrowingStream<MessagePage, Error> {
         live("phone:messages", ["threadId": .string(threadId), "limit": .number(Double(limit)), "tools": .bool(true)], as: MessagePage.self)
+    }
+
+    public func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int) async throws -> MessagePage {
+        let answer = try await transport.query("phone:messages", args(["threadId": .string(threadId), "beforeSeq": .number(Double(beforeSeq)), "limit": .number(Double(limit)), "tools": .bool(true)]))
+        return try Self.decode(MessagePage.self, answer)
     }
 
     public func command(_ commandId: String) -> AsyncThrowingStream<CommandStatus?, Error> {
