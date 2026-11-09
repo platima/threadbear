@@ -135,7 +135,9 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .loadmore { text-align: center; padding: 8px; }
 
 .rail { background: var(--bg-side); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; }
-.rail button { width: 34px; height: 34px; padding: 0; font-size: 17px; border-radius: 8px; }
+.rail button { width: 34px; height: 34px; padding: 0; font-size: 17px; border-radius: 8px; position: relative; }
+/* A dot on a rail button: a newer release is out (Updates). */
+.railBadge { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .rail button.on { background: var(--bg-raised); border-color: var(--line); }
 .railDot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-bottom: 6px; }
 .railDot.open { background: var(--ok); }

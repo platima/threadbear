@@ -6,7 +6,7 @@ import { RpcClient, RpcError, bridgeKey, type ConnState } from './rpc.ts';
 import { APP_VERSION } from './version.ts';
 import { notifyTransition } from './native.ts';
 import { TranscriptModel, type Streaming } from './model.ts';
-import type { Account, AnyEvent, ApprovalDecision, AskAnswer, DesignReview, EffortLevel, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, QueuedAnswers, ReviewDraft, ThreadSummary } from './types.ts';
+import type { Account, AnyEvent, ApprovalDecision, AskAnswer, DesignReview, EffortLevel, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, QueuedAnswers, ReviewDraft, RunnerUpdates, ThreadSummary } from './types.ts';
 
 // What to show a person when a request fails: a runner that doesn't have the
 // method (-32601) is too old for it, not broken.
@@ -69,6 +69,11 @@ export class AppStore {
     });
     rpc.on('accounts.updated', (p: { accounts: Account[] }) => this.set({ accounts: p.accounts }));
     rpc.on('pools.updated', (p: { pools: Pool[] }) => this.set({ pools: p.pools }));
+    // The runner's own update state changed: it replaces the one hello carried.
+    rpc.on('runner.updates', (p: { updates: RunnerUpdates }) => {
+      const hello = this.snap.hello;
+      if (hello) this.set({ hello: { ...hello, updates: p.updates } });
+    });
     rpc.on('runner.notice', (p: Notice) => this.notify(p.level, p.message));
   }
 

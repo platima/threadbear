@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PAGES, tip } from './registry.ts';
-import { APP_VERSION, useAvailableUpdate } from './update-state.ts';
+import { useAvailableUpdate } from './update-state.ts';
 
 type Theme = 'auto' | 'dark' | 'light';
 const THEME_KEY = 'threadbear.theme';
@@ -18,7 +18,8 @@ const readTheme = (): Theme => {
 };
 apply(readTheme());
 
-// The strip down the left edge: Threads, then each page.
+// The strip down the left edge: Threads, then each page. The Updates page's button
+// carries a dot, and says so in its tooltip, while a newer release is out.
 export function Rail({ route, go, conn, help }: { route: string; go: (route: string) => void; conn: string; help: () => void }) {
   const [theme, setTheme] = useState<Theme>(readTheme);
   const update = useAvailableUpdate();
@@ -32,34 +33,27 @@ export function Rail({ route, go, conn, help }: { route: string; go: (route: str
       // not kept
     }
   };
-  const items = [{ id: 'threads', title: 'Threads', hint: 'Your threads: the inbox, what is running, and what is hibernating or archived', icon: '☰' }, ...PAGES.map((p) => ({ id: p.id, title: p.title, hint: p.hint, icon: p.icon }))];
+  const items = [
+    { id: 'threads', title: 'Threads', hint: 'Your threads: the inbox, what is running, and what is hibernating or archived', icon: '☰', news: undefined as string | undefined },
+    ...PAGES.map((p) => ({ id: p.id, title: p.title, hint: p.hint, icon: p.icon, news: p.id === 'updates' && update ? `Version ${update.version} is out.` : undefined })),
+  ];
   return (
     <nav className="rail">
       {items.map((p) => (
-        <button key={p.id} className={`ghost${route === p.id ? ' on' : ''}`} title={tip(p.title, p.hint)} aria-label={p.title} onClick={() => go(p.id)}>
+        <button
+          key={p.id}
+          className={`ghost${route === p.id ? ' on' : ''}`}
+          title={tip(p.title, p.news ? `${p.news} ${p.hint ?? ''}`.trim() : p.hint)}
+          aria-label={p.news ? `${p.title}: ${p.news}` : p.title}
+          onClick={() => go(p.id)}
+        >
           {p.icon}
+          {p.news && <span className="railBadge" aria-hidden="true" />}
         </button>
       ))}
       <span className="grow" />
-      {update ? (
-        <a className="ghost railUpdate" href={update.page} target="_blank" rel="noopener noreferrer" title={`Version ${update.version} is out. Open its page in your browser.`} aria-label={`Version ${update.version} is out`}>
-          {'⬇\uFE0E'}
-        </a>
-      ) : (
-        <button
-          className="ghost"
-          title={`Updates: this is version ${APP_VERSION}, and no newer release is known. This button turns into a link to the new release's page when one is out. Settings, This app can check now.`}
-          aria-label="Updates"
-          onClick={() => {
-            go('settings');
-            history.replaceState(null, '', '#/settings/app');
-          }}
-        >
-          {'⬇︎'}
-        </button>
-      )}
       <button className="ghost" title={`Appearance: ${theme === 'auto' ? "follows your system's light or dark setting" : theme}. Click to go round: system, dark, light.`} aria-label="Appearance" onClick={cycle}>
-        {theme === 'dark' ? '☾' : theme === 'light' ? '☀\uFE0E' : '◐'}
+        {theme === 'dark' ? '☾' : theme === 'light' ? '☀︎' : '◐'}
       </button>
       <button className="ghost" title="Keyboard shortcuts, and a replay of the tour of the app" aria-label="Keyboard shortcuts" onClick={help}>
         ?
