@@ -6,6 +6,8 @@ Please use GitHub's private vulnerability reporting: the **Report a vulnerabilit
 
 Threadbear is one person's project, so there's no formal timeline. I'll aim to reply within a few days and to fix anything real on `main` as soon as I can. Only the latest `main` is supported.
 
+**Windows, Android and Linux.** This is the fork [platima/threadbear](https://github.com/platima/threadbear), where those ports are maintained. For a problem in the Windows, Android or Linux apps, in how they are packaged and signed, or in the release workflows, use [this repository's Security tab](https://github.com/platima/threadbear/security). For code that comes from Mike (the runner, the backend, the push relay, the Mac and iPhone apps), use [his](https://github.com/mikecann/threadbear/security); if you are not sure which, either is fine and it will be passed on. The same terms apply: no formal timeline, a reply within a few days where possible, and only the latest `main` and the latest release are supported.
+
 ## What Threadbear is, security-wise
 
 Threadbear runs Claude Code and Codex agents on your own Mac, with your own logins. Everything is built for **one owner per deployment**: you, your Macs, your phone and your browser, and a Convex backend you deploy yourself. There are no other users or tenants inside a deployment.

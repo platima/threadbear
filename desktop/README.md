@@ -1,6 +1,6 @@
 # Threadbear desktop
 
-The Windows (and, later, Linux) app: TypeScript and React in a web view,
+The Windows and Linux app: TypeScript and React in a web view,
 talking to the runner over the protocol in `docs/protocol.md`. The plan and
 the reasons are in `docs/windows-port-plan.md`.
 

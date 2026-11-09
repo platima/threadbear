@@ -13,6 +13,11 @@ updating the app never stops a thread. Your threads are also copied to a
 Convex deployment of your own, which is how the iPhone app and the website
 can follow along.
 
+This guide describes the Mac app. The Windows and Linux app (`desktop/`, kept
+in the fork at github.com/platima/threadbear) has most of the same panels and
+follows it where it does, and the Android app is the website in an app of its
+own (`docs/android.md`).
+
 This guide is for using it. `INSTALL.md` covers setting it up, and `docs/`
 has how it all works inside.
 

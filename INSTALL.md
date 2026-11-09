@@ -315,3 +315,16 @@ Mac uses to hold back restarts, spotting a CLI stuck in a file call and
 nudging idle threads whose quiet background shells are stuck, docker
 sandboxes, stopping a crashed CLI's leftover tool commands, and BMP, TIFF and
 HEIC pictures (the Mac converts them with `sips`).
+
+## 8. The Android app (optional)
+
+For someone with an Android phone (8 or newer) who wants it as an app rather
+than the website: `threadbear-v<version>-android.apk` on the fork's latest
+release (it is on a release only when it was signed with the release key;
+`CHECKSUMS.txt` has its SHA-256). They copy it to the phone and open it, and
+Android asks once to allow installs from that app. It is paired with the
+deployment from this setup the way the iPhone is: the QR code under Settings,
+Phone & browser on the Mac or Windows app, which the phone's camera opens in
+Threadbear. docs/android.md has the rest, including what it cannot do yet
+(notifications with the app closed need the push relay to have a Firebase key,
+and a backend of API 66 or later).

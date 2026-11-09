@@ -12,12 +12,13 @@
 <h1 align="center">Threadbear</h1>
 
 <p align="center">
-  A Mac app for running your Claude Code and Codex threads, on the subscriptions you already have.<br>
+  A Mac app, with Windows, Android and Linux ports, for running your Claude Code and Codex threads, on the subscriptions you already have.<br>
   You get all of the source, so when something bugs you, you (or more likely your agent) can change it.
 </p>
 
 <p align="center">
   <b><a href="#installing-it">Install it</a></b> ·
+  <a href="#windows-android-and-linux">Windows, Android and Linux</a> ·
   <a href="https://threadbear.mikecann.app">Website</a> ·
   <a href="https://www.youtube.com/watch?v=HCR6jqR0LEI">Watch the launch video</a> ·
   <a href="https://apps.apple.com/app/id6827837354">iPhone app</a>
@@ -32,6 +33,45 @@ little runner that keeps your agents going when the app's closed, and a Convex
 backend in your own account so the iPhone app and a web page for each thread
 can follow along. None of it runs on a server of mine, so I never see any of
 it.
+
+## Windows, Android and Linux
+
+This repository, [platima/threadbear](https://github.com/platima/threadbear),
+is a fork of Mike Cann's [mikecann/threadbear](https://github.com/mikecann/threadbear),
+the original Mac and iPhone app (the "I" above is Mike). Here it is also the
+Windows and Android port, and the Linux one, and this is where those are
+maintained. Mike's changes are merged in here regularly.
+
+| | What it is | More |
+|---|---|---|
+| **Windows 11**, x64 and Arm64 | The app, with a tray icon and toasts, and the runner started at sign-in by a Task Scheduler task. Setup exe, MSI and a portable zip, signed. | [INSTALL.md](INSTALL.md) section 7, [desktop/README.md](desktop/README.md) |
+| **Android 8 or newer** | The website in an app of its own, paired with your Convex deployment by a link or the QR code. A signed APK, installed by hand. Notifications with the app closed need a push relay that has the Firebase key (docs/android.md says how). | [docs/android.md](docs/android.md) |
+| **Linux**, x64 and arm64 | The Windows app's window, as a `.deb` or a `.tar.gz`, with the runner as a systemd user service. Not signed. | [docs/linux.md](docs/linux.md) |
+
+They come as [releases here](https://github.com/platima/threadbear/releases),
+and so far all of them are early pre-releases: the Arm builds have not been
+run on an Arm PC, the Android app has only been run on an emulator so far,
+and the Linux ones have been started on GitHub's Ubuntu machines but
+not used on a desktop. The release notes say what each one has.
+
+**How this fits with Mike's repository**
+
+- Bug fixes, and changes the ports need in code that is Mike's (the runner,
+  the backend, the push relay), go back to him as pull requests on
+  [mikecann/threadbear](https://github.com/mikecann/threadbear), made from
+  branches of this fork. Nothing is kept here that could go there.
+- Ideas for new features go to Mike's repository as a discussion first (once
+  he has Discussions on; until then, an issue there), not as a pull request.
+- Problems in the Windows, Android or Linux apps: [issues here](https://github.com/platima/threadbear/issues).
+  Problems in the Mac or iPhone app, or in code both share: Mike's repository.
+- [CONTRIBUTING.md](CONTRIBUTING.md) has the detail, and [SECURITY.md](SECURITY.md)
+  says where to report something private.
+
+**Linux would do best with someone who uses it.** It is kept working here, but
+it is built and tested only on GitHub's machines by someone who does not run
+a Linux desktop. If you do, every day, and would like to look after the Linux
+port (the `.deb`, the tarball, how it behaves on your desktop environment), say
+so in an issue here and the repository is yours to shape.
 
 ## What it does
 
@@ -104,7 +144,7 @@ and [docs/guide.md](docs/guide.md) is the full guide.
 
 ## Installing it
 
-You'll need:
+On a Mac you'll need:
 
 - A Mac with Apple silicon, on macOS 26 or later
 - Xcode 26 or newer, and Node 24 or newer
@@ -159,7 +199,22 @@ fine, setup forks it for you as long as `gh` is logged in.
   one, and Bring Them In starts a thread that merges it with your changes and
   asks you before it lands.
 
-[docs/guide.md](docs/guide.md) is the full guide to using it.
+### Windows, Android or Linux
+
+Take the file you need from the
+[latest release](https://github.com/platima/threadbear/releases): the Windows
+setup exe or MSI, the Linux `.deb` or `.tar.gz`, or the Android APK. Check it
+against `CHECKSUMS.txt`. The Windows and Linux apps need Claude Code (or Codex)
+signed in, and git, and bring their own Node. The runner works on its own on
+either; following your threads from a phone or the web needs a Convex
+deployment, which `./threadbear setup` on a Mac makes today, and a runner on
+Windows or Linux can join one that exists ([INSTALL.md](INSTALL.md), sections 6
+and 7). The Android app is paired with that deployment by the QR code under
+Settings > Phone & browser on a computer ([docs/android.md](docs/android.md)).
+Android asks to allow installs from your browser or file manager, once.
+
+[docs/guide.md](docs/guide.md) is the full guide to using it (written for the
+Mac app, and the Windows app follows it where it has the same panel).
 
 ## For agents
 
@@ -189,6 +244,10 @@ Where things are:
   `claude` and `codex` CLIs
 - `app/`: the Mac app (SwiftUI and AppKit)
 - `ios/`: the iPhone app
+- `desktop/`: the Windows and Linux app (TypeScript and React, in a Tauri shell)
+- `android/`: the Android app (the website in a Tauri shell, with a Kotlin
+  notifications plugin)
+- `installer/`: how the Windows and Linux packages are made and released
 - `convex/`: the backend, `web/`: the website
 - `relay/`: the push relay (Mike's, shared by everyone)
 - `site/`: the landing page at threadbear.mikecann.app
