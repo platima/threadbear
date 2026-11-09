@@ -23,6 +23,8 @@ export type Shell = {
   args: string[];
   /** A WSL distribution: its folder goes in with --cd, which turns a Windows path into /mnt/c/... */
   wsl?: string;
+  /** Added to the shell's environment. */
+  env?: Record<string, string>;
 };
 
 export type ShellList = {
@@ -129,7 +131,9 @@ async function windowsShells(m: Machine): Promise<ShellList> {
   }
 
   const bash = m.gitBash();
-  if (bash) shells.push({ id: 'gitbash', label: 'Git Bash', file: bash, args: ['--login', '-i'] });
+  // CHERE_INVOKING keeps Git's login profile in the folder the shell was started in, not the home folder
+  // (the runner does the same for its patch commands).
+  if (bash) shells.push({ id: 'gitbash', label: 'Git Bash', file: bash, args: ['--login', '-i'], env: { CHERE_INVOKING: '1' } });
 
   const cmd = m.env.ComSpec && m.exists(m.env.ComSpec) ? m.env.ComSpec : win.join(system32, 'cmd.exe');
   if (m.exists(cmd)) shells.push({ id: 'cmd', label: 'Command Prompt', file: cmd, args: [] });
@@ -180,7 +184,7 @@ export function pick(list: ShellList, wanted: string | undefined): { shell?: She
   return { shell: list.shells.find((s) => s.id === list.auto), fellBack: !!wanted && wanted !== 'auto' };
 }
 
-/** What to run for a shell in a folder. */
-export function command(shell: Shell, cwd: string): { file: string; args: string[] } {
-  return { file: shell.file, args: shell.wsl ? [...shell.args, '--cd', cwd] : shell.args };
+/** What to run for a shell in a folder, and what to add to its environment. */
+export function command(shell: Shell, cwd: string): { file: string; args: string[]; env?: Record<string, string> } {
+  return { file: shell.file, args: shell.wsl ? [...shell.args, '--cd', cwd] : shell.args, ...(shell.env ? { env: shell.env } : {}) };
 }

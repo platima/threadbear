@@ -152,6 +152,15 @@ export class Terminals {
     return [...this.sessions.values()].filter((s) => s.exited === undefined).map((s) => s.key);
   }
 
+  // Shells being started: a key is held from the page's request until its pty is spawned (finding
+  // the shells can take a second), so two requests for one key make one shell, the limit counts
+  // them, and a stop, prune or shutdown in between cancels the start.
+  private starting = new Map<string, { sinks: Set<Sink>; cancelled: boolean }>();
+
+  private cancelStarts(keep?: Set<string>): void {
+    for (const [key, start] of this.starting) if (!keep || !keep.has(key)) start.cancelled = true;
+  }
+
   /**
    * Attaches `sink` to key's shell. With no shell running there, starts one when
    * `create` is true and otherwise says there is none. A shell that has exited is
@@ -169,22 +178,41 @@ export class Terminals {
       sink({ t: 'none', key });
       return;
     }
+    // Already being started by an earlier request: it is answered to this one too.
+    const pending = this.starting.get(key);
+    if (pending) {
+      pending.sinks.add(sink);
+      return;
+    }
     if (existing) this.stop(key);
-    if (this.sessions.size >= MAX_SHELLS) throw new Error(`There are ${MAX_SHELLS} shells running already. Close one first.`);
-    const list = await this.shells();
-    const { shell, fellBack } = pick(list, o.shell);
-    if (!shell) throw new Error('No shell was found on this PC to start.');
-    const cwd = o.cwd && this.isDir(o.cwd) ? o.cwd : this.home;
-    const { file, args } = command(shell, cwd);
-    const pty = this.ptySpawn()(file, args, { cols: clamp(o.cols, 2, 1000, 80), rows: clamp(o.rows, 1, 500, 24), cwd, env: shellEnv(this.deps.env ?? process.env, this.deps.platform) });
-    const s: Session = { key, pty, shell, cwd, chunks: [], size: 0, sinks: new Set([sink]), paused: false };
-    this.sessions.set(key, s);
-    pty.onData((d) => this.output(s, d));
-    pty.onExit((e) => {
-      s.exited = e.exitCode ?? 0;
-      this.tell(s, { t: 'exit', key, code: s.exited });
-    });
-    sink({ t: 'opened', key, shell: shell.label, cwd, fresh: true, fellBack });
+    // Shells that have exited are kept to be read, but are not running, so they don't count.
+    if (this.running().length + this.starting.size >= MAX_SHELLS) throw new Error(`There are ${MAX_SHELLS} shells running already. Close one first.`);
+    const start = { sinks: new Set([sink]), cancelled: false };
+    this.starting.set(key, start);
+    try {
+      const list = await this.shells();
+      const { shell, fellBack } = pick(list, o.shell);
+      if (!shell) throw new Error('No shell was found on this PC to start.');
+      // Stopped while the shells were being looked for: the page has forgotten this one.
+      if (start.cancelled) return;
+      const cwd = o.cwd && this.isDir(o.cwd) ? o.cwd : this.home;
+      const { file, args, env } = command(shell, cwd);
+      const pty = this.ptySpawn()(file, args, { cols: clamp(o.cols, 2, 1000, 80), rows: clamp(o.rows, 1, 500, 24), cwd, env: { ...shellEnv(this.deps.env ?? process.env, this.deps.platform), ...env } });
+      const s: Session = { key, pty, shell, cwd, chunks: [], size: 0, sinks: start.sinks, paused: false };
+      this.sessions.set(key, s);
+      pty.onData((d) => this.output(s, d));
+      pty.onExit((e) => {
+        s.exited = e.exitCode ?? 0;
+        this.tell(s, { t: 'exit', key, code: s.exited });
+      });
+      this.tell(s, { t: 'opened', key, shell: shell.label, cwd, fresh: true, fellBack });
+    } catch (e) {
+      // Whoever else asked for this shell hears why too; the first caller gets the rejection.
+      for (const other of start.sinks) if (other !== sink) other({ t: 'error', key, message: (e as Error).message });
+      throw e;
+    } finally {
+      if (this.starting.get(key) === start) this.starting.delete(key);
+    }
   }
 
   private output(s: Session, d: string): void {
@@ -231,6 +259,8 @@ export class Terminals {
   }
 
   stop(key: string): void {
+    const start = this.starting.get(key);
+    if (start) start.cancelled = true;
     const s = this.sessions.get(key);
     if (!s) return;
     this.sessions.delete(key);
@@ -246,10 +276,12 @@ export class Terminals {
 
   prune(keep: string[]): void {
     const wanted = new Set(keep);
+    this.cancelStarts(wanted);
     for (const key of [...this.sessions.keys()]) if (!wanted.has(key)) this.stop(key);
   }
 
   stopAll(): void {
+    this.cancelStarts();
     for (const key of [...this.sessions.keys()]) this.stop(key);
   }
 

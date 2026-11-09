@@ -145,7 +145,12 @@ export function TerminalDock({ target, close, focusTick }: { target: Target; clo
   // Puts this shell's screen in the panel, and keeps it fitted to the panel's size.
   useLayoutEffect(() => {
     const el = host.current;
-    if (!el || !live) return;
+    if (!el) return;
+    // A thread with no shell shows none: the last thread's screen is taken out (it is kept, to come back to).
+    if (!live) {
+      el.replaceChildren();
+      return;
+    }
     const inst = instanceFor(target.key, sessions);
     if (inst.el.parentElement !== el) el.replaceChildren(inst.el);
     if (!inst.term.element) inst.term.open(inst.el);
@@ -231,7 +236,12 @@ export function TerminalDock({ target, close, focusTick }: { target: Target; clo
         {!live && (
           <div className="termEmpty">
             {unavailable ? (
-              <div className="termSorry">{unavailable}</div>
+              <>
+                <div className="termSorry">{unavailable}</div>
+                <button onClick={() => void sessions.loadShells(true)} title="Ask the terminal again which shells this PC has, in case it was only a dropped connection">
+                  Try again
+                </button>
+              </>
             ) : status === 'looking' || (!info && !session) ? (
               <span className="note">Looking for a shell...</span>
             ) : (

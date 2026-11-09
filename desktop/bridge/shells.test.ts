@@ -84,6 +84,7 @@ describe('Windows', () => {
     const l = await detectShells(win(SYSTEM, { gitBash: () => 'C:\\Program Files\\Git\\bin\\bash.exe' }));
     assert.deepEqual(ids(l), ['powershell', 'gitbash', 'cmd']);
     assert.deepEqual(l.shells[1]!.args, ['--login', '-i']);
+    assert.deepEqual(l.shells[1]!.env, { CHERE_INVOKING: '1' }, 'its login profile would else change to the home folder');
   });
 
   test('a PC with only Command Prompt still gets a terminal', async () => {
@@ -149,5 +150,6 @@ describe('choosing', () => {
   test("a WSL shell starts in the thread's folder with --cd; the others use the folder as their working directory", () => {
     assert.deepEqual(command(list.shells[1]!, 'C:\\Users\\me\\proj'), { file: 'w', args: ['-d', 'Debian', '--cd', 'C:\\Users\\me\\proj'] });
     assert.deepEqual(command(list.shells[0]!, 'C:\\Users\\me\\proj'), { file: 'p', args: [] });
+    assert.deepEqual(command({ id: 'gitbash', label: 'Git Bash', file: 'b', args: ['--login'], env: { CHERE_INVOKING: '1' } }, 'C:\\p'), { file: 'b', args: ['--login'], env: { CHERE_INVOKING: '1' } });
   });
 });

@@ -243,3 +243,51 @@ test('a change in any shell is announced to the window', () => {
   r.sessions.look('t2');
   assert.equal(calls, after);
 });
+
+test("once the thread list is known the bridge is told which shells to keep: the live threads and home, whatever shells it holds from before a reload", () => {
+  const r = rig();
+  const threads = new Map<string, ThreadSummary>([
+    ['a', thread({ id: 'a' })],
+    ['b', thread({ id: 'b', archivedAt: '2026-11-01T00:00:00Z' })],
+  ]);
+  r.sessions.reconcile(threads, false);
+  assert.deepEqual(r.ask(), [], 'nothing before the list has come, or a window just opened would end every shell');
+  r.sessions.reconcile(threads, true);
+  r.t.open();
+  assert.deepEqual(r.ask().at(-1), { t: 'prune', keep: ['a', 'home'] });
+  const before = r.ask().length;
+  r.sessions.reconcile(new Map(threads), true);
+  assert.equal(r.ask().length, before, 'not said again while nothing changed');
+  r.sessions.reconcile(new Map([...threads, ['c', thread({ id: 'c' })]]), true);
+  assert.deepEqual(r.ask().at(-1), { t: 'prune', keep: ['a', 'c', 'home'] });
+});
+
+test('the keep list is said again when the socket comes back, as the bridge may have restarted', () => {
+  const r = rig();
+  r.sessions.reconcile(new Map([['a', thread({ id: 'a' })]]), true);
+  r.t.open();
+  r.t.drop();
+  r.sessions.start('a', undefined);
+  r.t.open();
+  const kinds = r.ask().map((m) => m.t);
+  assert.equal(kinds.filter((k) => k === 'prune').length, 2);
+  r.sessions.close();
+});
+
+test('a shell list that never came is an error in the snapshot, with the retry available, and does not wipe a good list', async () => {
+  const r = rig();
+  const first = r.sessions.loadShells();
+  r.t.open();
+  r.t.drop();
+  assert.match((await first).unavailable ?? '', /couldn't reach/);
+  assert.match(r.sessions.getSnapshot().shells?.unavailable ?? '', /couldn't reach/, 'the page reads the snapshot, not the answer');
+
+  const again = r.sessions.loadShells(true);
+  r.t.open();
+  r.say({ t: 'shells', shells: [{ id: 'pwsh', label: 'PowerShell 7' }], auto: 'pwsh', notes: [] });
+  assert.equal((await again).unavailable, undefined);
+  assert.equal(r.sessions.getSnapshot().shells?.unavailable, undefined);
+  r.t.drop();
+  assert.equal(r.sessions.getSnapshot().shells?.auto, 'pwsh', 'a drop with nothing asked for leaves the list');
+  r.sessions.close();
+});

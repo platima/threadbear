@@ -49,8 +49,11 @@ const LIST: ShellList = {
   notes: [],
 };
 
-function rig(more: { shells?: ShellList; spawnFails?: string } = {}) {
+function rig(more: { shells?: ShellList; spawnFails?: string; hold?: boolean } = {}) {
   const ptys: FakePty[] = [];
+  // With hold, finding the shells waits until release() is called, as wsl.exe can for a second.
+  let release: () => void = () => {};
+  const gate = more.hold ? new Promise<void>((resolve) => (release = resolve)) : undefined;
   const terminals = new Terminals({
     spawn: () => {
       if (more.spawnFails) throw new Error(more.spawnFails);
@@ -60,7 +63,10 @@ function rig(more: { shells?: ShellList; spawnFails?: string } = {}) {
         return p;
       };
     },
-    shells: async () => more.shells ?? LIST,
+    shells: async () => {
+      await gate;
+      return more.shells ?? LIST;
+    },
     env: { PATH: 'x', THREADBEAR_BRIDGE_KEY: 'secret', THREADBEAR_THREAD_ID: 't1', THREADBARE_THREAD_ID: 't1', THREADBEAR_HOME: 'h' },
     platform: 'win32',
     home: 'C:\\Users\\me',
@@ -68,7 +74,7 @@ function rig(more: { shells?: ShellList; spawnFails?: string } = {}) {
   });
   const heard: Record<string, unknown>[] = [];
   const sink = (m: Record<string, unknown>) => void heard.push(m);
-  return { terminals, ptys, heard, sink, last: () => heard[heard.length - 1] };
+  return { terminals, ptys, heard, sink, release: () => release(), last: () => heard[heard.length - 1] };
 }
 
 describe('what a shell is given', () => {
@@ -208,9 +214,87 @@ describe('starting and attaching', () => {
     for (let i = 0; i < 16; i++) await r.terminals.open(`t${i}`, { cols: 80, rows: 24, create: true }, r.sink);
     await assert.rejects(r.terminals.open('t16', { cols: 80, rows: 24, create: true }, r.sink), /16 shells/);
   });
+  test('a shell that has exited does not count toward the 16, only running ones do', async () => {
+    const r = rig();
+    for (let i = 0; i < 16; i++) await r.terminals.open(`t${i}`, { cols: 80, rows: 24, create: true }, r.sink);
+    for (const p of r.ptys) p.end(0);
+    await r.terminals.open('t16', { cols: 80, rows: 24, create: true }, r.sink);
+    assert.equal(r.ptys.length, 17);
+  });
+
+  test('Git Bash is started with CHERE_INVOKING, so its login profile keeps the thread folder', async () => {
+    const list: ShellList = { shells: [{ id: 'gitbash', label: 'Git Bash', file: 'bash.exe', args: ['--login', '-i'], env: { CHERE_INVOKING: '1' } }], auto: 'gitbash', notes: [] };
+    const r = rig({ shells: list });
+    await r.terminals.open('t1', { cwd: 'C:\\Users\\me\\proj', cols: 80, rows: 24, create: true }, r.sink);
+    assert.equal(r.ptys[0]!.opts.env.CHERE_INVOKING, '1');
+    assert.equal(r.ptys[0]!.opts.cwd, 'C:\\Users\\me\\proj');
+  });
+
+  test('two requests for one thread while the shells are being looked for make one shell, and both hear it', async () => {
+    const r = rig({ hold: true });
+    const other: Record<string, unknown>[] = [];
+    const a = r.terminals.open('t1', { cols: 80, rows: 24, create: true }, r.sink);
+    const b = r.terminals.open('t1', { cols: 80, rows: 24, create: true }, (m) => void other.push(m));
+    r.release();
+    await Promise.all([a, b]);
+    assert.equal(r.ptys.length, 1);
+    assert.equal(r.last()?.t, 'opened');
+    assert.equal(other[0]?.t, 'opened');
+  });
+
+  test('a start that is waiting counts toward the limit', async () => {
+    const r = rig({ hold: true });
+    const starts = Array.from({ length: 16 }, (_, i) => r.terminals.open(`t${i}`, { cols: 80, rows: 24, create: true }, r.sink));
+    await assert.rejects(r.terminals.open('t16', { cols: 80, rows: 24, create: true }, r.sink), /16 shells/);
+    r.release();
+    await Promise.all(starts);
+    assert.equal(r.ptys.length, 16);
+  });
+
+  test('a shell that failed to start tells everyone who asked', async () => {
+    const r = rig({ hold: true, shells: { shells: [], notes: [] } });
+    const other: Record<string, unknown>[] = [];
+    const a = r.terminals.open('t1', { cols: 80, rows: 24, create: true }, r.sink);
+    const b = r.terminals.open('t1', { cols: 80, rows: 24, create: true }, (m) => void other.push(m));
+    r.release();
+    await assert.rejects(a, /No shell was found/);
+    await b;
+    assert.equal(other[0]?.t, 'error');
+    // And the key is free to try again.
+    assert.equal(r.terminals.running().length, 0);
+  });
 });
 
 describe('stopping', () => {
+  test('stopping a thread while its shell is still being started cancels the start (an End shell or an archive in that second)', async () => {
+    const r = rig({ hold: true });
+    const start = r.terminals.open('t1', { cols: 80, rows: 24, create: true }, r.sink);
+    r.terminals.stop('t1');
+    r.release();
+    await start;
+    assert.equal(r.ptys.length, 0, 'no shell was spawned');
+    assert.deepEqual(r.heard, [], 'and the page, which forgot it, is told nothing');
+    assert.deepEqual(r.terminals.running(), []);
+  });
+
+  test('prune cancels the starts of threads it does not list, and keeps the ones it does', async () => {
+    const r = rig({ hold: true });
+    const a = r.terminals.open('a', { cols: 80, rows: 24, create: true }, r.sink);
+    const b = r.terminals.open('b', { cols: 80, rows: 24, create: true }, r.sink);
+    r.terminals.prune(['b']);
+    r.release();
+    await Promise.all([a, b]);
+    assert.deepEqual(r.terminals.running(), ['b']);
+  });
+
+  test('stopAll cancels starts too, so a shell never appears after the bridge has begun to end', async () => {
+    const r = rig({ hold: true });
+    const start = r.terminals.open('a', { cols: 80, rows: 24, create: true }, r.sink);
+    r.terminals.stopAll();
+    r.release();
+    await start;
+    assert.equal(r.ptys.length, 0);
+  });
   test("stop ends that thread's shell and nobody else's", async () => {
     const r = rig();
     await r.terminals.open('a', { cols: 80, rows: 24, create: true }, r.sink);

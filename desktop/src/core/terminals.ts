@@ -110,6 +110,8 @@ export class TerminalSessions {
   private retry = 500;
   private timer?: ReturnType<typeof setTimeout>;
   private shellsWaiting: ((info: ShellsInfo) => void)[] = [];
+  // The threads whose shells the bridge may keep, once the thread list is known (see reconcile).
+  private keep?: string[];
   private readonly connect: () => Transport;
   private readonly store: KeyValue | undefined;
 
@@ -165,6 +167,9 @@ export class TerminalSessions {
       const queued = this.queue;
       this.queue = [];
       for (const key of this.keys()) if (this.session(key)!.status === 'running') this.sendOpen(key, false);
+      // Which shells the bridge may keep, said again: it may have been restarted, or have had shells this
+      // window never heard of (after a reload).
+      if (this.keep) t.send(JSON.stringify({ t: 'prune', keep: this.keep }));
       for (const text of queued) t.send(text);
     };
     t.onmessage = (text) => {
@@ -180,7 +185,12 @@ export class TerminalSessions {
       this.up = false;
       // Typing queued for a socket that never came up is dropped, not typed later.
       this.queue = [];
-      for (const w of this.shellsWaiting.splice(0)) w({ shells: [], notes: [], unavailable: "The window couldn't reach the Terminal." });
+      // A list that was asked for and never came is an error the page can show, with a way to ask again.
+      if (this.shellsWaiting.length) {
+        const failed: ShellsInfo = { shells: [], notes: [], unavailable: "The window couldn't reach the Terminal." };
+        this.publish({ shells: failed });
+        for (const w of this.shellsWaiting.splice(0)) w(failed);
+      }
       // A start or a look whose answer never came is over; a running shell is found again on reconnecting.
       for (const key of this.keys()) {
         const s = this.session(key)!;
@@ -339,6 +349,15 @@ export class TerminalSessions {
       // But not before the list has come, or a window just opened would end them all.
       if (t?.archivedAt || (!t && listed)) this.stop(key);
     }
+    if (!listed) return;
+    // The bridge keeps shells across a reload, so it may hold some this window never looked at: it is told
+    // which threads are live, and ends the rest (an archived or deleted thread's shell, which would else
+    // keep using a worktree that is handed to the next thread).
+    const keep = [HOME_KEY, ...[...threads.values()].filter((x) => !x.archivedAt).map((x) => x.id)].sort();
+    if (this.keep && this.keep.length === keep.length && this.keep.every((k, i) => k === keep[i])) return;
+    this.keep = keep;
+    if (this.up && this.transport) this.transport.send(JSON.stringify({ t: 'prune', keep }));
+    else this.reach(); // it is sent as the socket opens
   }
 
   /** The drawing layer's sink for a shell: output waiting for it is written at once. */
