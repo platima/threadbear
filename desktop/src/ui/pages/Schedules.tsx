@@ -538,6 +538,7 @@ function ScheduleForm({ store, snap, initial, onDone, onCancel }: PageProps & { 
 const def: PageDef = {
   id: 'schedules',
   title: 'Schedules',
+  hint: 'Messages to a thread, or new threads, sent at a time you set or on a repeat',
   icon: '◷',
   order: 20,
   Sidebar: SchedulesSidebar,

@@ -70,7 +70,7 @@ export function Tour({ store, snap, close }: { store: AppStore; snap: Snapshot; 
       {error && <p className="error">{error}</p>}
       <div className="btns">
         {i > 0 && (
-          <button disabled={busy} title="Previous step" onClick={() => setI(i - 1)}>
+          <button disabled={busy} title="Go back to the previous step of the tour" onClick={() => setI(i - 1)}>
             Back
           </button>
         )}
@@ -81,7 +81,7 @@ export function Tour({ store, snap, close }: { store: AppStore; snap: Snapshot; 
           </button>
         )}
         {!last ? (
-          <button className="primary" disabled={busy} title="Next step" onClick={() => void next()}>
+          <button className="primary" disabled={busy} title="Go on to the next step of the tour" onClick={() => void next()}>
             {i === 0 ? 'Start' : 'Next'}
           </button>
         ) : (

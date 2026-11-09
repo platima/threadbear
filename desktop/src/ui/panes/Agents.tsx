@@ -367,6 +367,7 @@ function AgentsPane(props: PaneProps) {
 const pane: PaneDef = {
   id: 'agents',
   title: 'Agents',
+  hint: 'The subagents and background jobs this thread has started, running or done',
   order: 30,
   available: (t) => Boolean(t.subagents?.length || t.background?.length),
   badge: (t) => running(t) || undefined,

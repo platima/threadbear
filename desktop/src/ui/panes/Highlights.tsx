@@ -354,6 +354,7 @@ function HighlightsPane({ store, snap, thread }: PaneProps) {
 const pane: PaneDef = {
   id: 'highlights',
   title: 'Highlights',
+  hint: 'The files, links and commits the agent pinned in this thread for you to look at',
   order: 10,
   available: (t) => t.lastSeq > 0 || Boolean(t.highlightsAt),
   Pane: HighlightsPane,

@@ -129,7 +129,7 @@ export function GeneralSection({ store, snap }: { store: AppStore; snap: Snapsho
       </Row>
       <Row label="One reply" hint="The agent gives its summary first, then its message, as one reply. On by default.">
         <label className="set-check">
-          <input type="checkbox" checked={draft.oneReply} onChange={(e) => set('oneReply', e.target.checked)} title="One reply per turn" /> One reply per turn
+          <input type="checkbox" checked={draft.oneReply} onChange={(e) => set('oneReply', e.target.checked)} title="The agent gives its summary first, then its message, as one reply. On by default." /> One reply per turn
         </label>
       </Row>
       <Row label="Titles and small jobs" hint="The pool whose Claude logins write thread titles and do other small jobs. Off means no model-written titles.">

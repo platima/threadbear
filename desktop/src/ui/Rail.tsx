@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PAGES } from './registry.ts';
+import { PAGES, tip } from './registry.ts';
 import { useAvailableUpdate } from './update-state.ts';
 
 type Theme = 'auto' | 'dark' | 'light';
@@ -32,11 +32,11 @@ export function Rail({ route, go, conn, help }: { route: string; go: (route: str
       // not kept
     }
   };
-  const items = [{ id: 'threads', title: 'Threads', icon: '☰' }, ...PAGES.map((p) => ({ id: p.id, title: p.title, icon: p.icon }))];
+  const items = [{ id: 'threads', title: 'Threads', hint: 'Your threads: the inbox, what is running, and what is hibernating or archived', icon: '☰' }, ...PAGES.map((p) => ({ id: p.id, title: p.title, hint: p.hint, icon: p.icon }))];
   return (
     <nav className="rail">
       {items.map((p) => (
-        <button key={p.id} className={`ghost${route === p.id ? ' on' : ''}`} title={p.title} aria-label={p.title} onClick={() => go(p.id)}>
+        <button key={p.id} className={`ghost${route === p.id ? ' on' : ''}`} title={tip(p.title, p.hint)} aria-label={p.title} onClick={() => go(p.id)}>
           {p.icon}
         </button>
       ))}
@@ -46,13 +46,13 @@ export function Rail({ route, go, conn, help }: { route: string; go: (route: str
           {'⬆\uFE0E'}
         </a>
       )}
-      <button className="ghost" title={`Appearance: ${theme}. Click to change.`} aria-label="Appearance" onClick={cycle}>
+      <button className="ghost" title={`Appearance: ${theme === 'auto' ? "follows your system's light or dark setting" : theme}. Click to go round: system, dark, light.`} aria-label="Appearance" onClick={cycle}>
         {theme === 'dark' ? '☾' : theme === 'light' ? '☀\uFE0E' : '◐'}
       </button>
-      <button className="ghost" title="Keyboard shortcuts" aria-label="Keyboard shortcuts" onClick={help}>
+      <button className="ghost" title="Keyboard shortcuts, and a replay of the tour of the app" aria-label="Keyboard shortcuts" onClick={help}>
         ?
       </button>
-      <span className={`railDot ${conn}`} title={conn === 'open' ? 'Connected to the runner' : 'Not connected to the runner'} />
+      <span className={`railDot ${conn}`} title={conn === 'open' ? 'Connected to the runner, which does the work behind the app' : 'Not connected to the runner, which does the work behind the app. The banner at the top has a button to start it.'} />
     </nav>
   );
 }

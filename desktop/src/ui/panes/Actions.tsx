@@ -533,6 +533,7 @@ function ActionsPane({ store, thread }: PaneProps) {
 const pane: PaneDef = {
   id: 'actions',
   title: 'Actions',
+  hint: "The buttons, panels and hooks this folder defines (Threadbear patches), and what is waiting on you",
   order: 20,
   available: (t) => Boolean(t.actions?.length || t.panels?.length || t.hooks?.length || t.patches?.some((p) => p.source !== 'builtin')),
   badge: (t) => waiting(t).length || undefined,

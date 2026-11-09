@@ -15,7 +15,8 @@ export type PageProps = {
 
 export type PageDef = {
   id: string; // the route: #/<id>
-  title: string; // the rail's tooltip and the page's name
+  title: string; // the page's name
+  hint?: string; // a sentence on what the page is for: the rail's tooltip, after the name
   icon: string; // one character or short symbol for the rail
   order: number; // rail position, after Threads (0)
   // The list column beside the page, when it has one (a list of projects,
@@ -33,6 +34,7 @@ export type PaneProps = {
 export type PaneDef = {
   id: string;
   title: string;
+  hint?: string; // a sentence on what the pane shows: the tab's tooltip, after its name
   order: number;
   // False hides the tab for a thread that has nothing for it.
   available?: (thread: ThreadSummary) => boolean;
@@ -43,6 +45,9 @@ export type PaneDef = {
 
 const pageModules = import.meta.glob<{ default: PageDef }>('./pages/*.tsx', { eager: true });
 const paneModules = import.meta.glob<{ default: PaneDef }>('./panes/*.tsx', { eager: true });
+
+// A tooltip that names the thing and says what it is for: "Files: Browse ...".
+export const tip = (title: string, hint?: string): string => (hint ? `${title}: ${hint}` : title);
 
 export const PAGES: PageDef[] = Object.values(pageModules)
   .map((m) => m.default)
