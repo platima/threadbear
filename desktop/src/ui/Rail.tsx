@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PAGES, tip } from './registry.ts';
-import { useAvailableUpdate } from './update-state.ts';
+import { APP_VERSION, useAvailableUpdate } from './update-state.ts';
 
 type Theme = 'auto' | 'dark' | 'light';
 const THEME_KEY = 'threadbear.theme';
@@ -41,10 +41,22 @@ export function Rail({ route, go, conn, help }: { route: string; go: (route: str
         </button>
       ))}
       <span className="grow" />
-      {update && (
+      {update ? (
         <a className="ghost railUpdate" href={update.page} target="_blank" rel="noopener noreferrer" title={`Version ${update.version} is out. Open its page in your browser.`} aria-label={`Version ${update.version} is out`}>
-          {'⬆\uFE0E'}
+          {'⬇\uFE0E'}
         </a>
+      ) : (
+        <button
+          className="ghost"
+          title={`Updates: this is version ${APP_VERSION}, and no newer release is known. This button turns into a link to the new release's page when one is out. Settings, This app can check now.`}
+          aria-label="Updates"
+          onClick={() => {
+            go('settings');
+            history.replaceState(null, '', '#/settings/app');
+          }}
+        >
+          {'⬇︎'}
+        </button>
       )}
       <button className="ghost" title={`Appearance: ${theme === 'auto' ? "follows your system's light or dark setting" : theme}. Click to go round: system, dark, light.`} aria-label="Appearance" onClick={cycle}>
         {theme === 'dark' ? '☾' : theme === 'light' ? '☀\uFE0E' : '◐'}

@@ -1,5 +1,6 @@
 // Is there a newer release of the Windows app? One request to GitHub's
-// releases API, at most once a day, for the repository named in REPO. Nothing
+// releases API (the latest release, or the recent ones for a copy that is itself
+// a pre-release), at most once a day, for the repository named in REPO. Nothing
 // is downloaded or installed: the rail shows a link to the release page, and
 // the person decides. Settings > This app turns the check off.
 //
@@ -74,15 +75,34 @@ export function releaseUrl(raw: unknown, repo: string = REPO): string | undefine
   return u.href;
 }
 
-export function pick(release: Release, current: string, arch: Arch): Available | undefined {
+// A copy that is itself a pre-release (0.1.0-rc.2) follows pre-releases too. GitHub's
+// answer for "the latest release" never includes one, so a copy that only asked for
+// that would never be told about the next candidate. A stable copy is never offered a
+// pre-release.
+export const followsPrereleases = (current: string): boolean => (parse(current)?.pre.length ?? 0) > 0;
+
+export function pick(release: Release, current: string, arch: Arch, opts: { prereleases?: boolean } = {}): Available | undefined {
   const tag = release.tag_name ?? '';
-  if (release.draft || release.prerelease || !isNewer(tag, current)) return undefined;
+  if (release.draft || (release.prerelease && !opts.prereleases) || !isNewer(tag, current)) return undefined;
   const page = releaseUrl(release.html_url);
   if (!page) return undefined;
   const wanted = SUFFIX[arch].toLowerCase();
   const asset = release.assets?.find((a) => (a.name ?? '').toLowerCase().endsWith(wanted));
   const download = releaseUrl(asset?.browser_download_url);
   return { version: tag.replace(/^v/, ''), page, ...(download ? { download } : {}) };
+}
+
+// The newest release in a list (GitHub's answer for the repository's releases) that is
+// newer than this copy, pre-releases included: the stable release of a version comes
+// after its candidates, so it wins once it is out. Drafts and anything not a version are left out.
+export function pickNewest(list: unknown, current: string, arch: Arch): Available | undefined {
+  if (!Array.isArray(list)) return undefined;
+  let best: Available | undefined;
+  for (const r of list as Release[]) {
+    const found = r && typeof r === 'object' ? pick(r, current, arch, { prereleases: true }) : undefined;
+    if (found && (!best || isNewer(found.version, best.version))) best = found;
+  }
+  return best;
 }
 
 type Storage = { getItem(k: string): string | null; setItem(k: string, v: string): void };
@@ -143,9 +163,11 @@ export async function checkForUpdate(opts: {
   if (!opts.force && kept && now - kept.at < waitAfter(kept.fails ?? 0)) return stillNewer(kept.found);
   let found: Available | undefined;
   try {
-    const res = await opts.fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
+    const pre = followsPrereleases(opts.current);
+    const res = await opts.fetch(pre ? `https://api.github.com/repos/${REPO}/releases?per_page=10` : `https://api.github.com/repos/${REPO}/releases/latest`);
     if (!res.ok) throw new Error('not ok');
-    found = pick((await res.json()) as Release, opts.current, opts.arch);
+    const body = await res.json();
+    found = pre ? pickNewest(body, opts.current, opts.arch) : pick(body as Release, opts.current, opts.arch);
   } catch {
     try {
       const next: Kept = { at: now, fails: (kept?.fails ?? 0) + 1, ...(kept?.found ? { found: kept.found } : {}) };

@@ -207,3 +207,39 @@ test('a kept answer with a bad address in it is not trusted', async () => {
   assert.equal(c.asked, 1, 'asked again rather than using it');
   assert.equal(got?.page, `${base}/tag/v0.2.0`);
 });
+
+// GitHub's "latest release" never includes a pre-release, so a copy that is itself an rc,
+// which every release so far has been, was never told about the next one.
+const listing = (urls: string[], body: unknown) => async (url: string) => {
+  urls.push(url);
+  return { ok: true, json: async () => body };
+};
+
+test('a pre-release copy asks for the recent releases and is offered the newest candidate, and a stable copy keeps to the latest release', async () => {
+  const urls: string[] = [];
+  const list = [release('v0.1.0-rc.3', { prerelease: true }), release('v0.1.0-rc.2', { prerelease: true }), release('v0.1.0-rc.1', { prerelease: true })];
+  const got = await checkForUpdate({ current: '0.1.0-rc.2', arch: 'x64', store: memory(), fetch: listing(urls, list), now: 1000 });
+  assert.equal(got?.version, '0.1.0-rc.3');
+  assert.equal(got?.download, `${base}/download/v0.1.0-rc.3/threadbear-v0.1.0-rc.3-setup-win-x64.exe`);
+  assert.deepEqual(urls, ['https://api.github.com/repos/platima/threadbear/releases?per_page=10']);
+
+  const stableUrls: string[] = [];
+  const stable = await checkForUpdate({ current: '0.1.0', arch: 'x64', store: memory(), fetch: listing(stableUrls, release('v0.2.0-rc.1', { prerelease: true })), now: 1000 });
+  assert.equal(stable, undefined, 'a stable copy is not offered a candidate');
+  assert.deepEqual(stableUrls, ['https://api.github.com/repos/platima/threadbear/releases/latest']);
+});
+
+test('a pre-release copy is offered the newest of the list whatever its order, the stable release after its candidates, and never a draft', async () => {
+  const mixed = [release('v0.1.0-rc.3', { prerelease: true }), release('v0.1.0'), release('v0.1.0-rc.10', { prerelease: true }), release('v9.9.9', { draft: true })];
+  assert.equal(await checkForUpdate({ current: '0.1.0-rc.2', arch: 'x64', store: memory(), fetch: listing([], mixed), now: 1000 }).then((a) => a?.version), '0.1.0');
+  const onlyCandidates = [release('v0.1.0-rc.1', { prerelease: true }), release('v0.1.0-rc.10', { prerelease: true }), release('v0.1.0-rc.9', { prerelease: true })];
+  assert.equal(await checkForUpdate({ current: '0.1.0-rc.2', arch: 'x64', store: memory(), fetch: listing([], onlyCandidates), now: 1000 }).then((a) => a?.version), '0.1.0-rc.10');
+  // Nothing newer than the copy itself, and an answer that is not a list, are no update.
+  assert.equal(await checkForUpdate({ current: '0.1.0-rc.10', arch: 'x64', store: memory(), fetch: listing([], onlyCandidates), now: 1000 }), undefined);
+  assert.equal(await checkForUpdate({ current: '0.1.0-rc.2', arch: 'x64', store: memory(), fetch: listing([], { message: 'rate limited' }), now: 1000 }), undefined);
+});
+
+test('pick still refuses a pre-release unless it is asked to take one', () => {
+  assert.equal(pick(release('v0.2.0-rc.1', { prerelease: true }), '0.1.0', 'x64'), undefined);
+  assert.equal(pick(release('v0.2.0-rc.1', { prerelease: true }), '0.1.0', 'x64', { prereleases: true })?.version, '0.2.0-rc.1');
+});
