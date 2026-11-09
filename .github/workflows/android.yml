@@ -8,14 +8,17 @@ name: android
 # `sign` job (android/scripts/sign-apk.sh). The release key is the four
 # ANDROID_KEYSTORE_* secrets of the repository's `release` environment, so only
 # a job that runs in that environment can read it, and the environment
-# allows only a release tag (v*) or `main`. `sign` runs in it for a release tag
-# and for a rehearsal started by hand from main (the same refs release.yml's
-# own signing uses). For anything else, a push to a branch or a pull request,
-# it runs with no environment, never sees the key, and signs with a key made
-# for the run: enough to install it once, and never the key that makes a phone
-# take a build as an update. Whether it was the release key is the workflow's
-# `signed` output, which release.yml reads to decide whether the APK goes on a
-# release.
+# allows only a release tag (v*) or `main`. When this workflow runs on its own,
+# `sign` runs in it for a rehearsal started by hand from main. For anything
+# else, a push to a branch or a pull request, it runs with no environment,
+# never sees the key, and signs with a key made for the run: enough to install
+# it once, and never the key that makes a phone take a build as an update.
+#
+# A release does not use `sign`. A job of a called workflow does not receive the
+# `release` environment's secrets (checked on 9 Nov: this same job read them
+# when it ran on its own, and got nothing when release.yml called it), so
+# release.yml passes `caller_signs`, which skips `sign`, and signs the unsigned
+# APK itself in a job of its own, in the same environment.
 #
 # Notifications go through Firebase (android/plugins/push). The app gets its
 # Firebase project from the ANDROID_GOOGLE_SERVICES_JSON secret, the contents of
@@ -42,12 +45,16 @@ on:
         description: "The release tag the APK is named for (v0.1.0), when a release calls this"
         type: string
         default: ''
+      caller_signs:
+        description: "true when the caller signs the unsigned APK itself, with the release key, so `sign` is skipped"
+        type: boolean
+        default: false
     secrets:
       ANDROID_GOOGLE_SERVICES_JSON:
         required: false
     outputs:
       signed:
-        description: "true when the APK is signed with the release key, false when with a key made for the run"
+        description: "true when `sign` signed the APK with the release key, false when with a key made for the run; empty when the caller signs"
         value: ${{ jobs.sign.outputs.signed }}
 
 permissions:
@@ -149,14 +156,15 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # Signs it. For a release tag, and for a rehearsal started by hand from main,
-  # it runs in the `release` environment, which holds the release key and only
-  # lets those refs in; for anything else it has no environment and no key (the
-  # secrets are blanked in the step, so a copy of the key left in the
-  # repository's own secrets could not be read either), and a key made for the
-  # run signs it. The unsigned APK is all it takes from the build, and it
-  # builds nothing.
+  # Signs it. For a rehearsal started by hand from main it runs in the `release`
+  # environment, which holds the release key and only lets main and release tags
+  # in; for anything else it has no environment and no key (the secrets are
+  # blanked in the step, so a copy of the key left in the repository's own
+  # secrets could not be read either), and a key made for the run signs it. The
+  # unsigned APK is all it takes from the build, and it builds nothing. A release
+  # signs the APK in release.yml instead (see the top of this file).
   sign:
+    if: ${{ !inputs.caller_signs }}
     needs: apk
     runs-on: ubuntu-latest
     timeout-minutes: 15
