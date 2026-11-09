@@ -16,7 +16,8 @@ release stops before anything is published if it is missing.
 ### ✨ Highlights
 
 - Threadbear for Windows: a window and a tray icon around the threads, asks and approvals the Mac app has, and most of its panels. Closing the window keeps it in the tray, and Quit ends it.
-- The runner runs on Windows 11, with Claude Code. It starts when you sign in, through a Task Scheduler task the app offers to set up the first time you open it, and the app starts it again after an update.
+- The runner runs on Windows 11, with Claude Code. It starts when you sign in, through a Task Scheduler task the app offers to set up the first time you open it, and the app starts it again after an update. If you would rather it did not run all the time, say no and the app offers a runner that starts only while Threadbear is open and stops when you quit it.
+- When a login has run out, the error is shown once, with a button for each of `claude auth login` and `claude setup-token` that opens a terminal on it. Settings, "This app", has an Exit on close box (off by default, so closing the window still leaves the app in the tray).
 - Toasts when a thread needs you or finishes, a folder picker for new threads, and links that open in your browser. Several approvals at once come as one card with a tick on each call, as on the Mac, so a reply with eight edits is one click and not eight.
 - Setup exe, MSI and a portable zip, for x64 and for Windows on Arm (the Arm builds are made by the same workflow but have not been run on an Arm PC yet). Node comes inside, so nothing else has to be installed except Claude Code itself and Git for Windows. The Claude Agent SDK is Anthropic's and is not in the package: the runner downloads it from npm (about 4 MB, checked against its hash) the first time it starts, so that start needs an internet connection.
 - Codex works too, when its `codex.exe` is on your PATH. Threadbear does not install or update it on Windows.
@@ -33,3 +34,14 @@ release stops before anything is published if it is missing.
 - A check once a day for a newer release of the fork, shown as a link in the rail. It downloads nothing, and Settings, "This app", turns it off.
 - Windows support in the runner: process handling, Git Bash as the shell, a Task Scheduler install, Windows paths in messages and links, and trust checks that follow the spellings Windows gives a path (short names, `/c/...`, `.cmd` and `.exe` programs).
 - Licence notices for everything in the package (`THIRD-PARTY-NOTICES.txt`) and a `README-WINDOWS.txt` in the zip.
+- A second kind of runner, started with `--runner --on-demand` or from the offer, tray menu or the connection banner's Start the runner button: no sign-in trigger, started by the app when it opens and stopped when it quits. `--runner --mode` says which kind is set up. The same on Linux, as a systemd user service that is not enabled.
+- Exit on close (Settings, "This app", Windows only). On Linux closing the window always ends the app.
+- An Updates button in the rail, always there: a link to the new release's page when one is out, otherwise a way to Settings, "This app". A copy that is itself a pre-release (every release so far) is now told about newer pre-releases, which the check never did before.
+- Tooltips that say what a control is for (pages and panes carry a hint), and a test that keeps every control's tooltip from being only its label.
+
+### Fixed
+
+- A turn that failed because the login ran out showed its error twice.
+- The Archive menu in the done card was cut off by the scrolling box around it, and the first message's Edit button by the top of the window. Every menu list is now fixed to the window from its button.
+- Your own messages sit on the right, no wider than most of the column.
+- The pairing button and the model menu say why they are greyed out (no runner connected, no login found, or no models listed yet) and no longer tell a Codex user to run Claude Code.
