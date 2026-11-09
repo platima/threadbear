@@ -407,7 +407,9 @@ launch_app() {
   I_PID="$pid"
   for i in $(seq 1 400); do grep -qx ready "$I_LOG" 2>/dev/null && break; sleep 0.05; done
   grep -qx ready "$I_LOG" 2>/dev/null || { cat "$I_LOG" >&2 2>/dev/null || true; die "the app didn't take commands (see $I_DIR/app.stderr)"; }
-  send '{"cmd":"waitFor","ready":true,"timeout":20}' >/dev/null || { tail -n 20 "$I_DIR/app.log" >&2; die "the app didn't connect to the runner"; }
+  # TB_DEV_APP_NO_READY: a spec of what the app shows before its first list
+  # (the loading rows) needs to look at it before the list lands.
+  [ -n "${TB_DEV_APP_NO_READY:-}" ] || send '{"cmd":"waitFor","ready":true,"timeout":20}' >/dev/null || { tail -n 20 "$I_DIR/app.log" >&2; die "the app didn't connect to the runner"; }
 }
 
 cmd_start() {

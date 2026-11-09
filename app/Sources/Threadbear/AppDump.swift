@@ -36,6 +36,19 @@ struct AppDump: Encodable {
         var subagents: [SubagentInfo] = []
         /// "On bruce" for another runner's thread ("On bruce, offline").
         var runner: String? = nil
+        /// The sidebar row as it's drawn (ThreadRowView), for the specs: the
+        /// line under the title, whether the title's bold, the mark in the
+        /// gutter ("dot" or "tick"), the words on the right and the tile.
+        var place: String = ""
+        var bold: Bool = false
+        var mark: String? = nil
+        var trailing: String = ""
+        var tile: String = ""
+        /// Who started it, when it wasn't Mike: the mark before the place line
+        /// (`ThreadByline`), as an SF Symbol name.
+        var origin: String? = nil
+        /// The hover buttons' tips, while the row's hovered.
+        var hoverButtons: [String]? = nil
     }
 
     struct SubagentInfo: Encodable {
@@ -52,6 +65,10 @@ struct AppDump: Encodable {
         var threads: [Thread]
         /// Inbox and Scheduled sections only: folded away under their heading.
         var collapsed: Bool? = nil
+        /// The number drawn on the heading while it's folded.
+        var count: Int? = nil
+        /// How many rows it draws, for the Archived section (`ArchiveRows`).
+        var shown: Int? = nil
     }
 
     struct Sidebar: Encodable {
@@ -59,6 +76,10 @@ struct AppDump: Encodable {
         var sections: [Section]
         var snoozed: Int
         var archived: Int
+        /// How the Inbox is sorted ("needsYou", "newest", "oldest").
+        var sort: String = ""
+        /// Before the runner's first list: the grey loading rows are showing.
+        var loading: Bool = false
     }
 
     struct Composer: Encodable {
@@ -86,6 +107,9 @@ struct AppDump: Encodable {
         var chip: String = ""
         /// The other runner it runs on ("bruce"); nil for this Mac.
         var runner: String? = nil
+        /// The open card in the box, for the behaviour specs: "Done" with
+        /// its follow-ups, or "Needs you" with each ask.
+        var card: [String]? = nil
     }
 
     struct Settings {
@@ -261,11 +285,13 @@ struct AppDump: Encodable {
                 SubagentInfo(id: $0.id, depth: $0.depth, status: $0.subagent.status.rawValue, title: SubagentRows.title($0.subagent),
                              detail: SubagentRows.detail($0.subagent), selected: $0.id == selectedSub)
             }
+            let shown = rowShows(summary, section: section, app: app)
             return Thread(id: summary.id, title: summary.title, status: summary.status.rawValue, needsYou: summary.needsYou,
                           unread: look.unread, hovered: app.hoverOverride == summary.id,
                           background: look.status == .background ? BackgroundWork.short(summary.background) : nil,
                           waiting: summary.waitingForRoom.map { Pools.waitingLine($0, now: app.now) } ?? (summary.waitingForNetwork != nil ? "Waiting for connection" : nil),
-                          subagents: subagents, runner: app.runnerPlace(of: summary))
+                          subagents: subagents, runner: app.runnerPlace(of: summary), place: shown.place, bold: shown.bold, mark: shown.mark,
+                          trailing: shown.trailing, tile: shown.tile, origin: ThreadByline.line(summary)?.symbol, hoverButtons: shown.buttons)
         }
         let sections: [Section]
         switch app.sidebarMode {
@@ -273,8 +299,11 @@ struct AppDump: Encodable {
             // The search box applies, as it does to what's on screen.
             let built = app.sections.matching(app.searchQuery)
             sections = InboxSection.allCases.map { section in
-                Section(name: section.title, threads: built[section].map { thread($0, section: section) },
-                        collapsed: app.collapsedSections.contains(section))
+                let collapsed = app.collapsedSections.contains(section)
+                let searching = !app.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let shown = section == .archived ? ArchiveRows.shown(built[section], limit: app.archiveLimit, searching: searching, selection: app.selection).rows.count : nil
+                return Section(name: section.title, threads: built[section].map { thread($0, section: section) }, collapsed: collapsed,
+                               count: collapsed && !built[section].isEmpty ? built[section].count : nil, shown: shown)
             }
         case .projects:
             // A section per project, then the threads in none.
@@ -336,7 +365,8 @@ struct AppDump: Encodable {
             error: app.errorMessage,
             window: window.map { Window(width: Int(contentSize($0).width), height: Int(contentSize($0).height), appearance: appearance) },
             sidebar: Sidebar(mode: String(describing: app.sidebarMode), sections: sections,
-                             snoozed: ThreadSections.snoozed(app.threads.values, now: now).count, archived: app.archivedCount),
+                             snoozed: ThreadSections.snoozed(app.threads.values, now: now).count, archived: app.archivedCount,
+                             sort: app.inboxOrder.rawValue, loading: !app.threadsLoaded),
             selection: app.selectedThread.map { thread($0) },
             subagent: app.subagentSelection?.subagentId,
             panels: app.selectedThread.flatMap { panels($0, app: app) },
@@ -362,6 +392,67 @@ struct AppDump: Encodable {
             } : [],
             dock: app.dock.layout.summary.replacingOccurrences(of: "threadbear.", with: "")
         )
+    }
+
+    /// What ThreadRowView draws for a row, as data: the same rules as its
+    /// body and `trailing(_:)`, for the specs (features/sidebar-rows.feature).
+    @MainActor
+    private static func rowShows(_ summary: ThreadSummary, section: InboxSection?, app: AppModel) -> (place: String, bold: Bool, mark: String?, trailing: String, tile: String, buttons: [String]?) {
+        let mode = section.map { RowMode($0, thread: summary, now: app.now) } ?? .inbox
+        let look = mode == .inbox || mode == .projects ? ThreadRowLook(summary, section: section) : ThreadRowLook(status: .time, unread: false, emphasised: false)
+        let mark: String? = look.done ? "tick" : look.unread ? "dot" : nil
+        let tile: String
+        if let first = ProjectMark.shown(summary).first {
+            tile = ProjectMark.letter(first.title)
+        } else {
+            tile = summary.isRemote ? "runner" : "folder"
+        }
+        var buttons: [String]? = nil
+        if app.hoverOverride == summary.id {
+            buttons = mode.rowActions.map { action in
+                switch action {
+                case .star: return summary.isStarred ? "Remove star" : "Star: keep at the top"
+                case .snooze: return "Hibernate"
+                case .archive: return AppShortcuts.shared.tip("Archive", .archive)
+                case .unsnooze: return "Wake"
+                case .delete: return "Delete chat…"
+                case .unarchive: return "Unarchive"
+                }
+            }
+        }
+        return (ProjectMark.place(summary), look.emphasised, mark, rowTrailing(summary, look: look, mode: mode, section: section, app: app), tile, buttons)
+    }
+
+    /// The words at the right of a row, as `ThreadRowView.trailing` has them.
+    @MainActor
+    private static func rowTrailing(_ thread: ThreadSummary, look: ThreadRowLook, mode: RowMode, section: InboxSection?, app: AppModel) -> String {
+        if let moving = thread.moving {
+            if moving.ended { return moving.state == "cancelled" ? "Move cancelled" : "Couldn't move" }
+            return "Moving to \(moving.toName)"
+        }
+        if mode != .hibernating, let waiting = thread.waitingForRoom, !thread.isArchived { return Pools.waitingLine(waiting, now: app.now) }
+        if mode != .hibernating, thread.waitingForNetwork != nil, !thread.isArchived { return "Waiting for connection" }
+        let time = RelativeTime.short(mode == .archive ? thread.archivedAt ?? thread.lastActivityAt : thread.lastActivityAt, now: app.now)
+        switch look.status {
+        case .time:
+            if mode == .hibernating {
+                if let words = WakeWords.row(thread, now: app.now) { return words.text }
+                if thread.snoozedUntilRelease { return "Back on update" }
+                if thread.snoozedUntilRestart { return "Back on restart" }
+                if let until = thread.snoozedUntil { return "Back \(RelativeTime.until(until, now: app.now))" }
+                return ""
+            }
+            if look.woke, thread.woke != nil { return "Woke up" }
+            if section == .hibernating, let next = app.wakes[thread.id]?.nextRunAt { return RelativeTime.until(next, now: app.now) }
+            return time
+        case .working:
+            let elapsed = ThreadRowLook.workingLabel(since: thread.lastActivityAt, now: Date())
+            return look.labelled ? "Working " + elapsed : elapsed
+        case .background: return BackgroundWork.short(thread.background)
+        case .needsYou: return time
+        case .failed: return "Failed"
+        case .stopped: return "Stopped"
+        }
     }
 
     @MainActor
@@ -501,7 +592,26 @@ struct AppDump: Encodable {
                         editing: app.editing[key]?.seq,
                         cwd: settings.cwd, account: settings.account, model: settings.model, ask: settings.ask, mode: settings.mode, effort: settings.effort,
                         pool: settings.pool, chip: ThreadSettings(app: app, thread: app.selectedThread).modelChipTitle,
-                        runner: app.selectedThread.flatMap(app.runnerName(of:)) ?? (app.selectedThread == nil ? app.newThreadRunner?.name : nil))
+                        runner: app.selectedThread.flatMap(app.runnerName(of:)) ?? (app.selectedThread == nil ? app.newThreadRunner?.name : nil),
+                        card: cardLines(app, key: key))
+    }
+
+    /// The open card as lines (`composer.card`): "Done" with a "[x]" or
+    /// "[ ]" line per follow-up, "(?)" on one asked about; or "Needs you"
+    /// ("(collapsed)" when folded) with a line per ask.
+    @MainActor
+    private static func cardLines(_ app: AppModel, key: String) -> [String]? {
+        guard let row = app.sessions[key]?.openCard, case .asks(let card) = row.content else { return nil }
+        if card.isDone {
+            return ["Done"] + card.next.enumerated().map { i, text in
+                (card.pickedNext.contains(i) ? "[x] " : "[ ] ") + text + (card.explainNext.contains(i) ? " (?)" : "")
+            }
+        }
+        var lines = [app.collapsedCards[key] == row.seq ? "Needs you (collapsed)" : "Needs you"]
+        for (i, ask) in card.asks.enumerated() {
+            lines.append((card.picks[i] != nil ? "[x] " : "[ ] ") + "\(i + 1). \(ask.action)")
+        }
+        return lines
     }
 
     /// Rows a click opens: work lines, groups and settled approvals that

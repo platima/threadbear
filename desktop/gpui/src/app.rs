@@ -1,5 +1,6 @@
 // The app's state: the connection, the thread list, what's open. The sidebar
 // (sidebar.rs) and the thread pane (thread.rs) draw from it.
+use crate::composer::Composer;
 use crate::thread::ThreadPane;
 use crate::{call, now_ms, ChannelSink, Seen, RT};
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use threadbear_client::config::RunnerConfig;
 use threadbear_client::runner::{Client, Status};
 use threadbear_core::inbox::{self, iso_time, ThreadSummary};
+use threadbear_core::logins::RunnerLogins;
 use tokio::sync::mpsc;
 
 actions!(threadbear, [StopTurn, ArchiveThread]);
@@ -23,11 +25,18 @@ pub struct Threadbear {
     pub(crate) list_error: Option<String>,
     pub(crate) selected: Option<String>,
     pub(crate) pane: Option<Entity<ThreadPane>>,
+    /// The open pane's requests to the app (a thread: link was clicked).
+    pane_events: Option<Subscription>,
     pub(crate) search: Entity<InputState>,
     /// The sections folded away under their headings, by key.
     pub(crate) folded: HashSet<&'static str>,
-    /// What's typed for each thread that isn't open.
-    drafts: HashMap<String, String>,
+    /// The runner's accounts, pools and defaults, from its `hello`, for the
+    /// composer's chips.
+    pub(crate) logins: RunnerLogins,
+    /// Each thread's message box, kept so what's typed (with its undo and
+    /// pictures) stays with the thread while others are open.
+    pub(crate) composers: HashMap<String, Entity<Composer>>,
+    pub(crate) sidebar: crate::sidebar::SidebarState,
     _events: Task<()>,
     _subs: Vec<Subscription>,
 }
@@ -65,9 +74,12 @@ impl Threadbear {
             list_error: None,
             selected: None,
             pane: None,
+            pane_events: None,
             search,
             folded: HashSet::from(["hibernating", "archived"]),
-            drafts: HashMap::new(),
+            composers: HashMap::new(),
+            logins: RunnerLogins::default(),
+            sidebar: crate::sidebar::SidebarState::new(cx),
             _events: events,
             _subs: vec![appearance, searching],
         }
@@ -77,11 +89,16 @@ impl Threadbear {
         match seen {
             Seen::Status(status) => {
                 let connected = matches!(status, Status::Connected { .. });
+                if let Status::Connected { hello, .. } = &status {
+                    self.logins = RunnerLogins::from_hello(hello);
+                }
                 self.status = status;
                 // Each time it's connected, the whole list again, and the
                 // open thread read again: thread.updated only says what changed.
                 if connected {
                     self.load_list(cx);
+                    self.refresh_restart(cx);
+                    self.load_projects(cx);
                     if let Some(pane) = &self.pane {
                         pane.update(cx, |p, cx| p.load(cx));
                     }
@@ -99,6 +116,8 @@ impl Threadbear {
                 "thread.deleted" => {
                     self.threads.remove(params["threadId"].as_str().unwrap_or(""));
                 }
+                "runner.notice" => self.refresh_restart(cx),
+                "projects.updated" => self.sidebar.project_icons = crate::sidebar::project_icons(&params["projects"]),
                 "thread.event" => {
                     if let Some(pane) = &self.pane {
                         pane.update(cx, |p, cx| p.event(&params, cx));
@@ -120,6 +139,7 @@ impl Threadbear {
                         let list: Vec<ThreadSummary> = serde_json::from_value(v["threads"].clone()).unwrap_or_default();
                         this.threads = list.into_iter().map(|t| (t.id.clone(), t)).collect();
                         this.list_error = None;
+                        this.sidebar.loaded = true;
                     }
                     Err(e) => this.list_error = Some(e.message),
                 }
@@ -137,24 +157,36 @@ impl Threadbear {
         let Some(summary) = self.threads.get(&id).cloned() else { return };
         if let Some(old) = &self.pane {
             old.read(cx).unsubscribe();
-            let (thread, text) = (old.read(cx).thread_id().to_string(), old.read(cx).draft(cx));
-            if text.is_empty() {
-                self.drafts.remove(&thread);
-            } else {
-                self.drafts.insert(thread, text);
-            }
         }
         let client = self.client.clone();
-        let draft = self.drafts.get(&id).cloned().unwrap_or_default();
+        let app = cx.entity().downgrade();
+        let composer = self
+            .composers
+            .entry(id.clone())
+            .or_insert_with(|| cx.new(|cx| Composer::new(Some(id.clone()), client.clone(), app, window, cx)))
+            .clone();
         self.selected = Some(id);
-        self.pane = Some(cx.new(|cx| ThreadPane::new(client, summary, draft, window, cx)));
+        let pane = cx.new(|cx| ThreadPane::new(client, summary, composer.clone(), cx));
+        composer.update(cx, |c, cx| {
+            c.attach(pane.downgrade());
+            c.focus(window, cx);
+            cx.notify();
+        });
+        // A thread: link in the transcript opens that thread.
+        self.pane_events = Some(cx.subscribe_in(&pane, window, |this, _, event: &crate::rows::OpenThreadRequest, window, cx| {
+            let matches: Vec<String> = this.threads.keys().filter(|k| **k == event.0 || k.starts_with(&event.0)).cloned().collect();
+            if let [only] = matches.as_slice() {
+                this.open(only.clone(), window, cx);
+            }
+        }));
+        self.pane = Some(pane);
         cx.notify();
     }
 
     /// `threads.update` for the open thread, with the summary changed here
     /// first: anything clicked shows at once, and the runner's answer (or its
     /// thread.updated) puts it right.
-    fn update_open(&mut self, change: impl FnOnce(&mut ThreadSummary), params: Value, cx: &mut Context<Self>) -> Result<(), String> {
+    pub(crate) fn update_open(&mut self, change: impl FnOnce(&mut ThreadSummary), params: Value, cx: &mut Context<Self>) -> Result<(), String> {
         let Some(id) = self.selected.clone() else { return Err("no thread open".into()) };
         let before = self.threads.get(&id).cloned();
         if let Some(t) = self.threads.get_mut(&id) {
@@ -200,8 +232,8 @@ impl Threadbear {
     }
 
     #[cfg(feature = "automation")]
-    pub(crate) fn composer(&self, cx: &App) -> Option<Entity<gpui_kit::component::input::TextareaState>> {
-        self.pane.as_ref().map(|p| p.read(cx).composer())
+    pub(crate) fn composer(&self, cx: &App) -> Option<Entity<Composer>> {
+        self.pane.as_ref().map(|p| p.read(cx).composer.clone())
     }
 
     #[cfg(feature = "automation")]
@@ -215,6 +247,13 @@ impl Threadbear {
         if let Some(pane) = &self.pane {
             pane.update(cx, |p, cx| p.load_all_events(cx));
         }
+    }
+
+    /// Runs `f` on the open pane, for the automation commands.
+    #[cfg(feature = "automation")]
+    pub(crate) fn update_pane<R>(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut ThreadPane, &mut Context<ThreadPane>) -> R) -> Result<R, String> {
+        let Some(pane) = &self.pane else { return Err("no thread open".into()) };
+        Ok(pane.update(cx, f))
     }
 
     /// A thread named by the start of its id, as the Swift app's automation has it.
@@ -231,33 +270,52 @@ impl Threadbear {
     /// The window as data, in the Swift app's shape (app/Sources/Threadbear/AppDump.swift).
     #[cfg(feature = "automation")]
     pub(crate) fn dump(&self, cx: &App) -> Value {
-        let row = |t: &ThreadSummary| json!({ "id": t.id, "title": t.title, "status": t.status, "needsYou": t.needs_you, "unread": t.unread() });
-        let now = now_ms();
-        let shown = self.shown_sections(cx, now);
-        let sections: Vec<Value> = shown.iter().map(|s| json!({ "name": s.title, "collapsed": self.folded.contains(s.key), "threads": s.rows.iter().map(row).collect::<Vec<_>>() })).collect();
-        let snoozed = shown.iter().find(|s| s.key == "hibernating").map_or(0, |s| s.rows.len());
-        let archived = shown.iter().find(|s| s.key == "archived").map_or(0, |s| s.rows.len());
         let connection = match self.status {
             Status::Connected { .. } => "connected",
             Status::Connecting { .. } => "connecting",
             Status::Disconnected { .. } => "lost",
         };
-        let selected = self.selected.as_ref().and_then(|id| self.threads.get(id));
         let pane = self.pane.as_ref().map(|p| p.read(cx));
         json!({
             "connection": connection,
-            "selection": selected.map(row),
-            "sidebar": { "mode": "inbox", "sections": sections, "snoozed": snoozed, "archived": archived },
-            "composer": { "draft": self.selected.clone().unwrap_or_else(|| "new".into()), "text": pane.map(|p| p.draft(cx)).unwrap_or_default() },
-            "transcript": pane.map(|p| p.dump()).unwrap_or_else(|| json!({ "rows": [] })),
+            "selection": self.selection_dump(),
+            "sidebar": self.sidebar_dump(cx),
+            "composer": self.dump_composer(cx),
+            "transcript": pane.map(|p| p.dump(cx)).unwrap_or_else(|| json!({ "rows": [] })),
+            "decisions": pane.and_then(|p| p.composer.read(cx).decision_lines(cx)),
             "banner": Value::Null,
         })
+    }
+
+    /// The composer's part of the dump (AppDump.composer).
+    #[cfg(feature = "automation")]
+    fn dump_composer(&self, cx: &App) -> Value {
+        let pane = self.pane.as_ref().map(|p| p.read(cx));
+        let mut out = json!({
+            "draft": self.selected.clone().unwrap_or_else(|| "new".into()),
+            "text": pane.map(|p| p.draft(cx)).unwrap_or_default(),
+            "images": pane.map_or(0, |p| p.composer.read(cx).draft_images(cx)),
+        });
+        if let Some(pane) = pane {
+            let data = pane.composer.read(cx).chip_data(cx);
+            if let Some(t) = &data.summary {
+                out["cwd"] = json!(t.cwd);
+                out["account"] = json!(t.account_id);
+                out["mode"] = json!(if t.permission_mode.is_empty() { "full" } else { t.permission_mode.as_str() });
+            }
+            out["chip"] = json!(crate::composer_chips::model_chip_text(&data));
+            let composer = pane.composer.read(cx);
+            if let Some(card) = composer.card_lines(cx) {
+                out["card"] = json!(card);
+            }
+        }
+        out
     }
 
     /// The sections with the search applied, as they're drawn.
     pub(crate) fn shown_sections(&self, cx: &App, now: i64) -> Vec<inbox::Section> {
         let query = self.search.read(cx).value().trim().to_lowercase();
-        inbox::sections(self.threads.values().filter(|t| query.is_empty() || inbox::matches(t, &query)), now)
+        inbox::sections_ordered(self.threads.values().filter(|t| query.is_empty() || inbox::matches(t, &query)), now, self.sidebar.order)
     }
 
     pub(crate) fn connection_note(&self) -> Option<String> {

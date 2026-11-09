@@ -38,3 +38,51 @@ Feature: Reading a thread
   Scenario: A failed turn says what went wrong
     When I open the thread "Make a poster for the meetup"
     Then the transcript shows an error
+
+  @transcript.thinking
+  Scenario: The agent's thinking opens to what it thought
+    When I open the thread "Why is the build slow on CI?"
+    And I open the line saying "Read 2 files, ran a command"
+    And I open the thinking that starts "The slower run"
+    Then the thinking that starts "The slower run" is open
+
+  @transcript.tool @transcript.tooloutput
+  Scenario: A tool opens to its output and closes again
+    When I open the thread "Why is the build slow on CI?"
+    And I open the step called "Download the last two CI logs"
+    Then the step called "Download the last two CI logs" is open and taller than one line
+    When I close the step called "Download the last two CI logs"
+    Then the step called "Download the last two CI logs" is one line again
+
+  @transcript.diff
+  Scenario: An edit opens to its diff, and to every line of it
+    When I open the thread "Make a poster for the meetup"
+    And I open the line saying "Worked for 48s"
+    And I open the step called "Edit 3 files"
+    Then the step called "Edit 3 files" is open and taller than one line
+    When I show every line of the step called "Edit 3 files"
+    Then the step called "Edit 3 files" got taller
+
+  @transcript.changes
+  Scenario: A file in the changes card opens to its diff
+    When I open the thread "Make a poster for the meetup"
+    And I open the first file in the card saying "Edited 3 files"
+    Then the card saying "Edited 3 files" got taller
+
+  @transcript.images
+  Scenario: Pictures the agent made show in the transcript
+    When I open the thread "Make a poster for the meetup"
+    Then the transcript shows 2 rows of pictures
+
+  @transcript.working @transcript.reply
+  Scenario: A running turn shows the working line and its reply as it streams
+    When I open the thread "Add dark mode to the dashboard"
+    And a reply starts streaming in
+    Then the working line shows
+    And the streaming reply grows
+
+  @transcript.rowmenu
+  Scenario: A reply's words can be copied from its menu
+    When I open the thread "Make uploads resume after a crash"
+    And I choose "Copy message" from the menu of the reply starting "Uploads now pick up"
+    Then the clipboard holds "Uploads now pick up where they stopped"

@@ -1425,6 +1425,24 @@ async function dispatch(client, method, p) {
       broadcast('runner.updates', { updates });
       return { updates };
     }
+    case 'mock.fillArchived': {
+      // More archived threads than the Archived section shows at first, for
+      // its Show more row: `count` of them, each archived a minute apart.
+      const count = Number(p.count) || 30;
+      const now = Date.now();
+      for (let i = 0; i < count; i++) {
+        const id = `th_archived_${i}`;
+        const ts = new Date(now - (i + 1) * 60_000 - 3_600_000).toISOString();
+        const summary = {
+          id, title: `Archived thread ${i + 1}`, cwd: defaults.cwd, accountId: 'claude-main', provider: 'claude',
+          permissionMode: 'full', status: 'idle', live: false, needsYou: false, createdAt: ts, updatedAt: ts, lastActivityAt: ts,
+          archivedAt: ts, preview: '', lastSeq: 0, lastSeenSeq: 0,
+        };
+        threads.set(id, { summary, events: [], inProgress: new Map(), timers: [] });
+        broadcastSummary(id);
+      }
+      return { count };
+    }
     case 'mock.background': {
       // What a thread's CLI is running in the background, as the real
       // runner reports it between turns: `tasks` is the summary's

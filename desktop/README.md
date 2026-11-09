@@ -17,6 +17,9 @@ turn.
 - **`core/`, what the app knows with no window**: the inbox rules, and
   `reducer/`, a port of how the Swift app turns events into rows, checked
   against golden files both languages test (`core/tests/golden`).
+- **`dock/`, BearDock for GPUI**: splits, tabs, panel dragging and torn-out
+  windows. Its layout tree (`dock/layout`) has no GPUI in it and reads what the
+  Swift `dock/` saved. Not in the app yet; see `dock/README.md`.
 - **`client/`, the runner connection** (`runner.rs`): the challenge sign-in
   (`auth.rs`, the same HMAC as `runner/src/rpc-auth.ts`), hello, requests and
   replies, and reconnecting when the runner restarts. `tests/mock_runner.rs`
@@ -63,6 +66,11 @@ mock runner. Run Rust builds and suites elsewhere (`scripts/remote.sh`):
 scripts/remote.sh cloud -- bash -c 'cd desktop && cargo test -p threadbear-core'
 ```
 
+`scripts/spec.sh` is the one-command version for use through `remote.sh`: it
+builds the app (Swift or GPUI), keeps its own copy of the GPUI binary so another
+checkout's build can't swap it mid-run (the cargo target folder is shared), and
+runs specs by tag or takes a picture (`--shot "<thread title>" out.png`).
+
 `desktop/test/auth-vector-*.txt` are fixed sign-in proofs. The Rust tests
 check them, and so does `runner/test/unit/desktop-auth-vector.test.ts` with
 the runner's own code, so if the runner's auth changes both sides fail until
@@ -84,5 +92,3 @@ each.
 - On Windows, path handling (`folderName` splits on `/`) and the runner's
   data dir are still Mac-shaped. The runner itself doesn't run on Windows
   yet.
-- Opening a thread marks it read, and the sidebar then re-sorts with the open
-  thread moving. The Mac app keeps it in place.

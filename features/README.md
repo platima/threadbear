@@ -34,6 +34,9 @@ code, and make it fail first when you can.
 - `@gpui-pending` or `@swift-pending` means that app doesn't pass it yet.
   `@manual` means nobody's found a way to automate it (a real trackpad gesture,
   say). The table counts both as not done.
+- `@long-thread` runs a scenario on a made-up long thread and one short demo
+  thread (`support/long-thread.ts`), for what only shows on more than a page
+  of events.
 - `support/` holds the drivers. Both apps take the same JSON commands and give
   the same `dump` (`app/README.md`, "Seeing and driving it from a script"), so
   a step never asks which app it's driving.

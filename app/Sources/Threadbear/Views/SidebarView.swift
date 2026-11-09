@@ -50,9 +50,6 @@ struct SidebarView: View {
 private struct InboxList: View {
     @Environment(AppModel.self) private var app
 
-    /// How many archived threads the Archived section shows (`ArchiveRows`).
-    @State private var archiveLimit = ArchiveRows.first
-
     var body: some View {
         // The search at the top cuts every section down to its matches.
         let query = app.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -67,7 +64,7 @@ private struct InboxList: View {
         let hibernating = tucking.isEmpty ? sections.hibernating : sections.hibernating.filter { !tucking.contains($0.id) }
         // The Archived section shows the most recent few, or every match
         // while searching.
-        let archive = ArchiveRows.shown(archived, limit: archiveLimit, searching: searching, selection: app.selection)
+        let archive = ArchiveRows.shown(archived, limit: app.archiveLimit, searching: searching, selection: app.selection)
         // Each section's rows as drawn.
         let drawn: (InboxSection) -> [ThreadSummary] = { $0 == .archived ? archive.rows : $0 == .hibernating ? hibernating : sections[$0] }
         // A folded section's rows aren't drawn, so the arrow keys skip
@@ -110,7 +107,7 @@ private struct InboxList: View {
                             // pinning it to the foot of the column was tried
                             // on 8 Nov and Mike undid it on 9 Nov.
                             ThreadSection(section: section, threads: archive.rows, total: archived.count, more: archive.more,
-                                          searching: searching, showMore: { archiveLimit += ArchiveRows.step }, select: select)
+                                          searching: searching, showMore: { app.archiveLimit += ArchiveRows.step }, select: select)
                         } else if section == .hibernating {
                             // The heading comes up as the first thread sets
                             // off for it, so there's a moon to land in.
@@ -630,7 +627,10 @@ struct ThreadRowView: View {
     /// Not while one of its sub-agents is showing: that row is highlighted.
     private var isSelected: Bool { app.selection == thread.id && app.subagentSelection == nil && app.openProjectId == nil && !app.showsHomePage }
     /// The screenshot run shows one row as if the pointer were over it.
-    private var pointerOver: Bool { hovering || app.hoverOverride == thread.id }
+    /// While a script has a row hovered, the real pointer doesn't count: on a
+    /// shared desktop it can be resting on another row, whose buttons would
+    /// then show as well and take the script's click.
+    private var pointerOver: Bool { app.hoverOverride.map { $0 == thread.id } ?? hovering }
     /// Archived from somewhere other than a swipe: slides off all the same.
     private var slidingOff: Bool { app.slidingOff.contains(thread.id) }
     /// Not while it's being swiped: the buttons would ride along with it.

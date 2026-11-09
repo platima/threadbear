@@ -104,6 +104,12 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
     match text(cmd, "cmd") {
         "dump" => Ok(app.read(cx).dump(cx)),
         "status" => Ok(json!("ok")),
+        // The sidebar's commands (sidebar.rs). Guarded ones only take the forms
+        // that name a section, a row or a tip; the others fall through below.
+        "hover" | "sort" | "archive-more" | "star" | "unstar" | "unarchive" | "new" | "realMenu" | "menu-popover" => crate::sidebar::automation(app, cmd, window, cx),
+        "expand" | "collapse" if cmd.get("section").is_some() => crate::sidebar::automation(app, cmd, window, cx),
+        "archive" | "snooze" if cmd.get("id").is_some() || cmd.get("said").is_some() => crate::sidebar::automation(app, cmd, window, cx),
+        "click" if cmd.get("tip").is_some() || cmd.get("tipPrefix").is_some() => crate::sidebar::automation(app, cmd, window, cx),
         "open" | "select" => {
             let id = app.read(cx).thread_id_from(text(cmd, "id"))?;
             app.update(cx, |t, cx| t.open(id.clone(), window, cx));
@@ -124,6 +130,89 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         }
         "return" => {
             window.press(if cmd["shift"].as_bool().unwrap_or(false) { "shift-enter" } else { "enter" }, cx);
+            Ok(json!("ok"))
+        }
+        // The Swift app's `paste-image` and `drop`: a file through the same
+        // route a paste or a drop takes.
+        "paste-image" => {
+            let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            let path = std::path::PathBuf::from(text(cmd, "path"));
+            if !crate::composer::is_picture(&path) {
+                return Err("not an image".into());
+            }
+            composer.update(cx, |c, cx| c.take_paths(vec![path], window, cx));
+            Ok(json!("ok"))
+        }
+        "drop" => {
+            let position = point(px(cmd["x"].as_f64().unwrap_or(0.) as f32), px(cmd["y"].as_f64().unwrap_or(0.) as f32));
+            if cmd["leave"].as_bool().unwrap_or(false) {
+                window.dispatch_event(FileDropEvent::Exited.to_platform_input(), cx);
+                return Ok(json!("ok"));
+            }
+            let paths = ExternalPaths(vec![std::path::PathBuf::from(text(cmd, "path"))].into());
+            window.dispatch_event(FileDropEvent::Entered { position, paths }.to_platform_input(), cx);
+            window.render_frame(cx);
+            if !cmd["hover"].as_bool().unwrap_or(false) {
+                window.dispatch_event(FileDropEvent::Submit { position }.to_platform_input(), cx);
+            }
+            Ok(json!("ok"))
+        }
+        // The Swift app's `composer-menu`: a chip's menu as text, or a click
+        // on one of its items.
+        "composer-menu" => {
+            let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            let data = composer.read(cx).chip_data(cx);
+            match text(cmd, "menu") {
+                "permission" => {
+                    let summary = data.summary.clone().unwrap_or_default();
+                    if let Some(title) = cmd["click"].as_str() {
+                        let Some(mode) = crate::composer_chips::permission_modes(&summary).into_iter().find(|m| threadbear_core::logins::permission_title(m) == title) else { return Err(format!("no item {title}")) };
+                        composer.update(cx, |c, cx| c.set_permission(mode, cx));
+                        return Ok(json!("ok"));
+                    }
+                    Ok(json!(crate::composer_chips::permission_lines(&summary)))
+                }
+                "context" => match data.summary.as_ref().and_then(|t| threadbear_core::composer::ContextMeter::new(t.context_tokens, t.context_window)) {
+                    Some(meter) => Ok(json!([meter.amount(), format!("{}%", meter.percent())])),
+                    None => Err("no context meter on this thread".into()),
+                },
+                _ => {
+                    if let Some(title) = cmd["click"].as_str() {
+                        return crate::composer_chips::picker_click(&composer, title, cx).map(|_| json!("ok"));
+                    }
+                    Ok(json!(crate::composer_chips::picker_lines(&data)))
+                }
+            }
+        }
+        // The open card's picks (the Swift `decide`), and its buttons (`ask`).
+        "decide" => {
+            let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            composer.update(cx, |c, cx| c.decide(cmd, window, cx)).map(|s| json!(s))
+        }
+        "ask" => {
+            let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            composer.update(cx, |c, cx| c.card_action(text(cmd, "action"), window, cx)).map(|_| json!("ok"))
+        }
+        "composer-peek" => {
+            let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            let number = cmd["number"].as_u64().map(|n| n as usize);
+            composer.update(cx, |c, cx| c.debug_peek(number, cx))?;
+            Ok(json!(if number.is_some() { "ok window 0" } else { "ok" }))
+        }
+        // `text` pasted as ⌘V would (the Swift app's `paste`): through the
+        // clipboard, put back afterwards so a test machine's isn't left changed.
+        "paste" => {
+            let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            let input = composer.read(cx).input.clone();
+            let handle = input.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+            window.render_frame(cx);
+            let saved = cx.read_from_clipboard();
+            cx.write_to_clipboard(ClipboardItem::new_string(text(cmd, "text").to_string()));
+            window.press("secondary-v", cx);
+            if let Some(saved) = saved {
+                cx.write_to_clipboard(saved);
+            }
             Ok(json!("ok"))
         }
         "menu-key" => {
@@ -156,7 +245,27 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         "expand" | "collapse" => {
             let open = text(cmd, "cmd") == "expand";
             let row = text(cmd, "row").to_string();
-            app.update(cx, |t, cx| t.set_row_open(&row, open, cx))?;
+            let file = (!cmd["file"].is_null()).then(|| cmd["file"].clone());
+            let all = cmd["all"].as_bool().unwrap_or(false);
+            if file.is_some() || all {
+                app.update(cx, |t, cx| t.update_pane(cx, |p, cx| p.expand_detail(&row, file.as_ref(), all, open, cx)))??;
+            } else {
+                app.update(cx, |t, cx| t.set_row_open(&row, open, cx))?;
+            }
+            Ok(json!("ok"))
+        }
+        "scroll" | "scroll-to" => {
+            let (to, row, offset) = (cmd["to"].as_str().map(str::to_owned), cmd["row"].as_str().map(str::to_owned), cmd["offset"].as_f64().unwrap_or(0.) as f32);
+            app.update(cx, |t, cx| t.update_pane(cx, |p, cx| p.scroll_command(to.as_deref(), row.as_deref(), offset, cx)))??;
+            Ok(json!("ok"))
+        }
+        "bottom" => {
+            app.update(cx, |t, cx| t.update_pane(cx, |p, cx| p.scroll_command(Some("bottom"), None, 0., cx)))??;
+            Ok(json!("ok"))
+        }
+        "link" => {
+            let (row, url) = (text(cmd, "row").to_string(), text(cmd, "url").to_string());
+            app.update(cx, |t, cx| t.update_pane(cx, |p, cx| p.follow_link_command(&row, &url, window, cx)))??;
             Ok(json!("ok"))
         }
         "archive" => {
@@ -167,6 +276,15 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             let seconds = cmd["seconds"].as_i64().unwrap_or(3600);
             app.update(cx, |t, cx| t.snooze_open(seconds, cx))?;
             Ok(json!("ok"))
+        }
+        "menu" => {
+            let (row, click) = (text(cmd, "row").to_string(), cmd["click"].as_str().map(str::to_owned));
+            let result = app.update(cx, |t, cx| t.update_pane(cx, |p, cx| p.menu_command(&row, click.as_deref(), cx)))??;
+            Ok(json!(result))
+        }
+        "clipboard" => {
+            let words = cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default();
+            Ok(json!(format!("ok {}", serde_json::to_string(&words).unwrap_or_default())))
         }
         // Nothing to do: this app marks a thread read when it's open, and the
         // Swift app only does when it's in front, which a scripted one never is.
@@ -205,7 +323,8 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
 }
 
 fn type_in_composer(app: &Entity<Threadbear>, words: &str, replace: bool, window: &mut Window, cx: &mut App) -> Result<(), String> {
-    let Some(input) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+    let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+    let input = composer.read(cx).input.clone();
     if replace {
         input.update(cx, |s, cx| s.set_value("", window, cx));
     }

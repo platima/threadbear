@@ -304,6 +304,8 @@ final class AppModel {
     /// The first thread list has arrived. Until then the sidebar list stays
     /// empty, so it's filled in one go.
     var threadsLoaded = false
+    /// How many archived threads the Archived section shows (`ArchiveRows`).
+    var archiveLimit = ArchiveRows.first
     /// New-thread settings shown on the composer. The model and effort
     /// start as whatever was picked last, on any thread, and are kept
     /// across launches; the folder and "Ask before edits" are for one

@@ -103,7 +103,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `sidebar.row.menu` | Row context menu | Star, Hibernate, Archive, Move to, Projects, Rename, Open in New Panel, Copy thread id, Ask the librarian to look, Delete… | gpui-kit menu with submenus, in-window. | kit | M | `SidebarView` |
 | `sidebar.subagents` | Sub-agent tree | Indented sub-agents with a drawn trunk, click to read | Custom rows with a drawn trunk. | build | M | `SubagentViews`, `SubagentRows` |
 | `sidebar.archived.paging` | Archived paging | Recent few, then Show more; the open thread is always included | Port the rule and draw a Show more row. | build | S | `SidebarView` (`ArchiveRows`) |
-| `sidebar.archived.foot` | Archived pinned to foot | Folded heading always in sight, scrolls in when opened | Layout outside the scrolling list while folded. | build | S | `SidebarView` |
+| `sidebar.archived.foot` | Archived pinned to foot | Not present: tried 8 Nov, undone 9 Nov (cfbf3cb3); Archived sits directly under the other sections | Not ported: the Swift app no longer has it. | drop | none | none |
 | `sidebar.skeleton` | Loading skeleton | Pulsing grey rows until the first list lands | Drawn rows with `Animation`. | build | S | `SidebarView` (`LoadingRows`) |
 | `sidebar.hibernate.presets` | Hibernate presets | Hour, evening, tomorrow, Monday, until restart | gpui-kit menu, from the snooze logic. | kit | S | `SidebarView`, `Snooze` |
 | `sidebar.hibernate.pick` | Pick a time | Calendar and time sheet | gpui-kit sheet with a calendar and time field drawn by us (unverified that a date picker exists). | build | M | `SidebarView` (`SnoozePicker`) |
@@ -219,7 +219,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `composer.textbox` | Text box | Multi-line, grows, undo, wrap, per-thread drafts | `Textarea`, tested early with IME and dictation (XIM on X11, text-input on Wayland). | kit | L | `ComposerView` (`ComposerTextView`) |
 | `composer.return` | Return, Shift-Return | Send, new line | Key bindings on `Textarea`. | build | S | `ComposerView` |
 | `composer.listcontinue` | List continuation | "2. " after "1. x", empty item ends it, one undo | Port the rule on `Textarea` (unverified that it can make one undo step). | build | S | `ComposerView` (`insertLineContinuingList`) |
-| `composer.picturechips` | Picture chips | Paste, drop or + goes in at the cursor, thumbnails over the words | Risk: stock `Textarea` has no inline pills, Ghostex had to fork it for them, and pasted HEIC or TIFF needs decoding. | hard | L | `ComposerView`, `PictureChips` |
+| `composer.picturechips` | Picture chips | Paste, drop or + goes in at the cursor, thumbnails over the words | Stock since gpui-kit 0.9.0: inline tokens on `TextareaState` (`InlineToken`), atomic in editing and undo, drawn by our own renderer. Ghostex forked for this before they existed. The runner converts pasted HEIC and TIFF (`media.import`). | kit | L | `ComposerView`, `PictureChips` |
 | `composer.chiphover` | Chip hover and × | Peek, remove chip and picture | `Popover` on hover and a drawn ×, on top of `composer.picturechips`. | build | S | `ComposerView` |
 | `composer.chipcopy` | Copy or cut chips | Paste brings the pictures back | Keep chip data in app memory, matched to the plain text on the clipboard, so no private pasteboard type is needed. | build | S | `ComposerView` |
 | `composer.filedrop` | File path drop | Video, PDF, folder go in as a path | GPUI file drop, on every OS. | kit | S | `ComposerView`, `DroppedFiles` |
