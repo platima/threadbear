@@ -2,7 +2,7 @@
 // without touching anything shared: a file in src/ui/pages/ is a page in the
 // rail, a file in src/ui/panes/ is a tab in a thread's side pane. Each
 // exports a default PageDef or PaneDef.
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import type { AppStore, Snapshot } from '../core/store.ts';
 import type { ThreadSummary } from '../core/types.ts';
 
@@ -18,12 +18,17 @@ export type PageDef = {
   title: string; // the page's name
   hint?: string; // a sentence on what the page is for: the rail's tooltip, after the name
   icon: string; // one character or short symbol for the rail
+  // Drawn on the rail instead of `icon` (Usage's honey pot, which shows how much room is left).
+  renderIcon?: (snap: Snapshot) => ReactNode;
+  // In the group at the foot of the rail, with Settings, as the Mac app puts Connectors, Runners,
+  // Updates, Usage and Settings. Pages without it sit under Threads.
+  foot?: boolean;
   // False leaves the page's button out of the rail (Connectors, with no gateway set up).
   available?: (snap: Snapshot) => boolean;
-  // A dot on the page's rail button, and what its tooltip adds: the accent one for something
-  // that is the person's to do, a quiet one for trouble that usually mends itself.
-  signal?: (snap: Snapshot) => { dot: 'accent' | 'quiet'; tip: string } | undefined;
-  order: number; // rail position, after Threads (0)
+  // What the page's rail tooltip adds, and a dot on its button when there is one: the accent one for
+  // something that is the person's to do, a quiet one for trouble that usually mends itself.
+  signal?: (snap: Snapshot) => { dot?: 'accent' | 'quiet'; tip: string } | undefined;
+  order: number; // rail position within its group, after Threads (0)
   // The list column beside the page, when it has one (a list of projects,
   // of schedules). Without one the page takes the whole width.
   Sidebar?: ComponentType<PageProps>;
@@ -54,9 +59,11 @@ const paneModules = import.meta.glob<{ default: PaneDef }>('./panes/*.tsx', { ea
 // A tooltip that names the thing and says what it is for: "Files: Browse ...".
 export const tip = (title: string, hint?: string): string => (hint ? `${title}: ${hint}` : title);
 
+// In the rail's order: the pages under Threads, then the foot group, each by `order`. Ctrl+2 and on
+// go down this list.
 export const PAGES: PageDef[] = Object.values(pageModules)
   .map((m) => m.default)
-  .sort((a, b) => a.order - b.order);
+  .sort((a, b) => Number(!!a.foot) - Number(!!b.foot) || a.order - b.order);
 
 export const PANES: PaneDef[] = Object.values(paneModules)
   .map((m) => m.default)
