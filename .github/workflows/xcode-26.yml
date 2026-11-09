@@ -38,7 +38,7 @@ jobs:
           - app: iphone
             xcode: oldest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Pick the Xcode
         run: |
