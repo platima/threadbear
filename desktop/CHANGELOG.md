@@ -36,7 +36,7 @@ release stops before anything is published if it is missing.
 - Licence notices for everything in the package (`THIRD-PARTY-NOTICES.txt`) and a `README-WINDOWS.txt` in the zip.
 - A second kind of runner, started with `--runner --on-demand` or from the offer, tray menu or the connection banner's Start the runner button: no sign-in trigger, started by the app when it opens and stopped when it quits. `--runner --mode` says which kind is set up. The same on Linux, as a systemd user service that is not enabled.
 - Exit on close (Settings, "This app", Windows only). On Linux closing the window always ends the app.
-- An Updates button in the rail, always there: a link to the new release's page when one is out, otherwise a way to Settings, "This app". A copy that is itself a pre-release (every release so far) is now told about newer pre-releases, which the check never did before.
+- An Updates button in the rail, always there, with a dot while a newer release is out (it opens the Updates page, below). A copy that is itself a pre-release (every release so far) is now told about newer pre-releases, which the check never did before.
 - Tooltips that say what a control is for (pages and panes carry a hint), and a test that keeps every control's tooltip from being only its label.
 
 ### Fixed
