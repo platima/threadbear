@@ -1,6 +1,6 @@
 // AcpAdapter against a pretend agent (helpers/fake-acp-agent.mjs) that
 // behaves as OpenCode was seen to: it runs tools unasked unless told otherwise.
-import { test, afterEach } from 'node:test';
+import { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -15,6 +15,11 @@ import type { Account, PermissionMode } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
 import { ProcessRegistry } from '../../src/proc.ts';
 import { z } from 'zod';
+import { testSkippedOnWindows } from '../helpers/platform.ts';
+
+// The pretend agent is a script with a #! line, which Windows can't start as a program,
+// and ACP agents (OpenCode, Cursor) are an experiment that is off by default there.
+const test = testSkippedOnWindows("The pretend ACP agent is a #! script, which Windows can't start as a program, and ACP agents are an experiment that is off by default");
 
 const FAKE = path.join(import.meta.dirname, '..', 'helpers', 'fake-acp-agent.mjs');
 

@@ -9,6 +9,7 @@ import { trackedNodeModules } from '../../src/tracked-packages.ts';
 import { git as worktreeGit } from '../../src/worktrees.ts';
 import { changedFiles } from '../../src/move-git.ts';
 import { untrustedGitSync } from '../../src/safe-git.ts';
+import { shPath } from '../helpers/platform.ts';
 
 // A folder that arrived with its own .git (a zip, a shared drive), whose
 // .git/config names an fsmonitor program. Nothing the runner does before
@@ -29,8 +30,9 @@ function planted(): { repo: string; ran: () => number } {
   fs.writeFileSync(path.join(repo, 'README.md'), 'changed\n');
   const marker = path.join(root, 'fsmonitor-ran');
   const hook = path.join(root, 'fsmonitor.sh');
-  fs.writeFileSync(hook, `#!/bin/sh\necho ran >> '${marker}'\nexit 1\n`, { mode: 0o755 });
-  g('config', 'core.fsmonitor', hook);
+  // (Forward slashes: git runs the hook through its sh, which reads a backslash as an escape.)
+  fs.writeFileSync(hook, `#!/bin/sh\necho ran >> '${shPath(marker)}'\nexit 1\n`, { mode: 0o755 });
+  g('config', 'core.fsmonitor', shPath(hook));
   const ran = () => (fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8').split('\n').filter(Boolean).length : 0);
   return { repo, ran };
 }
@@ -96,11 +98,11 @@ function lazy(): { repo: string; ran: () => number } {
   fs.rmSync(path.join(repo, '.git', 'objects', tree.slice(0, 2), tree.slice(2)));
   const marker = path.join(root, 'ssh-ran');
   const hook = path.join(root, 'ssh.sh');
-  fs.writeFileSync(hook, `#!/bin/sh\necho ran >> '${marker}'\nexit 1\n`, { mode: 0o755 });
+  fs.writeFileSync(hook, `#!/bin/sh\necho ran >> '${shPath(marker)}'\nexit 1\n`, { mode: 0o755 });
   g('config', 'remote.origin.url', 'ssh://example.invalid/x');
   g('config', 'remote.origin.promisor', 'true');
   g('config', 'extensions.partialClone', 'origin');
-  g('config', 'core.sshCommand', hook);
+  g('config', 'core.sshCommand', shPath(hook));
   const ran = () => (fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8').split('\n').filter(Boolean).length : 0);
   return { repo, ran };
 }
