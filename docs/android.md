@@ -64,9 +64,13 @@ nobody can update the app without removing it):
 
     keytool -genkeypair -v -keystore threadbear-release.jks -alias threadbear -keyalg RSA -keysize 4096 -validity 10000
 
-Then add four secrets to the `release` environment (Settings, Environments,
-`release`, **Environment secrets**; not the repository's own secrets, which any
-workflow on any branch can read): `ANDROID_KEYSTORE_BASE64` (the file,
+First limit the `release` environment to the refs that may use it (Settings,
+Environments, `release`, Deployment branches and tags, **Selected branches and
+tags**: the branch `main` and the tag pattern `v*`). A newly made environment
+lets every branch and tag in, so without this a workflow on any branch could
+name `release` and read the key. Only then add four secrets to it
+(**Environment secrets** on the same page; not the repository's own secrets,
+which any workflow on any branch can read): `ANDROID_KEYSTORE_BASE64` (the file,
 base64 on one line: `base64 -w0 threadbear-release.jks`, or in PowerShell
 `[Convert]::ToBase64String([IO.File]::ReadAllBytes("threadbear-release.jks"))`),
 `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`threadbear` above) and
