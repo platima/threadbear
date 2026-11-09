@@ -125,6 +125,8 @@ jobs:
           props=src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
           if grep -q '^networkTimeout=' "$props"; then sed -i 's/^networkTimeout=.*/networkTimeout=120000/' "$props"; else echo 'networkTimeout=120000' >> "$props"; fi
           grep networkTimeout "$props"
+          # The bear, not the Tauri logo the template makes (scripts/apply-icons.sh)
+          sh scripts/apply-icons.sh
       - name: Build the release APK
         working-directory: android
         # Up to three tries: the build downloads Gradle, Kotlin and the libraries
@@ -249,6 +251,7 @@ jobs:
           npx tauri android init --ci
           props=src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
           if grep -q '^networkTimeout=' "$props"; then sed -i 's/^networkTimeout=.*/networkTimeout=120000/' "$props"; else echo 'networkTimeout=120000' >> "$props"; fi
+          sh scripts/apply-icons.sh
           for i in 1 2 3 4 5; do
             npx tauri android build --apk --target x86_64 && exit 0
             echo "Attempt $i failed"
@@ -339,7 +342,10 @@ jobs:
           grep -E 'RustStdoutStderr: threadbear' shots/logcat.txt || echo "(none)"
           echo "---"
           adb shell pidof com.tinkerware.threadbear
-          if grep -q 'FATAL EXCEPTION' shots/logcat.txt; then grep -A 20 'FATAL EXCEPTION' shots/logcat.txt | head -60; exit 1; fi
+          # A crash of this app only: Android's own uiautomator tool (the dump above)
+          # can die on an emulator with "Bad file descriptor", and that is not the app
+          # (it failed the rc.2 release run once, with the app running and the link taken)
+          if grep -A 3 'FATAL EXCEPTION' shots/logcat.txt | grep -q 'Process: com.tinkerware.threadbear'; then grep -A 20 'FATAL EXCEPTION' shots/logcat.txt | head -60; exit 1; fi
           # The page comes up: a screen that is not the blank one (a blank WebView is
           # one colour, which compresses to a few KB)
           test "$(wc -c < shots/1-first-screen.png)" -gt 40000
