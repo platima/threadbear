@@ -20,8 +20,11 @@ function ConnectorsPage({ store, snap }: PageProps) {
   }, [snap.conn]);
   const refresh = async () => {
     setBusy(true);
-    await store.loadConnectors(true);
-    setBusy(false);
+    try {
+      await store.loadConnectors(true);
+    } finally {
+      setBusy(false);
+    }
   };
   const manage = manageUrl(status);
   const empty = emptyLine(status);
