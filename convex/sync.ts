@@ -392,6 +392,7 @@ export const RUNNER_KEY_CAPS = {
   accountDoc: 8_192,
   accounts: 20,
   runnerField: 300, // a heartbeat's icon, version, rpcUrl
+  followProblem: 800, // a heartbeat's followProblem: a sentence or two
   note: 500, // a schedule run's note
 } as const;
 const CAP = RUNNER_KEY_CAPS;
@@ -1009,6 +1010,7 @@ export const heartbeat = mutation({
       icon: v.optional(v.string()),
       rpcUrl: v.optional(v.string()),
       pressure: v.optional(v.union(v.literal('memory'), v.literal('disk'))),
+      followProblem: v.optional(v.string()),
     }),
   },
   // The backend's API version (version.ts), so the runner can tell when it's
@@ -1036,6 +1038,7 @@ export const heartbeat = mutation({
     // A runner key's heartbeat fields are cut to fit, never refused: a
     // refused heartbeat would leave that Mac showing offline.
     if (!caller.owner) for (const field of ['version', 'release', 'startedAt', 'icon', 'rpcUrl'] as const) if (typeof runner[field] === 'string') (runner as Record<string, unknown>)[field] = cutBytes(runner[field], CAP.runnerField);
+    if (!caller.owner && runner.followProblem !== undefined) runner = { ...runner, followProblem: cutBytes(runner.followProblem, CAP.followProblem) };
     // The Mac app reads startedAt as a time and the count as a number, so
     // anything else is left out rather than passed on (an offset of
     // "+////" once crashed the app's date parser; Daybreak, 7 Nov 2026).
@@ -3132,7 +3135,7 @@ export const setThreadIndex = mutation({
   },
 });
 
-const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()) });
+const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()) });
 
 async function otherRunners(ctx: QueryCtx, runnerId: string) {
   const runners = [];
@@ -3144,6 +3147,7 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
       lastSeenAt: r.lastSeenAt,
       ...(r.icon !== undefined ? { icon: r.icon } : {}),
       ...(r.rpcUrl !== undefined ? { rpcUrl: r.rpcUrl } : {}),
+      ...(r.followProblem !== undefined ? { followProblem: r.followProblem } : {}),
     });
   }
   return runners;

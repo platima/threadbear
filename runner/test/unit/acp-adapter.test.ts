@@ -10,6 +10,8 @@ import { AcpAdapter, AcpSession, EDIT_RULE, modelChoices } from '../../src/adapt
 import { ACP_AGENTS, acpAccounts, isCursorBinary, opencodeEnv } from '../../src/adapters/acp/agents.ts';
 import type { AcpAgent } from '../../src/adapters/acp/agents.ts';
 import { AcpMcpServer } from '../../src/adapters/acp/mcp-http.ts';
+import { commandRule } from '../../src/adapters/codex/approvals.ts';
+import { remoteCardShowsAll } from '../../src/tools.ts';
 import type { AdapterOutput, SessionSink, StartSessionOptions, ToolApprovalAnswer, ToolApprovalRequest } from '../../src/adapters/types.ts';
 import type { Account, PermissionMode } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
@@ -517,4 +519,259 @@ test('MCP: tools/list and an unknown tool answer as MCP says', async () => {
   const nope = await post(url, callBody('nope'), auth);
   m.server.close();
   assert.equal(nope.json.result.isError, true);
+});
+
+// ---- Each of these is something a review got past the first version
+
+function fakeRequest(r: ReturnType<typeof rig>, s: AcpSession, call: Record<string, unknown>, options = [{ optionId: 'once', kind: 'allow_once' }, { optionId: 'reject', kind: 'reject_once' }]) {
+  const replies: unknown[] = [];
+  const proc = (s as unknown as { proc: { respond(id: unknown, v: unknown): void; onRequest: (id: number, m: string, p: unknown) => void } }).proc;
+  const real = proc.respond.bind(proc);
+  proc.respond = (id, v) => {
+    if (id === 900) replies.push(v);
+    else real(id, v);
+  };
+  proc.onRequest(900, 'session/request_permission', { toolCall: { toolCallId: 'x', ...call }, options });
+  return replies;
+}
+
+async function ready(r: ReturnType<typeof rig>, s: AcpSession) {
+  await turn(r, s, 'hello', 'first');
+}
+
+test('a code file named only in the tool\'s arguments still asks, past an earlier Always allow', async () => {
+  const r = rig({ mode: 'ask', opts: { allowRules: [EDIT_RULE] }, deny: true });
+  const s = r.start();
+  await ready(r, s);
+  fakeRequest(r, s, { kind: 'edit', locations: [{ path: 'notes.txt' }], rawInput: { filePath: path.join(r.cwd, '.claude', 'settings.json') } });
+  await until(() => r.cards.length === 1);
+  assert.equal(r.cards[0].canAlwaysAllow, false);
+});
+
+test('a move to a code file asks, by its destination', async () => {
+  const r = rig({ mode: 'ask', opts: { allowRules: [EDIT_RULE] }, deny: true });
+  const s = r.start();
+  await ready(r, s);
+  fakeRequest(r, s, { kind: 'move', locations: [{ path: path.join(r.cwd, 'a.txt') }], rawInput: { source: 'a.txt', destination: path.join(r.cwd, '.mcp.json') } });
+  await until(() => r.cards.length === 1);
+  assert.match(r.cards[0].title, /runs this file as code/);
+});
+
+test('an edit naming no file asks every time', async () => {
+  const r = rig({ mode: 'ask', opts: { allowRules: [EDIT_RULE] }, deny: true });
+  const s = r.start();
+  await ready(r, s);
+  fakeRequest(r, s, { kind: 'edit', locations: [] });
+  await until(() => r.cards.length === 1);
+  assert.equal(r.cards[0].canAlwaysAllow, false);
+});
+
+test('a saved command rule covers its own folder only, and the card says which', async () => {
+  const r = rig({ mode: 'ask', deny: true });
+  const s = r.start();
+  await ready(r, s);
+  fakeRequest(r, s, { kind: 'execute', rawInput: { command: 'ls -la', workdir: '/elsewhere/project' } });
+  await until(() => r.cards.length === 1);
+  assert.equal((r.cards[0].input as { cwd: string }).cwd, '/elsewhere/project');
+});
+
+test('a saved command rule does not cover a file that runs as code', async () => {
+  const r = rig({ mode: 'ask', deny: true });
+  const s = r.start();
+  const argv = ['ls', '-la'];
+  await s.setPermissionMode('ask');
+  (s as unknown as { rules: Set<string> }).rules.add(commandRule(argv, r.cwd));
+  await ready(r, s);
+  fakeRequest(r, s, { kind: 'execute', locations: [{ path: path.join(r.cwd, '.mcp.json') }], rawInput: { command: 'ls -la' } });
+  await until(() => r.cards.length === 1);
+  assert.equal(r.cards[0].canAlwaysAllow, false);
+});
+
+test('Stop during the setup before a prompt: the prompt is never sent', async () => {
+  const r = rig({ mode: 'full', env: { FAKE_ACP_SLOW_SET: '300' } });
+  const s = r.start();
+  await ready(r, s);
+  const before = r.log().filter((l) => l.prompt).length;
+  await s.setModel('fake/two');
+  const done = r.nextResult();
+  s.send({ id: 'stopme', text: 'hello', images: [] });
+  await until(() => (s as unknown as { turn?: unknown }).turn !== undefined);
+  await s.interrupt();
+  await done;
+  assert.equal(r.log().filter((l) => l.prompt).length, before);
+  assert.equal(results(r.outputs).at(-1)!.outcome, 'interrupted');
+});
+
+test('Stop with a message waiting gives one result, when the turn is over', async () => {
+  const r = rig({ mode: 'ask', answer: (req) => new Promise((res) => req.signal.addEventListener('abort', () => res({ decision: 'expired' }))) });
+  const s = r.start();
+  const file = path.join(r.cwd, 'a.txt');
+  const done = r.nextResult();
+  s.send({ id: 'a', text: `write ${file} hi`, images: [] });
+  s.send({ id: 'b', text: 'hello', images: [] });
+  await until(() => r.cards.length === 1);
+  await s.interrupt();
+  assert.equal(results(r.outputs).length, 0, 'nothing reported while A is still going');
+  await done;
+  const [only] = results(r.outputs);
+  assert.deepEqual(only.answered, ['a', 'b']);
+  assert.equal(only.answers, 'a');
+});
+
+test('a mode change during a turn reaches the agent straight away', async () => {
+  const r = rig({ mode: 'full', env: { FAKE_ACP_NAME: 'Cursor' }, agent: ACP_AGENTS.cursor });
+  const s = r.start();
+  await ready(r, s);
+  await s.setPermissionMode('ask');
+  assert.ok(r.log().some((l) => (l.set as { mode?: string } | undefined)?.mode === 'ask'));
+});
+
+test('a malformed request is cancelled, never left to hang the turn', async () => {
+  const r = rig({ mode: 'ask' });
+  const s = r.start();
+  await ready(r, s);
+  const replies = fakeRequest(r, s, { kind: 'edit', locations: [{ path: path.join(r.cwd, 'a') }], content: [{ type: 'diff', path: path.join(r.cwd, 'a'), oldText: 123, newText: 'x' }] });
+  await until(() => r.cards.length === 1 || replies.length === 1);
+  assert.ok(r.cards.length === 1 || (replies[0] as { outcome: { outcome: string } }).outcome.outcome === 'cancelled');
+});
+
+test('with the experiment turned off, a live session stops taking turns', async () => {
+  let on = true;
+  const r = rig({ mode: 'full' });
+  (r.adapter as unknown as { deps: { on: () => boolean } }).deps.on = () => on;
+  const s = r.start();
+  await ready(r, s);
+  on = false;
+  await turn(r, s, 'hello', 'off');
+  assert.match(String(results(r.outputs).at(-1)!.error), /acpAgents/);
+});
+
+test('MCP: a cancelled call closes its card', async () => {
+  let signal: AbortSignal | undefined;
+  const server = new AcpMcpServer([{ name: 'create_thread', description: 'x', inputSchema: {}, handler: async () => ({ content: [] }) }], {
+    log: nullLogger,
+    label: 't',
+    requestApproval: (req) =>
+      new Promise((res) => {
+        signal = req.signal;
+        req.signal.addEventListener('abort', () => res({ decision: 'expired' }));
+      }),
+    cwd: () => '/tmp',
+    mode: () => 'ask',
+    rules: () => [],
+    addRules: () => undefined,
+  });
+  const url = await server.listen();
+  const auth = { authorization: `Bearer ${server.token}` };
+  const call = post(url, callBody('create_thread'), auth);
+  await until(() => signal !== undefined);
+  await post(url, { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }, auth);
+  const r = await call;
+  server.close();
+  assert.equal(signal?.aborted, true);
+  assert.equal(r.json.result.isError, true);
+});
+
+test('MCP: a card can never approve less than the call runs', async () => {
+  let cards = 0;
+  const calls: string[] = [];
+  const server = new AcpMcpServer([{ name: 'send_message', description: 'x', inputSchema: { text: z.string() }, handler: async () => (calls.push('ran'), { content: [] }) }], {
+    log: nullLogger,
+    label: 't',
+    requestApproval: async () => (cards++, { decision: 'allow' }),
+    cwd: () => '/tmp',
+    mode: () => 'ask',
+    rules: () => [],
+    addRules: () => undefined,
+  });
+  const url = await server.listen();
+  const huge = 'x'.repeat(2_000_000);
+  const r = await post(url, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'send_message', arguments: { text: huge } } }, { authorization: `Bearer ${server.token}` });
+  server.close();
+  assert.equal(cards, 0, 'no card that would have been cut short');
+  assert.deepEqual(calls, []);
+  assert.equal(r.json.result.isError, true);
+});
+
+for (const [what, rawInput] of [
+  ['a nested list of changes', { changes: [{ path: '.mcp.json', newText: 'x' }] }],
+  ['a patch body', { patchText: '*** Begin Patch\n*** Update File: .mcp.json\n@@\n-a\n+b\n*** End Patch' }],
+  ['a unified diff', { patch: '--- a/.mcp.json\n+++ b/.mcp.json\n@@ -1 +1 @@\n-a\n+b\n' }],
+  ['a document key', { document: '.mcp.json', old_string: 'a', new_string: 'b' }],
+] as const) {
+  test(`a code file inside ${what} still asks, past an earlier Always allow`, async () => {
+    const r = rig({ mode: 'ask', opts: { allowRules: [EDIT_RULE] }, deny: true });
+    const s = r.start();
+    await ready(r, s);
+    fakeRequest(r, s, { kind: 'edit', locations: [{ path: 'notes.txt' }], rawInput });
+    await until(() => r.cards.length === 1);
+    assert.match(r.cards[0].title, /runs this file as code/);
+    assert.equal(r.cards[0].canAlwaysAllow, false);
+  });
+}
+
+test('an edit of a shape nobody has checked asks every time, and offers no Always allow', async () => {
+  const r = rig({ mode: 'ask', opts: { allowRules: [EDIT_RULE] }, deny: true });
+  const s = r.start();
+  await ready(r, s);
+  fakeRequest(r, s, { kind: 'edit', locations: [{ path: 'notes.txt' }], rawInput: { filePath: 'notes.txt', extra: { nested: 1 } } });
+  await until(() => r.cards.length === 1);
+  assert.equal(r.cards[0].canAlwaysAllow, false);
+});
+
+test('a code file an earlier update named still counts', async () => {
+  const r = rig({ mode: 'ask', opts: { allowRules: [EDIT_RULE] }, deny: true });
+  const s = r.start();
+  await ready(r, s);
+  r.outputs.length = 0;
+  (s as unknown as { notification(m: string, p: unknown): void }).notification('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'x', title: 'write', kind: 'edit', status: 'in_progress', locations: [{ path: path.join(r.cwd, '.mcp.json') }], rawInput: { filePath: path.join(r.cwd, '.mcp.json') } } });
+  fakeRequest(r, s, { kind: 'edit', locations: [{ path: 'notes.txt' }], rawInput: { filePath: 'notes.txt' } });
+  await until(() => r.cards.length === 1);
+  assert.match(r.cards[0].title, /runs this file as code/);
+});
+
+test("a path only in an earlier update's arguments still counts", async () => {
+  const r = rig({ mode: 'ask', opts: { allowRules: [EDIT_RULE] }, deny: true });
+  const s = r.start();
+  await ready(r, s);
+  (s as unknown as { notification(m: string, p: unknown): void }).notification('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'x', title: 'write', kind: 'edit', status: 'in_progress', rawInput: { filePath: path.join(r.cwd, '.mcp.json'), content: 'x' } } });
+  fakeRequest(r, s, { kind: 'edit', locations: [{ path: 'notes.txt' }] });
+  await until(() => r.cards.length === 1);
+  assert.match(r.cards[0].title, /runs this file as code/);
+});
+
+test("a tool of no known kind can't be allowed from the phone, as its arguments may not all show", async () => {
+  const r = rig({ mode: 'ask', deny: true });
+  const s = r.start();
+  await ready(r, s);
+  fakeRequest(r, s, { kind: 'other', title: 'Send email', rawInput: { to: 'a@example.com', body: 'not shown' } });
+  await until(() => r.cards.length === 1);
+  assert.ok(r.cards[0].name.startsWith('mcp__'));
+  assert.equal(remoteCardShowsAll(r.cards[0].name, r.cards[0].input, r.cwd, r.cards[0].title), false);
+});
+
+test('a quick Full then Ask ends on Ask', async () => {
+  const r = rig({ mode: 'ask', env: { FAKE_ACP_NAME: 'Cursor', FAKE_ACP_SLOW_SET: '60' }, agent: ACP_AGENTS.cursor });
+  const s = r.start();
+  await ready(r, s);
+  await Promise.all([s.setPermissionMode('full'), s.setPermissionMode('ask')]);
+  const modes = r.log().flatMap((l) => ((l.set as { mode?: string } | undefined)?.mode ? [(l.set as { mode: string }).mode] : []));
+  assert.equal(modes.at(-1), 'ask');
+});
+
+test('a whole path is needed: a relative one could be a repo\'s own program', () => {
+  const d = tmp();
+  made.push(d);
+  const bin = path.join(d, 'x');
+  fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+  assert.equal(ACP_AGENTS.opencode.findBinary({ explicit: bin, home: d, pathEnv: '' }), bin);
+  assert.equal(ACP_AGENTS.opencode.findBinary({ explicit: './x', home: d, pathEnv: '' }), undefined);
+  assert.equal(ACP_AGENTS.cursor.findBinary({ explicit: './x', home: d, pathEnv: '' }), undefined);
+});
+
+test('no protocol version in initialize is refused', async () => {
+  const r = rig({ env: { FAKE_ACP_VERSION: 'none' } });
+  r.start();
+  await r.exited();
+  assert.match(String(r.exitError()), /ACP version/);
 });

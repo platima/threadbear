@@ -47,7 +47,7 @@ extension AppModel {
             listed.insert(summary.id)
             madeRemote.remove(summary.id)
             if liveRemote.contains(summary.id), next[summary.id] != nil { continue }
-            next[summary.id] = summary
+            next[summary.id] = keepingAskedMove(summary, over: next[summary.id])
         }
         let gone = next.values.filter { $0.isRemote && !listed.contains($0.id) && !liveRemote.contains($0.id) && !madeRemote.contains($0.id) }.map(\.id)
         if next != threads { threads = next }
@@ -403,7 +403,6 @@ extension AppModel {
                 newThreadRunnerProblem = nil
                 newThreadCwd = nil
                 newThreadPermissionPick = nil
-                newThreadFastMode = false
                 newThreadAccount = nil
                 newThreadPool = nil
                 newThreadProvider = nil

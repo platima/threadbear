@@ -241,6 +241,8 @@ public struct CliStatus: Sendable, Hashable, Decodable, Identifiable {
     public var inUse: [InUse]
     /// Codex: the kept version "Go back" returns to.
     public var previousVersion: String?
+    /// An agent with no version feed: Update is offered at any time.
+    public var canUpdateNow: Bool = false
     public var checkedAt: Date?
     public var hold: Hold?
     public var update: Update?
@@ -275,13 +277,14 @@ public struct CliStatus: Sendable, Hashable, Decodable, Identifiable {
         policy = (try? c.decodeIfPresent(String.self, forKey: .policy)) ?? "auto"
         inUse = c.lossyArray(InUse.self, forKey: .inUse)
         previousVersion = try? c.decodeIfPresent(String.self, forKey: .previousVersion)
+        canUpdateNow = ((try? c.decodeIfPresent(Bool.self, forKey: .canUpdateNow)) ?? nil) ?? false
         checkedAt = ((try? c.decodeIfPresent(String.self, forKey: .checkedAt)) ?? nil).flatMap(ISO8601.parse)
         hold = try? c.decodeIfPresent(Hold.self, forKey: .hold)
         update = try? c.decodeIfPresent(Update.self, forKey: .update)
     }
 
     enum CodingKeys: String, CodingKey {
-        case provider, path, managedBy, installedVersion, latestVersion, status, policy, inUse, previousVersion, checkedAt, hold, update
+        case provider, path, managedBy, installedVersion, latestVersion, status, policy, inUse, previousVersion, canUpdateNow, checkedAt, hold, update
     }
 }
 
@@ -296,17 +299,14 @@ public struct ModelChoice: Sendable, Hashable, Codable, Identifiable {
     public var effortLevels: [String]
     /// The model's own level, when the CLI says (Codex).
     public var defaultEffort: String?
-    /// It has Claude Code's fast mode (protocol "Fast mode").
-    public var fastMode: Bool
 
-    public init(id: String, model: String, title: String, description: String? = nil, effortLevels: [String] = [], defaultEffort: String? = nil, fastMode: Bool = false) {
+    public init(id: String, model: String, title: String, description: String? = nil, effortLevels: [String] = [], defaultEffort: String? = nil) {
         self.id = id
         self.model = model
         self.title = title
         self.description = description
         self.effortLevels = effortLevels
         self.defaultEffort = defaultEffort
-        self.fastMode = fastMode
     }
 
     public init(from decoder: Decoder) throws {
@@ -317,7 +317,6 @@ public struct ModelChoice: Sendable, Hashable, Codable, Identifiable {
         description = try c.decodeIfPresent(String.self, forKey: .description)
         effortLevels = try c.decodeIfPresent([String].self, forKey: .effortLevels) ?? []
         defaultEffort = try? c.decodeIfPresent(String.self, forKey: .defaultEffort)
-        fastMode = (try? c.decodeIfPresent(Bool.self, forKey: .fastMode)) == true
     }
 }
 
@@ -1087,8 +1086,6 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
     public var model: String?
     /// The level chosen for the thread; nil is the model's own.
     public var effort: String?
-    /// Claude Code's fast mode is on (protocol "Fast mode"); never on Codex.
-    public var fastMode: Bool
     /// What the CLI actually ran the last turn on and at, once one has run.
     public var modelInUse: String?
     public var effortInUse: String?
@@ -1212,7 +1209,7 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         snoozedUntil: Date? = nil, snoozedUntilRestart: Bool = false, snoozedUntilRelease: Bool = false, wakeWhen: WakeWhen? = nil, waitingOn: [WaitingOn]? = nil, woke: ThreadWoke? = nil, archivedAt: Date? = nil, starredAt: Date? = nil, onOldRunner: Bool = false, preview: String = "",
         lastSeq: Int = 0, lastSeenSeq: Int = 0, nativeSessionId: String? = nil,
         contextTokens: Int? = nil, costUsd: Double? = nil,
-        effort: String? = nil, fastMode: Bool = false, modelInUse: String? = nil, effortInUse: String? = nil, contextWindow: Int? = nil,
+        effort: String? = nil, modelInUse: String? = nil, effortInUse: String? = nil, contextWindow: Int? = nil,
         panels: [Panel] = [], actions: [Action] = [], hooks: [Hook] = [], patches: [PatchInfo] = [], background: [BackgroundTask] = [],
         subagents: [Subagent] = [], projects: [ThreadProject] = [], pendingReviews: Int? = nil, worktree: ThreadWorktree? = nil, needs: String? = nil, asks: [Ask] = [], asksSeq: Int? = nil,
         highlightsAt: Date? = nil,
@@ -1229,7 +1226,6 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         self.provider = provider
         self.model = model
         self.effort = effort
-        self.fastMode = fastMode
         self.modelInUse = modelInUse
         self.effortInUse = effortInUse
         self.permissionMode = permissionMode
@@ -1289,7 +1285,6 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? "claude"
         model = try c.decodeIfPresent(String.self, forKey: .model)
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
-        fastMode = (try? c.decodeIfPresent(Bool.self, forKey: .fastMode)) == true
         modelInUse = try c.decodeIfPresent(String.self, forKey: .modelInUse)
         effortInUse = try c.decodeIfPresent(String.self, forKey: .effortInUse)
         permissionMode = try c.decodeIfPresent(PermissionMode.self, forKey: .permissionMode) ?? .full
@@ -1354,7 +1349,6 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         try c.encode(provider, forKey: .provider)
         try c.encodeIfPresent(model, forKey: .model)
         try c.encodeIfPresent(effort, forKey: .effort)
-        if fastMode { try c.encode(true, forKey: .fastMode) }
         try c.encodeIfPresent(modelInUse, forKey: .modelInUse)
         try c.encodeIfPresent(effortInUse, forKey: .effortInUse)
         try c.encode(permissionMode, forKey: .permissionMode)
@@ -1410,7 +1404,7 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, cwd, accountId, provider, model, effort, fastMode, modelInUse, effortInUse, permissionMode, status, live, needsYou, pendingReviews
+        case id, title, cwd, accountId, provider, model, effort, modelInUse, effortInUse, permissionMode, status, live, needsYou, pendingReviews
         case createdAt, updatedAt, lastActivityAt, snoozedUntil, snoozedUntilRestart, snoozedUntilRelease, wakeWhen, waitingOn, woke, archivedAt, starredAt, onOldRunner, preview
         case lastSeq, lastSeenSeq, nativeSessionId, contextTokens, contextWindow, costUsd, panels, actions, hooks, patches, background, subagents
         case projects, worktree, needs, asks, asksSeq, highlightsAt, schedule, startedBy, asked, poolId, waitingForRoom, waitingForNetwork, panelRequest, share, sample, looseEnds, moving
@@ -1490,7 +1484,15 @@ public struct MovePreview: Sendable, Hashable, Decodable {
     /// That repo is cloned there first.
     public var clone: String?
 
-    public init(cwd: String? = nil, accountId: String? = nil, accounts: [Login] = [], leftBehind: [String] = [], problems: [String] = [], worktree: Bool = false, clone: String? = nil) {
+    /// The thread's own runner said what it would leave behind. An older
+    /// one says nothing, and an empty `leftBehind` from it means nothing.
+    public var sourceChecked: Bool
+
+    /// Nothing to decide or be told: Move to goes without showing the sheet.
+    public var canGoAsIs: Bool { sourceChecked && problems.isEmpty && leftBehind.isEmpty && cwd != nil && accountId != nil }
+
+    public init(cwd: String? = nil, accountId: String? = nil, accounts: [Login] = [], leftBehind: [String] = [], problems: [String] = [], worktree: Bool = false, clone: String? = nil, sourceChecked: Bool = false) {
+        self.sourceChecked = sourceChecked
         self.cwd = cwd
         self.accountId = accountId
         self.accounts = accounts
@@ -1509,9 +1511,10 @@ public struct MovePreview: Sendable, Hashable, Decodable {
         problems = ((try? c.decodeIfPresent([String].self, forKey: .problems)) ?? nil) ?? []
         worktree = ((try? c.decodeIfPresent(Bool.self, forKey: .worktree)) ?? nil) ?? false
         clone = (try? c.decodeIfPresent(String.self, forKey: .clone)) ?? nil
+        sourceChecked = ((try? c.decodeIfPresent(Bool.self, forKey: .sourceChecked)) ?? nil) ?? false
     }
 
-    enum CodingKeys: String, CodingKey { case cwd, accountId, accounts, leftBehind, problems, worktree, clone }
+    enum CodingKeys: String, CodingKey { case cwd, accountId, accounts, leftBehind, problems, worktree, clone, sourceChecked }
 }
 
 /// `ThreadSummary.moving`: the move a thread is in, from the runner that
@@ -1724,6 +1727,8 @@ public struct HelloResult: Sendable, Hashable, Decodable {
     /// Nil from a runner older than pools: the app then works as before,
     /// with providers in the picker's rail and an account chip.
     public var pools: [Pool]?
+    /// What each provider is called and can do; empty from an older runner.
+    public var providers: [ProviderInfo]
     /// The experiments on for the runner (docs/experiments.md); empty from
     /// a runner older than this.
     public var experiments: Set<String>
@@ -1742,17 +1747,28 @@ public struct HelloResult: Sendable, Hashable, Decodable {
         clis = c.lossyArray(CliStatus.self, forKey: .clis)
         updates = try? c.decodeIfPresent(RunnerUpdates.self, forKey: .updates)
         pools = c.contains(.pools) ? c.lossyArray(Pool.self, forKey: .pools) : nil
+        providers = c.lossyArray(ProviderInfo.self, forKey: .providers)
         experiments = Set(((try? c.decodeIfPresent([String].self, forKey: .experiments)) ?? nil) ?? [])
     }
 
     enum CodingKeys: String, CodingKey {
-        case runnerVersion, `protocol`, accounts, defaults, clis, updates, pools, experiments
+        case runnerVersion, `protocol`, accounts, defaults, clis, updates, pools, experiments, providers
     }
 }
 
 /// What the runner's own update is doing (protocol "Runner updates"): hello's
 /// `updates` and `runner.updates`. Read leniently.
 public struct RunnerUpdates: Sendable, Hashable, Decodable {
+    public struct BehindRunner: Sendable, Hashable, Decodable {
+        public var name: String
+        public var problem: String
+
+        public init(name: String, problem: String) {
+            self.name = name
+            self.problem = problem
+        }
+    }
+
     public struct OldRunner: Sendable, Hashable, Decodable {
         public var version: String
         public var threads: [String]
@@ -1864,8 +1880,13 @@ public struct RunnerUpdates: Sendable, Hashable, Decodable {
     public var launcherReason: String?
     /// Left out by runners before 30 Oct 2026, and while it's off.
     public var upstream: Upstream?
+    /// This machine can't follow GitHub's main properly (a commit made only
+    /// here, GitHub out of reach, hours behind). Nil while it's fine.
+    public var followProblem: String?
+    /// The other runners saying that of themselves (the main Mac's runner).
+    public var behindRunners: [BehindRunner]
 
-    public init(state: String = "idle", commit: String? = nil, subject: String? = nil, reason: String? = nil, oldRunners: [OldRunner] = [], launcherChanged: Bool = false, launcherReason: String? = nil, upstream: Upstream? = nil) {
+    public init(state: String = "idle", commit: String? = nil, subject: String? = nil, reason: String? = nil, oldRunners: [OldRunner] = [], launcherChanged: Bool = false, launcherReason: String? = nil, upstream: Upstream? = nil, followProblem: String? = nil, behindRunners: [BehindRunner] = []) {
         self.state = state
         self.commit = commit
         self.subject = subject
@@ -1874,6 +1895,8 @@ public struct RunnerUpdates: Sendable, Hashable, Decodable {
         self.launcherChanged = launcherChanged
         self.launcherReason = launcherReason
         self.upstream = upstream
+        self.followProblem = followProblem
+        self.behindRunners = behindRunners
     }
 
     public init(from decoder: Decoder) throws {
@@ -1886,9 +1909,11 @@ public struct RunnerUpdates: Sendable, Hashable, Decodable {
         launcherChanged = ((try? c.decodeIfPresent(Bool.self, forKey: .launcherChanged)) ?? nil) ?? false
         launcherReason = (try? c.decodeIfPresent(String.self, forKey: .launcherReason)) ?? nil
         upstream = (try? c.decodeIfPresent(Upstream.self, forKey: .upstream)) ?? nil
+        followProblem = (try? c.decodeIfPresent(String.self, forKey: .followProblem)) ?? nil
+        behindRunners = c.lossyArray(BehindRunner.self, forKey: .behindRunners)
     }
 
-    enum CodingKeys: String, CodingKey { case state, commit, subject, reason, oldRunners, launcherChanged, launcherReason, upstream }
+    enum CodingKeys: String, CodingKey { case state, commit, subject, reason, oldRunners, launcherChanged, launcherReason, upstream, followProblem, behindRunners }
 
     /// Something's on its way: a release being built or about to start, an
     /// old runner still finishing turns, or a LaunchAgent to reinstall.

@@ -307,7 +307,6 @@ extension AppModel {
                     newThreadCwd = nil
                     newThreadProjectId = nil
                     newThreadPermissionPick = nil
-                    newThreadFastMode = false
                     newThreadAccount = nil
                     newThreadPool = nil
                     newThreadProvider = nil
@@ -871,12 +870,6 @@ extension AppModel {
     func setEffort(_ threadId: String, _ effort: String?) {
         remember(effort: effort, provider: threads[threadId]?.provider ?? "claude")
         update(threadId, ThreadUpdate(effort: .some(effort)))
-    }
-
-    /// Fast mode on one thread. Unlike model and effort it isn't what the
-    /// next new thread starts on (`newThreadFastMode`).
-    func setFastMode(_ threadId: String, _ on: Bool) {
-        update(threadId, ThreadUpdate(fastMode: on))
     }
 
     /// Keeps a last-picked value across launches; nil (the default) clears it.

@@ -236,15 +236,6 @@ struct ThreadSettings {
             runnerDefault: thread == nil ? logins.defaults.efforts[provider] : nil)
     }
 
-    /// Whether the picker offers fast mode: a Claude model that has it,
-    /// with the fastMode experiment on.
-    var offersFastMode: Bool { app.experiments.contains("fastMode") && ModelPicker.offersFastMode(model: effectiveModel, in: choices, provider: provider) }
-
-    /// Fast mode as the chip and the picker show it: the thread's own (the
-    /// runner keeps it only where the model has it), or the draft's toggle
-    /// where the model it would start on has it.
-    var fastMode: Bool { thread?.fastMode ?? (app.newThreadFastMode && offersFastMode) }
-
     /// The account chip's "· 12%" or "Limit reached".
     var accountBadge: AccountUsageText.ChipBadge? { AccountUsageText.chipBadge(logins.account(account)?.usage) }
 
@@ -277,7 +268,7 @@ struct ThreadSettings {
         return ProjectIconImages.symbolExists(symbol) ? symbol : "square.stack"
     }
 
-    var modelChipTitle: String { Pools.chipTitle(owner: owner, model: effectiveModel, effort: effectiveEffort, fast: fastMode, choices: choices) }
+    var modelChipTitle: String { Pools.chipTitle(owner: owner, model: effectiveModel, effort: effectiveEffort, choices: choices) }
 
     /// With pools, the pool's badge when every login in it is running out,
     /// or a pinned login's own.
@@ -296,7 +287,6 @@ struct ThreadSettings {
         else if let level = thread?.effortInUse { parts.append("\(level) effort, the model's own level") }
         else if let level = effectiveEffort { parts.append("\(ComposerChips.effortTitle(level).lowercased()) effort, the default") }
         else { parts.append("the model's own effort level") }
-        if fastMode { parts.append("fast mode") }
         return parts.joined(separator: ", ")
     }
 
@@ -573,7 +563,6 @@ struct ThreadSettings {
             if let porridge = ComposerChips.effortPorridge(level) { line += " - " + porridge }
             lines.append(line)
         }
-        lines += speedLines()
         return lines
     }
 
@@ -609,15 +598,8 @@ struct ThreadSettings {
             if let porridge = ComposerChips.effortPorridge(level) { line += " - " + porridge }
             lines.append(line)
         }
-        lines += speedLines()
         if let pinnedLine { lines.append("--- " + pinnedLine + " · Unpin") }
         return lines
-    }
-
-    /// "# Speed" and its two rows, where the model has fast mode.
-    private func speedLines() -> [String] {
-        guard offersFastMode else { return [] }
-        return ["# Speed"] + SpeedChoice.allCases.map { ($0.isFast == fastMode ? "[x] " : "[ ] ") + $0.title + " - " + $0.tip }
     }
 
     /// Picks a model or effort row by its title, as a click on it would.
@@ -643,7 +625,7 @@ struct ThreadSettings {
                 setEffort(level)
                 return true
             }
-            return clickSpeed(title)
+            return false
         }
         for provider in providers {
             if let row = rows(for: provider.id).first(where: { $0.title == title }) {
@@ -655,20 +637,14 @@ struct ThreadSettings {
             setEffort(level)
             return true
         }
-        return clickSpeed(title)
-    }
-
-    private func clickSpeed(_ title: String) -> Bool {
-        guard offersFastMode, let speed = SpeedChoice.allCases.first(where: { $0.title == title }) else { return false }
-        setFastMode(speed.isFast)
-        return true
+        return false
     }
 
     func permissionMenu() -> NSMenu {
         let menu = NSMenu()
-        // Auto is Claude Code's; Codex has nothing like it, so it's only offered
-        // for Claude (or if a thread is somehow on it already).
-        let modes: [PermissionMode] = provider == "claude" || permissionMode == .auto ? [.full, .auto, .ask, .plan] : [.full, .ask, .plan]
+        // Auto needs a provider with its own judge of each action. Without one
+        // it's only there for a thread that is somehow on it already.
+        let modes: [PermissionMode] = Providers.info(provider).autoMode == "classifier" || permissionMode == .auto ? [.full, .auto, .ask, .plan] : [.full, .ask, .plan]
         for mode in modes {
             let item = ActionMenuItem(mode.composerTitle, symbol: mode.composerIcon, checked: permissionMode == mode) { setPermission(mode) }
             item.subtitle = mode.composerHelp
@@ -711,10 +687,6 @@ struct ThreadSettings {
 
     func setEffort(_ effort: String?) {
         if let thread { app.setEffort(thread.id, effort) } else { app.remember(effort: effort, provider: provider) }
-    }
-
-    func setFastMode(_ on: Bool) {
-        if let thread { app.setFastMode(thread.id, on) } else { app.newThreadFastMode = on }
     }
 
     private func setPermission(_ mode: PermissionMode) {
@@ -914,7 +886,7 @@ struct ContextPopover: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Divider().padding(.vertical, 2)
                 let settings = ThreadSettings(app: app, thread: thread)
-                row("Model", ComposerChips.chipTitle(model: settings.effectiveModel, effort: settings.effectiveEffort, fast: settings.fastMode, choices: settings.choices))
+                row("Model", ComposerChips.chipTitle(model: settings.effectiveModel, effort: settings.effectiveEffort, choices: settings.choices))
                 row("Login", settings.logins.account(thread.accountId).map(AccountName.title) ?? thread.accountId)
                 if let cost = CostText.format(thread.costUsd) { row("Cost so far", cost) }
             }
@@ -1078,10 +1050,9 @@ struct ModelPickerView: View {
     /// levels and a pinned thread's Unpin line.
     /// Sized from the window it ran off the bottom of the screen in a
     /// thread whose window went up near the top of it.
-    static func listMaxHeight(pools: Bool, speed: Bool = false) -> CGFloat {
+    static func listMaxHeight(pools: Bool) -> CGFloat {
         var chrome = zoomed(140)
         if pools { chrome += zoomed(40) }
-        if speed { chrome += zoomed(30) }
         let room = AppWindow.roomAboveAnchor ?? (AppWindow.contentHeight ?? 800) - zoomed(170)
         return max(zoomed(120), min(zoomed(320), room - chrome))
     }
@@ -1154,12 +1125,11 @@ struct ModelPickerView: View {
                     }
                     .padding(zoomed(6))
                 }
-                .frame(maxHeight: Self.listMaxHeight(pools: pools, speed: settings.offersFastMode))
+                .frame(maxHeight: Self.listMaxHeight(pools: pools))
                 .fixedSize(horizontal: false, vertical: true)
                 Divider()
-                EffortRow(levels: settings.effortLevels, chosen: settings.effectiveEffort, tight: settings.offersFastMode) { settings.setEffort($0) }
-                if settings.offersFastMode {
-                    SpeedRow(fast: settings.fastMode) { settings.setFastMode($0) }
+                if !settings.effortLevels.isEmpty {
+                    EffortRow(levels: settings.effortLevels, chosen: settings.effectiveEffort) { settings.setEffort($0) }
                 }
                 if pools, settings.pinnedLine != nil {
                     Divider()
@@ -1427,8 +1397,6 @@ private struct ProviderMark: View {
 private struct EffortRow: View {
     let levels: [String]
     let chosen: String?
-    /// The speed row follows, so they sit together as one block.
-    var tight = false
     let choose: (String) -> Void
 
     var body: some View {
@@ -1437,90 +1405,44 @@ private struct EffortRow: View {
         // level's tip.
         HStack(spacing: zoomed(2)) {
             ForEach(levels, id: \.self) { level in
-                PickerSegment(title: ComposerChips.effortTitle(level), active: level == chosen) { choose(level) }
+                Segment(title: ComposerChips.effortTitle(level), active: level == chosen) { choose(level) }
                     .tip(ComposerChips.effortPorridge(level) ?? ComposerChips.effortTitle(level))
             }
         }
-        .modifier(SegmentTrack())
-        .padding(.top, zoomed(10))
-        .padding(.bottom, zoomed(tight ? 4 : 10))
+        .padding(zoomed(2))
+        .background(
+            RoundedRectangle(cornerRadius: zoomed(7), style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+        )
+        .padding(.horizontal, zoomed(12))
+        .padding(.vertical, zoomed(10))
     }
-}
 
-/// Standard or Fast, under the effort levels and in their style, for a
-/// Claude model that has fast mode (protocol "Fast mode").
-private struct SpeedRow: View {
-    let fast: Bool
-    let choose: (Bool) -> Void
+    private struct Segment: View {
+        let title: String
+        let active: Bool
+        let action: () -> Void
+        @State private var hovering = false
 
-    var body: some View {
-        HStack(spacing: zoomed(2)) {
-            ForEach(SpeedChoice.allCases, id: \.self) { speed in
-                PickerSegment(title: speed.title, symbol: speed.symbol, active: speed.isFast == fast) { choose(speed.isFast) }
-                    .tip(speed.tip)
-            }
-        }
-        .modifier(SegmentTrack())
-        .padding(.bottom, zoomed(10))
-    }
-}
-
-/// The two speeds the picker offers.
-enum SpeedChoice: CaseIterable {
-    case standard, fast
-
-    var isFast: Bool { self == .fast }
-    var title: String { self == .fast ? "Fast" : "Standard" }
-    var symbol: String? { self == .fast ? "bolt.fill" : nil }
-    var tip: String {
-        self == .fast
-            ? "Fast mode: the same model, answering faster, at a higher price. On a subscription it draws from usage credits."
-            : "Standard speed and price"
-    }
-}
-
-/// The rounded track a row of segments sits in.
-private struct SegmentTrack: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .padding(zoomed(2))
-            .background(
-                RoundedRectangle(cornerRadius: zoomed(7), style: .continuous)
-                    .fill(Color.primary.opacity(0.05))
-            )
-            .padding(.horizontal, zoomed(12))
-    }
-}
-
-/// One choice in a segment row, the chosen one filled.
-private struct PickerSegment: View {
-    let title: String
-    var symbol: String?
-    let active: Bool
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: zoomed(3)) {
-                if let symbol { Image(systemName: symbol).font(.system(size: zoomed(9))) }
+        var body: some View {
+            Button(action: action) {
                 Text(title)
+                    .font(.system(size: zoomed(11), weight: active ? .semibold : .regular))
+                    .foregroundStyle(active ? .primary : .secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: zoomed(22))
+                    .background(
+                        RoundedRectangle(cornerRadius: zoomed(5), style: .continuous)
+                            .fill(active ? Color(nsColor: .controlBackgroundColor) : Color.primary.opacity(hovering ? 0.05 : 0))
+                            .shadow(color: .black.opacity(active ? 0.12 : 0), radius: 1, y: 0.5)
+                    )
+                    .contentShape(Rectangle())
             }
-            .font(.system(size: zoomed(11), weight: active ? .semibold : .regular))
-            .foregroundStyle(active ? .primary : .secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .frame(maxWidth: .infinity)
-            .frame(height: zoomed(22))
-            .background(
-                RoundedRectangle(cornerRadius: zoomed(5), style: .continuous)
-                    .fill(active ? Color(nsColor: .controlBackgroundColor) : Color.primary.opacity(hovering ? 0.05 : 0))
-                    .shadow(color: .black.opacity(active ? 0.12 : 0), radius: 1, y: 0.5)
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
     }
 }
 

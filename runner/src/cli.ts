@@ -2,7 +2,8 @@
 import { parseArgs } from 'node:util';
 import { startedByFlags } from './started-by-flags.ts';
 import path from 'node:path';
-import { loadConfig, readToken, runnerUrl, RunnerJsonError } from './config.ts';
+import { loadConfig, runnerUrl, RunnerJsonError } from './config.ts';
+import { connectTb, ownerOnly } from './tb-connect.ts';
 import { RunnerClient } from './client.ts';
 import { poolLine } from './pools.ts';
 import { providerName } from './providers.ts';
@@ -14,6 +15,7 @@ import { DEV_HELP, formatModels, logsCommand, runDev } from './tb-dev.ts';
 import { findWorktreePatch, isInside } from './patches.ts';
 import { TRUST_ALL } from './patch-trust.ts';
 import { land, landTargetFromGit, type LandTarget } from './worktrees.ts';
+import { landRefusal } from './follow-origin.ts';
 import { activityCommand } from './activity.ts';
 import { pairCommand } from './pair.ts';
 import { runnerKeysCommand } from './runner-keys.ts';
@@ -273,6 +275,15 @@ async function main(argv: string[]): Promise<number> {
   if (cmd === 'activity') return activityCommand(cfg, values);
   // Works with no runner too: from any thread/ worktree, by git alone.
   if (cmd === 'land') return landCommand(cfg, Boolean(values['dry-run']));
+  // tb pair and tb runner use this Mac's keys straight from disk, so the
+  // runner never sees them to refuse them (tb-connect.ts).
+  if (cmd === 'pair' || cmd === 'runner') {
+    const why = await ownerOnly(cfg);
+    if (why) {
+      console.error(why);
+      return 1;
+    }
+  }
   // Read from runner.json alone, on the Mac being paired.
   if (cmd === 'pair') return pairCommand(cfg);
   // Straight to the backend with this Mac's key, so no runner needed either.
@@ -280,7 +291,7 @@ async function main(argv: string[]): Promise<number> {
     const flags = { ...(typeof values.ssh === 'string' ? { ssh: values.ssh } : {}), ...(typeof values.out === 'string' ? { out: values.out } : {}), ...(typeof values.id === 'string' ? { id: values.id } : {}), json: Boolean(values.json), finish: Boolean(values.finish), replace: Boolean(values.replace), ...(Array.isArray(values.drop) ? { remove: values.drop as string[] } : {}), ...(typeof values.snapshot === 'string' ? { snapshot: values.snapshot } : {}), keysChecked: Boolean(values['keys-checked']), ...(Array.isArray(values['lock-out']) ? { lockOut: values['lock-out'] as string[] } : {}), purge: Boolean(values.purge) };
     // The audit asks this Mac's runner how far each of its threads goes.
     const heads = async () => {
-      const client = await RunnerClient.connect(runnerUrl(cfg), readToken(cfg.home));
+      const client = await connectTb(cfg);
       try {
         await client.call('hello', { client: 'tb', version: '1' });
         const r = await client.call<{ threads: ThreadSummary[] }>('threads.list', { include: ['inbox', 'snoozed', 'archived'] });
@@ -294,7 +305,7 @@ async function main(argv: string[]): Promise<number> {
   const url = runnerUrl(cfg);
   let client: RunnerClient;
   try {
-    client = await RunnerClient.connect(url, readToken(cfg.home));
+    client = await connectTb(cfg, url);
   } catch (e) {
     console.error(`Couldn't reach the runner at ${url}: ${(e as Error).message}`);
     return 2;
@@ -337,6 +348,11 @@ async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean):
     }
     target = found.target;
   }
+  const refused = landRefusal(cfg.home, target.mainCheckout);
+  if (refused) {
+    console.error(refused);
+    return 1;
+  }
   return land(target, {
     dryRun,
     // Read after the landing lock and rebase: main may have changed the
@@ -350,7 +366,7 @@ async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean):
 async function threadFromRunner(cfg: ReturnType<typeof loadConfig>, threadId: string): Promise<ThreadSummary | undefined> {
   let client: RunnerClient;
   try {
-    client = await RunnerClient.connect(runnerUrl(cfg), readToken(cfg.home));
+    client = await connectTb(cfg);
   } catch {
     return undefined;
   }

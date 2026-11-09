@@ -7,7 +7,7 @@
 # its data folder.
 #
 #   Tools/dev-app.sh start [--mock [--fixtures DIR]...] [--home DIR]
-#                          [--appearance light|dark] [--size WxH] [--bear-date 2026-12-24T23:00] [--id NAME]
+#                          [--appearance light|dark] [--size WxH] [--bear-date 2026-12-24T23:00] [--id NAME] [--no-build]
 #   Tools/dev-app.sh do '<json>'... [--timeout S]
 #   Tools/dev-app.sh shot <file.png> [--sheet] [--settings]   (the sheet over it, the Settings window, or with both the sheet over Settings)
 #   Tools/dev-app.sh menu <file.png> '{"x":854,"y":19}'   (a real menu, opened and captured; realMenu in app/README.md)
@@ -347,7 +347,8 @@ show_build_errors() {
 build_binary() {
   mkdir -p "$BUILD_LOGS"
   local log="$BUILD_LOGS/$1.log"
-  if ! swift build --disable-keychain --package-path "$APP_ROOT" --product Threadbear >"$log" 2>&1; then
+  # One Threadbear build at a time on this machine (scripts/one-build.sh).
+  if ! "$APP_ROOT/../scripts/one-build.sh" swift build --disable-keychain --package-path "$APP_ROOT" --product Threadbear >"$log" 2>&1; then
     show_build_errors "$log"
     return 1
   fi
@@ -410,7 +411,7 @@ launch_app() {
 }
 
 cmd_start() {
-  local mode="" home="" appearance="" size="" bear_date="" fixtures=()
+  local mode="" home="" appearance="" size="" bear_date="" no_build="" fixtures=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --mock) mode=mock ;;
@@ -420,6 +421,9 @@ cmd_start() {
       --size) size="${2:?--size needs WxH}"; shift ;;
       --bear-date) bear_date="${2:?--bear-date needs a date, like 2026-12-24T23:00}"; shift ;;
       --id) ID="${2:?--id needs a name}"; shift ;;
+      # The behaviour specs (features/) build once and start the app for
+      # every scenario, so they don't each spend seconds finding nothing to do.
+      --no-build) no_build=1 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown option for start: $1" ;;
     esac
@@ -479,7 +483,7 @@ cmd_start() {
   load_instance "$ID"
 
   echo "Building the debug app..."
-  build_binary "$ID" || false
+  [ -n "$no_build" ] || build_binary "$ID" || false
   install_bundle
 
   local runner

@@ -610,3 +610,179 @@ test('buildTreeAt changes with check.sh or scripts/, not with other files', asyn
   // A runner that is the repo itself (no prefix): just its tree.
   assert.equal(await buildTreeAt(dir, ''), g('rev-parse', 'HEAD:').stdout.trim());
 });
+
+test('followOrigin: main is fetched from GitHub before the clone syncs, and the problem shows in status', async () => {
+  const home = tmpDir('tb-update-origin-');
+  fs.mkdirSync(path.join(home, 'runner', 'releases', 'r1'), { recursive: true });
+  fs.symlinkSync(path.join('releases', 'r1'), path.join(home, 'runner', 'current'));
+  const clock = new FakeClock();
+  const release = { id: 'r1', commit: 'abc', checkout: home, prefix: 'runner/', tree: 'same' } as ReleaseJson;
+  const refs: (string | undefined)[] = [];
+  let follow = true;
+  let result: Awaited<ReturnType<NonNullable<UpdateDeps['fetchOrigin']>>> = { ref: 'refs/remotes/origin/main', problem: { kind: 'diverged', message: 'main has a stray commit.' } };
+  let tree = 'same';
+  const u = new RunnerUpdater({
+    home,
+    release,
+    enabled: true,
+    clock,
+    log: nullLogger,
+    notice: () => {},
+    restart: () => ({ scheduled: true, waitingFor: [] }),
+    pendingRestart: () => false,
+    env: {},
+    followsOrigin: () => follow,
+    fetchOrigin: async () => result,
+    oldestMissing: async () => clock.now() - 7 * 3600_000,
+    sync: async (_c, _p, _d, ref) => {
+      refs.push(ref);
+      return { commit: 'c1', short: 'c1', subject: 's', tree };
+    },
+    deployBackend: async () => ({ ok: true }),
+    deploy: async () => ({ ok: false, error: 'boom' }),
+  });
+  await u.check();
+  assert.deepEqual(refs, ['refs/remotes/origin/main']);
+  assert.equal(u.status().followsOrigin, true);
+  assert.match(u.status().followProblem ?? '', /stray commit/);
+  // All clear: the problem goes.
+  result = { ref: 'refs/remotes/origin/main' };
+  await u.check();
+  assert.equal(u.status().followProblem, undefined);
+  // Hours behind: something that runs has been on GitHub 7 hours, not here.
+  tree = 'newer';
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /7 hours behind GitHub/);
+  // Turned off: back to the local main, nothing said.
+  follow = false;
+  tree = 'same';
+  await u.check();
+  assert.equal(refs.at(-1), undefined);
+  assert.equal(u.status().followsOrigin, undefined);
+  assert.equal(u.status().followProblem, undefined);
+});
+
+test('followOrigin: GitHub out of reach is said only once it has lasted an hour', async () => {
+  const home = tmpDir('tb-update-origin-');
+  fs.mkdirSync(path.join(home, 'runner', 'releases', 'r1'), { recursive: true });
+  fs.symlinkSync(path.join('releases', 'r1'), path.join(home, 'runner', 'current'));
+  const clock = new FakeClock();
+  const release = { id: 'r1', commit: 'abc', checkout: home, prefix: 'runner/', tree: 'same' } as ReleaseJson;
+  let reachable = false;
+  const u = new RunnerUpdater({
+    home,
+    release,
+    enabled: true,
+    clock,
+    log: nullLogger,
+    notice: () => {},
+    restart: () => ({ scheduled: true, waitingFor: [] }),
+    pendingRestart: () => false,
+    env: {},
+    followsOrigin: () => true,
+    fetchOrigin: async () => (reachable ? { ref: 'refs/remotes/origin/main' } : { ref: 'refs/remotes/origin/main', problem: { kind: 'fetch', message: 'could not resolve host' } }),
+    sync: async () => ({ commit: 'c1', short: 'c1', subject: 's', tree: 'same' }),
+    deployBackend: async () => ({ ok: true }),
+  });
+  await u.check();
+  assert.equal(u.status().followProblem, undefined, 'a blip');
+  clock.advance(61 * 60_000);
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /could not resolve host/);
+  reachable = true;
+  await u.check();
+  assert.equal(u.status().followProblem, undefined);
+  // The clock starts again after a good fetch.
+  reachable = false;
+  await u.check();
+  assert.equal(u.status().followProblem, undefined);
+});
+
+function originRig(over: Partial<UpdateDeps>, releaseOver: Partial<ReleaseJson> = {}) {
+  const home = tmpDir('tb-update-origin-');
+  fs.mkdirSync(path.join(home, 'runner', 'releases', 'r1'), { recursive: true });
+  fs.symlinkSync(path.join('releases', 'r1'), path.join(home, 'runner', 'current'));
+  const clock = new FakeClock();
+  const release = { id: 'r1', commit: 'abc', checkout: home, prefix: 'runner/', tree: 'same', ...releaseOver } as ReleaseJson;
+  const u = new RunnerUpdater({
+    home,
+    release,
+    enabled: true,
+    clock,
+    log: nullLogger,
+    notice: () => {},
+    restart: () => ({ scheduled: true, waitingFor: [] }),
+    pendingRestart: () => false,
+    env: {},
+    followsOrigin: () => true,
+    sync: async () => ({ commit: 'c1', short: 'c1', subject: 's', tree: 'same' }),
+    deployBackend: async () => ({ ok: true }),
+    ...over,
+  });
+  return { u, clock };
+}
+
+test("followOrigin: with no origin/main to build it stays put rather than build the local main", async () => {
+  let synced = 0;
+  const { u, clock } = originRig({
+    fetchOrigin: async () => ({ problem: { kind: 'fetch', message: 'no route to host' } }),
+    sync: async () => {
+      synced++;
+      return { commit: 'stray', short: 'stray', subject: 's', tree: 'stray' };
+    },
+    deploy: async () => assert.fail('a local commit must not be built'),
+  });
+  await u.check();
+  assert.equal(synced, 0);
+  clock.advance(61 * 60_000);
+  await u.check();
+  assert.equal(synced, 0);
+  assert.match(u.status().followProblem ?? '', /no route to host/);
+});
+
+test('followOrigin: a stuck clone does not hide what the fetch found, and is said once it lasts', async () => {
+  let broken = true;
+  const { u, clock } = originRig({
+    fetchOrigin: async () => ({ ref: 'refs/remotes/origin/main', problem: { kind: 'diverged', message: 'main has a stray commit.' } }),
+    sync: async () => {
+      if (broken) throw new Error("git checkout failed: fatal: Unable to create 'index.lock': File exists.");
+      return { commit: 'c1', short: 'c1', subject: 's', tree: 'same' };
+    },
+  });
+  await u.check();
+  assert.equal(u.status().followProblem, 'main has a stray commit.');
+  clock.advance(61 * 60_000);
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /stray commit.*update clone.*index\.lock/);
+  broken = false;
+  await u.check();
+  assert.equal(u.status().followProblem, 'main has a stray commit.');
+});
+
+test('followOrigin: a release built with local changes is still said to be behind', async () => {
+  const { u, clock } = originRig({
+    fetchOrigin: async () => ({ ref: 'refs/remotes/origin/main' }),
+    oldestMissing: async () => clock.now() - 30 * 3600_000,
+    sync: async () => ({ commit: 'c2', short: 'c2', subject: 's', tree: 'newer' }),
+  }, { tree: undefined, dirty: true });
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /30 hours behind.*deploy once by hand/);
+});
+
+test('followOrigin: a stuck clone does not clear an hours-behind warning', async () => {
+  let broken = false;
+  const { u, clock } = originRig({
+    fetchOrigin: async () => ({ ref: 'refs/remotes/origin/main' }),
+    oldestMissing: async () => clock.now() - 30 * 3600_000,
+    sync: async () => {
+      if (broken) throw new Error('index.lock');
+      return { commit: 'c2', short: 'c2', subject: 's', tree: 'newer' };
+    },
+    deploy: async () => ({ ok: false, error: 'boom', transient: true }),
+  });
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /30 hours behind/);
+  broken = true;
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /30 hours behind/);
+});

@@ -20,8 +20,9 @@ How it works today (file references are in the research notes at the bottom):
   Convex work, Token Stats for account limits).
 - **Updates** follow the local `main` branch of the checkout. The runner and the Mac app
   both notice when `main` moves and rebuild themselves, and the runner rolls back to its
-  last good release after 3 crashes in 10 minutes. Nothing ever fetches from GitHub, so
-  a commit on Mike's Mac ships to Mike's Mac, and that's all.
+  last good release after 3 crashes in 10 minutes. Nothing fetches from GitHub unless a
+  second machine has `followOrigin` on (docs/dev-tools.md), so a commit on Mike's Mac
+  ships to Mike's Mac, and that's all.
 - **Convex** is a cloud deployment in Mike's account, set up by hand in about 8 steps
   (project, `.env.local`, deploy, make a key, `RUNNER_KEY`, `sync.url`, phone token, the
   APNs keys). Functions are deployed by hand and nothing checks that the runner and the

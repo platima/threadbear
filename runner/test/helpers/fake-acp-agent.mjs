@@ -52,6 +52,14 @@ function asksFor(cwd) {
   }
 }
 
+function deniesAll() {
+  try {
+    return JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? '{}').permission?.['*'] === 'deny';
+  } catch {
+    return false;
+  }
+}
+
 function openedSession(cwd) {
   if (env.OPENCODE_DISABLE_PROJECT_CONFIG !== '1' && !process.argv.includes('--pure')) {
     const plugin = path.join(cwd, '.opencode', 'plugins', 'run.txt');
@@ -65,6 +73,10 @@ async function runTool(sessionId, cwd, kind, input, locations, run) {
   const toolCallId = `call-${Math.random().toString(36).slice(2)}`;
   update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: kind === 'edit' ? 'write' : 'bash', kind, status: 'pending', locations: [], rawInput: {} });
   update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress', kind, locations, rawInput: input });
+  if (deniesAll()) {
+    update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: 'failed', kind, rawOutput: { error: 'denied by config' } });
+    return;
+  }
   if (asksFor(cwd)) {
     const r = await ask('session/request_permission', {
       sessionId,
@@ -104,7 +116,7 @@ async function prompt(id, p) {
 
 const handlers = {
   initialize: () => ({
-    protocolVersion: env.FAKE_ACP_VERSION ? Number(env.FAKE_ACP_VERSION) : 1,
+    ...(env.FAKE_ACP_VERSION === 'none' ? {} : { protocolVersion: env.FAKE_ACP_VERSION ? Number(env.FAKE_ACP_VERSION) : 1 }),
     agentCapabilities: { loadSession: true, mcpCapabilities: { http: true }, promptCapabilities: { image: true }, sessionCapabilities: { resume: {}, close: {} } },
     authMethods: AGENT === 'Cursor' ? [{ id: 'cursor_login', name: 'Log in' }] : [{ id: 'opencode-login', name: 'Log in' }],
     agentInfo: { name: AGENT, version: '9.9.9' },
@@ -127,7 +139,7 @@ const handlers = {
   'session/close': () => ({}),
   'session/set_config_option': (p) => {
     if (env.FAKE_ACP_NO_SET_MODE && p.configId === 'mode') throw new Error('no such mode');
-    if (p.configId === 'mode') mode = p.value;
+    if (p.configId === 'mode' && !env.FAKE_ACP_IGNORE_MODE) mode = p.value;
     if (p.configId === 'model') model = p.value;
     log({ set: { [p.configId]: p.value } });
     return { configOptions: configOptions() };
@@ -155,7 +167,9 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (m.id === undefined) return;
   if (!h) return send({ id: m.id, error: { code: -32601, message: `no ${m.method}` } });
   try {
-    send({ id: m.id, result: h(m.params) });
+    const result = h(m.params);
+    if (m.method === 'session/set_config_option' && env.FAKE_ACP_SLOW_SET) return void setTimeout(() => send({ id: m.id, result }), Number(env.FAKE_ACP_SLOW_SET));
+    send({ id: m.id, result });
   } catch (e) {
     send({ id: m.id, error: { code: e.code ?? -32603, message: e.message } });
   }

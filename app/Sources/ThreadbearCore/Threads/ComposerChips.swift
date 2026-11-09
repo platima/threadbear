@@ -62,13 +62,12 @@ public enum ComposerChips {
         choices.first { $0.id == id } ?? choices.first { $0.model == id }
     }
 
-    /// The model chip: the model's title, the effort level after a dot
-    /// when one is known, and "Fast" in fast mode ("Opus 5.5 · High · Fast").
-    public static func chipTitle(model: String?, effort: String?, fast: Bool = false, choices: [ModelChoice]) -> String {
-        var parts = [modelTitle(model, choices: choices)]
-        if let effort, !effort.isEmpty { parts.append(effortTitle(effort)) }
-        if fast { parts.append("Fast") }
-        return parts.joined(separator: " · ")
+    /// The model chip: the model's title, and the effort level after a dot
+    /// when one is known ("Fable 5.1 · High").
+    public static func chipTitle(model: String?, effort: String?, choices: [ModelChoice]) -> String {
+        let title = modelTitle(model, choices: choices)
+        guard let effort, !effort.isEmpty else { return title }
+        return "\(title) · \(effortTitle(effort))"
     }
 
     /// The CLI's effort levels, lowest first.
@@ -79,7 +78,11 @@ public enum ComposerChips {
 
     /// The levels a provider offers when the model's own list isn't known.
     public static func effortLevels(provider: String) -> [String] {
-        provider == "codex" ? codexEffortLevels : effortLevels
+        switch Providers.info(provider).effort {
+        case "codex": codexEffortLevels
+        case "none": []
+        default: effortLevels
+        }
     }
 
     /// Goldilocks: what the porridge is like at each level, under its name

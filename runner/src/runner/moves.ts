@@ -100,6 +100,23 @@ export const movesPart = {
     };
   },
 
+  // What packForMove will leave behind, in words for before the move. Move
+  // to goes straight away unless there's something here to say first.
+  async leftBehindByMove(this: Runner, threadId: string): Promise<string[]> {
+    const st = this.threads.get(threadId);
+    if (!st) return [];
+    const { rec, rt } = st;
+    const out: string[] = [];
+    const shells = rt.tasks.filter((t) => t.kind !== 'agent').length;
+    if (shells) out.push(`${shells} background ${shells === 1 ? 'job, which gets' : 'jobs, which get'} stopped`);
+    if (!rec.worktree || rec.worktree.removedAt) {
+      const top = await repoTop(rec.cwd);
+      const files = top ? await changedFiles(top) : [];
+      if (files.length) out.push(`uncommitted changes in ${top}, as other threads share that checkout: ${files.join(', ')}`);
+    }
+    return out;
+  },
+
   // Releases the CLI and gathers what goes: the thread's folder, its
   // Claude transcript, and its worktree's git work.
   async packForMove(this: Runner, threadId: string, row: MoveRow): Promise<{ entries: PackEntry[]; leftBehind: string[] }> {

@@ -305,4 +305,8 @@
 //    Firebase, whatever Apple key the backend has (docs/push-relay.md). An
 //    older backend refuses the argument, so an Android phone registers only
 //    with a backend of 66 or later.
-export const API_VERSION = 66;
+// 67: sync:heartbeat takes `followProblem`, a runner's own word that it can't
+//    follow GitHub's main (runner/src/follow-origin.ts), and otherRunnersList
+//    and otherRunnersThreads (main key only) give it back. An older
+//    backend's validator refuses the field, so a runner sends it only from 67.
+export const API_VERSION = 67;

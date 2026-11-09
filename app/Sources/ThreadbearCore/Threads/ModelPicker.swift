@@ -103,11 +103,7 @@ public enum ModelPicker {
 
     /// How a provider id reads in the rail and its tooltip.
     public static func providerTitle(_ id: String) -> String {
-        switch id {
-        case "claude": return "Claude"
-        case "codex": return "Codex"
-        default: return id.isEmpty ? "Claude" : id.prefix(1).uppercased() + id.dropFirst()
-        }
+        Providers.info(id).name
     }
 
     /// The SF Symbol that stands for a provider where the app has no logo
@@ -139,7 +135,8 @@ public enum ModelPicker {
     /// CLI always takes; Codex offers just its default, since a Claude
     /// alias would be the wrong provider's model.
     public static func rows(choices: [ModelChoice], defaultId: String?, selected: String?, query: String = "", provider: String = "claude") -> [Row] {
-        let codex = provider == "codex"
+        // Only Claude's CLI takes these aliases: anyone else lists its own.
+        let codex = provider != "claude" && !provider.isEmpty
         let fallback: [ModelChoice] = codex
             ? [defaultId].compactMap { $0 }.filter { !$0.isEmpty }.map { ModelChoice(id: $0, model: $0, title: ComposerChips.model($0)) }
             : aliases.map { ModelChoice(id: $0, model: $0, title: ComposerChips.model($0)) }
@@ -180,18 +177,11 @@ public enum ModelPicker {
     /// ones. There's no "default" level any more: the picker remembers the
     /// last one chosen instead.
     public static func effortLevels(for model: String?, in choices: [ModelChoice], provider: String = "claude") -> [String] {
+        if Providers.info(provider).effort == "none" { return [] }
         guard let model, let levels = ComposerChips.choice(for: model, in: choices)?.effortLevels, !levels.isEmpty else {
             return ComposerChips.effortLevels(provider: provider)
         }
         return levels
-    }
-
-    /// Whether the picker offers fast mode for a model: Claude only, and
-    /// only where the CLI's list says the model has it, so nothing shows
-    /// before the list is known (protocol "Fast mode").
-    public static func offersFastMode(model: String?, in choices: [ModelChoice], provider: String = "claude") -> Bool {
-        guard provider == "claude", let model else { return false }
-        return ComposerChips.choice(for: model, in: choices)?.fastMode == true
     }
 
     /// The level a thread with none chosen runs at, when it's known: the

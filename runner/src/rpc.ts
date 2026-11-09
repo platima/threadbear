@@ -11,7 +11,8 @@ import { ARCHIVE_VERDICTS, CLI_POLICIES, EFFORT_LEVELS, ErrorCode, PROVIDERS, Rp
 import type { ArchiveVerdict, ApprovalDecision, AskAnswer, CliPolicy, EffortLevel, ImageRef, PermissionMode, Provider, ShareAccess, ThreadStartedBy, ThreadSummary } from './protocol.ts';
 import { MAX_BYLINE } from './needs.ts';
 import { isMoved, mergeSummaries, type Bucket } from './handover.ts';
-import { AUTH_VERSION, authProof, isNonce, newNonce, proofMatches, type AuthChannel } from './rpc-auth.ts';
+import { AUTH_VERSION, authProof, isNonce, isThreadId, newNonce, proofMatches, threadKey, type AuthChannel } from './rpc-auth.ts';
+import type { CallerGate } from './rpc-gate.ts';
 import { cutSafely } from './safe-cut.ts';
 
 type Conn = {
@@ -28,6 +29,15 @@ type Conn = {
   authTimer?: AwakeTimer;
   // This connection's auth.challenge nonce (docs/protocol.md, "Auth").
   challenge?: string;
+  // The client's TCP port, to find its process (callerOfPort).
+  remotePort?: number;
+  // The thread this connection acts for (docs/protocol.md, "A thread's own
+  // key"): undefined for the owner. Set once the process lookup is done.
+  caller?: string;
+  // While the process lookup runs, frames wait here so a request can't get
+  // ahead of it (a stolen token's first request, say).
+  identifying?: Promise<void>;
+  queue: string[];
 };
 
 // Until a connection has authenticated (docs/protocol.md, "Auth"), it gets
@@ -38,6 +48,9 @@ type Conn = {
 const AUTH_TIMEOUT_MS = 3000;
 const PREAUTH_MAX_PAYLOAD = 64 * 1024;
 const MAX_PENDING_AUTH = 16;
+// Frames that may wait for the process lookup (a few, in practice; the client
+// has only just proved itself).
+const MAX_QUEUED_FRAMES = 256;
 // What an authenticated client may send in one frame.
 const MAX_PAYLOAD = 64 * 1024 * 1024;
 // Backpressure for a client that stops reading (a hung app, a debugger):
@@ -52,7 +65,7 @@ const CLOSE_GRACE_MS = 1000;
 // Requests about one thread. During a handover (docs/protocol.md) the
 // primary passes these to the draining runner that has the thread, and a
 // draining runner answers -32030 for one it has let go.
-const THREAD_METHODS = new Set([
+export const THREAD_METHODS = new Set([
   'reviews.list',
   'reviews.create',
   'reviews.get',
@@ -134,6 +147,11 @@ export type RpcServerOptions = {
   updates?: () => unknown;
   // The Mac app's hello with its build (docs/protocol.md, "App restarts").
   appHello?: (build: { commit: string; short: string; tree: string }) => void;
+  // What a connection that belongs to a thread may do (rpc-gate.ts).
+  gate?: CallerGate;
+  // The thread whose CLI a client port's process runs under, if any
+  // (peer.ts, docs/protocol.md "Who's really calling").
+  callerOfPort?: (port: number) => Promise<string | undefined>;
   // Tests shorten these.
   authTimeoutMs?: number;
   maxPendingAuth?: number;
@@ -266,13 +284,26 @@ export class RpcServer {
     } else if (this.pendingAuth() >= (this.opts.maxPendingAuth ?? MAX_PENDING_AUTH)) {
       return refuse(503, 'Service Unavailable');
     }
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, authed));
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, authed, req.socket.remotePort));
   }
 
   // Raises an authenticated socket's frame limit. ws has no public way to
   // change maxPayload on a live socket, so this sets its receiver's
   // (ws 8.x; rpc.test.ts fails if a ws update moves it).
-  private unlock(conn: Conn): void {
+  private unlock(conn: Conn, keyThread?: string): void {
+    conn.caller = keyThread;
+    const find = this.opts.callerOfPort;
+    if (find && conn.remotePort !== undefined) {
+      conn.identifying = find(conn.remotePort)
+        .then((t) => {
+          if (t) conn.caller = t;
+        })
+        .catch((e) => this.opts.log.warn('could not identify an RPC client', { error: String(e) }))
+        .finally(() => {
+          conn.identifying = undefined;
+          for (const raw of conn.queue.splice(0)) this.onMessage(conn, raw);
+        });
+    }
     conn.authed = true;
     conn.authTimer?.clear();
     conn.challenge = undefined;
@@ -298,8 +329,8 @@ export class RpcServer {
     return { server: this.opts.onlyOwn ? 'drain' : 'primary', port: typeof addr === 'object' && addr ? addr.port : this.opts.port };
   }
 
-  private onConnection(ws: WebSocket, headerAuthed: boolean): void {
-    const conn: Conn = { id: this.nextId++, ws, authed: false, subs: new Set(), since: Date.now() };
+  private onConnection(ws: WebSocket, headerAuthed: boolean, remotePort?: number): void {
+    const conn: Conn = { id: this.nextId++, ws, authed: false, subs: new Set(), since: Date.now(), remotePort, queue: [] };
     this.conns.add(conn);
     if (headerAuthed) {
       this.unlock(conn);
@@ -322,6 +353,7 @@ export class RpcServer {
     });
     ws.on('close', () => {
       conn.authTimer?.clear();
+      conn.queue.length = 0;
       this.conns.delete(conn);
     });
     // A protocol error (a frame over the limit, bad UTF-8): ws closes with
@@ -376,12 +408,17 @@ export class RpcServer {
     }
     const id = msg && typeof msg === 'object' ? (msg.id ?? null) : null;
     const p = (msg && typeof msg === 'object' && msg.params && typeof msg.params === 'object' ? msg.params : {}) as Record<string, unknown>;
-    if (msg?.method === 'auth.prove' && conn.challenge && isNonce(p.nonce) && p.nonce !== conn.challenge
-      && proofMatches(authProof(this.opts.token, 'client', conn.challenge, p.nonce, this.channel()), p.proof)) {
-      const proof = authProof(this.opts.token, 'runner', conn.challenge, p.nonce, this.channel());
-      this.unlock(conn);
-      this.send(conn, { jsonrpc: '2.0', id, result: { proof } });
-      return;
+    if (msg?.method === 'auth.prove' && conn.challenge && isNonce(p.nonce) && p.nonce !== conn.challenge) {
+      // A thread proves its own key instead of the token (docs/protocol.md,
+      // "A thread's own key"); an id that can't be one is simply no proof.
+      const threadId = p.threadId === undefined ? undefined : isThreadId(p.threadId) ? p.threadId : null;
+      const secret = threadId === null ? undefined : threadId ? threadKey(this.opts.token, threadId) : this.opts.token;
+      if (secret && proofMatches(authProof(secret, 'client', conn.challenge, p.nonce, this.channel()), p.proof)) {
+        const proof = authProof(secret, 'runner', conn.challenge, p.nonce, this.channel());
+        this.unlock(conn, threadId ?? undefined);
+        this.send(conn, { jsonrpc: '2.0', id, result: { proof } });
+        return;
+      }
     }
     if (msg?.method === 'auth' && this.tokenOk(p.token)) {
       this.unlock(conn);
@@ -393,6 +430,14 @@ export class RpcServer {
 
   private onMessage(conn: Conn, raw: string): void {
     if (!conn.authed) return this.onAuthMessage(conn, raw);
+    if (conn.identifying) {
+      if (conn.queue.length >= MAX_QUEUED_FRAMES) {
+        conn.ws.close(4408, 'too many frames before identification');
+        return;
+      }
+      conn.queue.push(raw);
+      return;
+    }
     let msg: { jsonrpc?: string; id?: string | number | null; method?: unknown; params?: unknown };
     try {
       msg = JSON.parse(raw);
@@ -405,7 +450,7 @@ export class RpcServer {
     }
     let result: unknown;
     try {
-      result = this.dispatch(conn, msg.method, (msg.params ?? {}) as Record<string, unknown>);
+      result = this.dispatch(conn, msg.method, this.gated(conn, msg.method, (msg.params ?? {}) as Record<string, unknown>));
     } catch (e) {
       if (id === null) return;
       if (e instanceof RpcError) {
@@ -462,6 +507,17 @@ export class RpcServer {
     );
   }
 
+  // Throws a refusal if a thread's connection can't call this. Before
+  // dispatch, so a request forwarded to a draining or another runner is
+  // covered too. A server with no gate (a draining runner's own, which only
+  // a primary with the token talks to) refuses a thread outright.
+  private gated(conn: Conn, method: string, p: Record<string, unknown>): Record<string, unknown> {
+    if (conn.caller === undefined) return p;
+    if (!p || typeof p !== 'object' || Array.isArray(p)) throw bad('params must be an object');
+    if (!this.opts.gate) throw new RpcError(ErrorCode.notAllowed, "This server doesn't take calls from threads.");
+    return this.opts.gate.check(conn.caller, method, p);
+  }
+
   private mustClis(method: string): CliControl {
     if (!this.opts.clis) throw new RpcError(ErrorCode.methodNotFound, `Unknown method ${method}`);
     return this.opts.clis;
@@ -491,11 +547,15 @@ export class RpcServer {
     switch (method) {
       case 'auth':
         return {};
+      case 'auth.whoami':
+        return conn.caller !== undefined && this.opts.gate ? this.opts.gate.whoami(conn.caller) : {};
       case 'hello': {
-        conn.client = optString(p, 'client');
+        // A thread's connection isn't the Mac app, whatever it says: presence
+        // and "the app is on this build" go by what it claims here.
+        conn.client = conn.caller === undefined ? optString(p, 'client') : 'thread';
         conn.clientVersion = typeof p.version === 'string' ? p.version : undefined;
         conn.clientPid = typeof p.pid === 'number' ? p.pid : undefined;
-        conn.browserPanel = p.browserPanel === true;
+        conn.browserPanel = conn.caller === undefined && p.browserPanel === true;
         // Only the Mac app's own builds: a dev build has none.
         const build = p.build as Record<string, unknown> | undefined;
         if (conn.client === 'threadbear-mac' && build && typeof build === 'object'
@@ -547,7 +607,6 @@ export class RpcServer {
           poolId: optString(p, 'poolId'),
           model: optString(p, 'model'),
           effort: optEffort(p),
-          ...(optFastMode(p) ? { fastMode: true } : {}),
           permissionMode: optMode(p),
           title: optString(p, 'title'),
           ...(p.worktree === false ? { worktree: false } : {}),
@@ -600,7 +659,6 @@ export class RpcServer {
         if (p.poolId !== undefined) upd.poolId = p.poolId === null ? null : reqString(p, 'poolId');
         if (p.model !== undefined) upd.model = p.model === null ? null : reqString(p, 'model');
         if (p.effort !== undefined) upd.effort = p.effort === null ? null : optEffort(p);
-        if (p.fastMode !== undefined) upd.fastMode = optFastMode(p) === true;
         if (p.permissionMode !== undefined) upd.permissionMode = optMode(p);
         if (p.snoozedUntil !== undefined) upd.snoozedUntil = p.snoozedUntil === null ? null : reqString(p, 'snoozedUntil');
         if (p.archived !== undefined) {
@@ -882,14 +940,6 @@ function optEffort(p: Record<string, unknown>): EffortLevel | undefined {
   const v = p.effort;
   if (v === undefined || v === null) return undefined;
   if (!isEffortLevel(v)) throw bad(`effort must be one of ${EFFORT_LEVELS.join(', ')}`);
-  return v;
-}
-
-// null means off, as threads.update's other settings take null for their default.
-function optFastMode(p: Record<string, unknown>): boolean | undefined {
-  const v = p.fastMode;
-  if (v === undefined || v === null) return v === null ? false : undefined;
-  if (typeof v !== 'boolean') throw bad('fastMode must be a boolean');
   return v;
 }
 

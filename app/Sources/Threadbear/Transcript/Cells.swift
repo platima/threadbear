@@ -48,6 +48,9 @@ protocol RowCellDelegate: AnyObject {
     /// The pencil by one of Mike's messages: edit it and carry on from
     /// there (docs/protocol.md, "Editing a message").
     func editMessage(rowId: String)
+    /// Whether this thread's provider can go back to an earlier message:
+    /// the pencil only shows when it can.
+    var canGoBack: Bool { get }
     /// A work:, thread: or review: link in row `rowId`'s text (WorkLinks): open the
     /// step in that turn's working, or the other thread.
     func openThreadLink(_ url: URL, fromRow rowId: String)
@@ -80,6 +83,7 @@ extension RowCellDelegate {
     func openReview(_ review: DesignReview) {}
     func claimWakeUp(rowId: String) -> Bool { false }
     func editMessage(rowId: String) {}
+    var canGoBack: Bool { true }
     func openThreadLink(_ url: URL, fromRow rowId: String) {}
     func approvePlan(itemId: String) {}
     func sendBackPlan() {}
@@ -501,7 +505,7 @@ final class TextRowCell: RowCellView {
                 pendingMark.frame = NSRect(x: left - side - zoomed(6), y: bottom - side - zoomed(4), width: side, height: side)
                 pendingMark.show(state)
             }
-            if message.editable {
+            if message.editable, delegate?.canGoBack != false {
                 // Left of the bubble (or of the pictures, with no text),
                 // level with its last line, as Codex and ChatGPT put theirs.
                 editable = true

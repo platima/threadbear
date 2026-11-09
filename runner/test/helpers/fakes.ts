@@ -22,7 +22,6 @@ export class FakeSession implements AgentSession {
   killed = false;
   models: (string | undefined)[] = [];
   efforts: (EffortLevel | undefined)[] = [];
-  fastModes: boolean[] = [];
   modes: PermissionMode[] = [];
   cwds: string[] = []; // setCwd calls (adapters that move folders)
   interruptError?: Error;
@@ -47,9 +46,6 @@ export class FakeSession implements AgentSession {
   }
   async setEffort(effort: EffortLevel | undefined): Promise<void> {
     this.efforts.push(effort);
-  }
-  async setFastMode(on: boolean): Promise<void> {
-    this.fastModes.push(on);
   }
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     this.modes.push(mode);

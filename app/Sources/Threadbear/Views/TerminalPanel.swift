@@ -161,6 +161,7 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         // name if it was started from inside a thread.
         env.removeValue(forKey: "THREADBEAR_THREAD_ID")
         env.removeValue(forKey: "THREADBARE_THREAD_ID")
+        env.removeValue(forKey: "THREADBEAR_THREAD_KEY")
         return env.map { "\($0.key)=\($0.value)" }
     }
 

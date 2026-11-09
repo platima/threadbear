@@ -270,7 +270,8 @@ struct AppDump: Encodable {
         let sections: [Section]
         switch app.sidebarMode {
         case .inbox:
-            let built = app.sections
+            // The search box applies, as it does to what's on screen.
+            let built = app.sections.matching(app.searchQuery)
             sections = InboxSection.allCases.map { section in
                 Section(name: section.title, threads: built[section].map { thread($0, section: section) },
                         collapsed: app.collapsedSections.contains(section))

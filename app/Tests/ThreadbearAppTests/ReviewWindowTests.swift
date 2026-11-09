@@ -508,14 +508,14 @@ final class ReviewWindowTests: XCTestCase {
         [session.focusedOption?.id ?? "", String(session.shot)]
     }
 
-    private func make(_ given: DesignReview? = nil, native: Bool = false) -> (ReviewSession, NSView, NSWindow) {
+    func make(_ given: DesignReview? = nil, native: Bool = false, size: NSSize = NSSize(width: 1100, height: 760)) -> (ReviewSession, NSView, NSWindow) {
         let review = given ?? review()
         let service = ReviewService(load: { review }, save: { _, _ in review }, respond: { _, _ in review }, cancel: { _ in review })
         let session = ReviewSession(threadId: "thread", review: review, service: service,
                                     defaults: UserDefaults(suiteName: "ReviewWindowTests.\(UUID().uuidString)")!, autosave: false)
         let host = NSHostingView(rootView: ReviewWindow(session: session, back: {}, close: {}))
         // The review's own window class where its keys matter.
-        let frame = NSRect(x: 0, y: 0, width: 1100, height: 760)
+        let frame = NSRect(origin: .zero, size: size)
         let window: NSWindow
         if native {
             let reviewWindow = ReviewNativeWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -548,7 +548,7 @@ final class ReviewWindowTests: XCTestCase {
     /// goes by what's still to do, not a set time: a fixed 0.2 seconds could
     /// all go on the layout on a loaded machine, leaving `session.zoomed`
     /// stale, so Esc left the shot rather than the zoom (6 Nov).
-    private func pump() {
+    func pump() {
         let deadline = Date().addingTimeInterval(20)
         var quiet = 0
         while quiet < Self.quietTurns, Date() < deadline {
@@ -586,7 +586,7 @@ final class ReviewWindowTests: XCTestCase {
     }
 
     /// Each control's tip anchor sits behind it, the same size.
-    private func anchor(_ tip: String, in host: NSView) -> TipAnchorView? {
+    func anchor(_ tip: String, in host: NSView) -> TipAnchorView? {
         func anchors(_ view: NSView) -> [TipAnchorView] {
             view.subviews.flatMap { ($0 as? TipAnchorView).map { [$0] } ?? anchors($0) }
         }
@@ -594,7 +594,7 @@ final class ReviewWindowTests: XCTestCase {
     }
 
     /// A press and release, sent through the window as a real click is.
-    private func click(_ tip: String, in host: NSView, _ window: NSWindow) {
+    func click(_ tip: String, in host: NSView, _ window: NSWindow) {
         guard let anchor = anchor(tip, in: host) else { return XCTFail("nothing with the tip \(tip)") }
         let point = anchor.convert(NSPoint(x: anchor.bounds.midX, y: anchor.bounds.midY), to: nil)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {

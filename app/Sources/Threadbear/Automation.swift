@@ -654,8 +654,8 @@ enum Automation {
             app.archive(id)
             return "ok \(id)"
         case "move":
-            // Opens the Move sheet for a thread and a runner (by name), as
-            // Move to ▸ that runner in its menu does.
+            // Moves a thread to a runner (by name), or opens the Move sheet
+            // if there's something to say first, as Move to ▸ that runner does.
             let target = target(c, app)
             guard let id = target.id else { return target.error }
             let want = (c["runner"] as? String ?? "").lowercased()

@@ -81,7 +81,6 @@ export type ModelChoice = {
   description?: string;
   effortLevels?: EffortLevel[];
   defaultEffort?: EffortLevel; // the model's own level, when the CLI says (Codex)
-  fastMode?: true; // the CLI offers fast mode on it (Claude's supportsFastMode)
 };
 
 export type UsageWindowKind = 'five_hour' | 'weekly' | 'weekly_model' | 'daily' | 'monthly' | 'allowance' | 'other';
@@ -140,6 +139,9 @@ export type CliStatus = {
   policy: CliPolicy;
   inUse: { version: string; threadIds: string[] }[];
   previousVersion?: string; // Codex: the kept version "Go back" returns to
+  // An agent with no version feed to compare against: its row offers an
+  // update on demand (ACP agents).
+  canUpdateNow?: boolean;
   checkedAt?: string;
   hold?: { version: string; reason: string; missing?: string[] };
   update?: {
@@ -204,7 +206,6 @@ export type ThreadSummary = {
   provider: Provider;
   model?: string;
   effort?: EffortLevel;
-  fastMode?: true; // Claude Code's fast mode; absent means standard speed
   modelInUse?: string;
   effortInUse?: EffortLevel;
   permissionMode: PermissionMode;
@@ -442,6 +443,10 @@ export type LibrarianEntry = {
   outcome: LibrarianOutcome;
   text: string;
   projectIds?: string[];
+  // Why it joined each project, by id, and the look's line overall. Only on
+  // a look that filed the thread somewhere.
+  reasons?: Record<string, string>;
+  why?: string;
   costUsd?: number;
 };
 
@@ -951,6 +956,7 @@ export const ErrorCode = {
   convexSignedOut: -32040, // the runner's Convex CLI isn't signed in ("The Convex panel")
   convexNoAccess: -32041, // its Convex login can't reach the deployment
   backgroundRunning: -32050, // threads.edit without stopBackground while background work runs
+  notAllowed: -32060, // the calling thread doesn't have the access for this (A thread's own key)
   other: -32000,
 } as const;
 

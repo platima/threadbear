@@ -52,7 +52,7 @@ test('local tools queue a panel only with a connected Mac app, including through
 });
 
 test('challenge auth, hello, and JSON-RPC errors', async () => {
-  const { h, server, url } = await serve();
+  const { server, url } = await serve();
   const c = await RunnerClient.connect(url, TOKEN);
   const hello = await c.call('hello', { client: 'test', version: '1' });
   assert.equal(hello.protocol, 1);
@@ -62,12 +62,6 @@ test('challenge auth, hello, and JSON-RPC errors', async () => {
   await assert.rejects(c.call('threads.create', { text: 1 }), (e: { code: number }) => e.code === -32602);
   await assert.rejects(c.call('threads.create', { text: 'x', accountId: 'claude-42' }), (e: { code: number }) => e.code === -32010);
   await assert.rejects(c.call('threads.create', { text: 'x', effort: 'huge' }), (e: { code: number; message: string }) => e.code === -32602 && /effort must be one of/.test(e.message));
-  await assert.rejects(c.call('threads.create', { text: 'x', fastMode: 'yes' }), (e: { code: number; message: string }) => e.code === -32602 && /fastMode must be a boolean/.test(e.message));
-  fs.writeFileSync(`${h.home}/runner.json`, JSON.stringify({ experiments: { fastMode: true } }));
-  const fast = (await c.call('threads.create', { text: 'x', accountId: 'claude-3', fastMode: true })).thread;
-  assert.equal(fast.fastMode, true);
-  // null is off, like the other settings' defaults.
-  assert.equal((await c.call('threads.update', { threadId: fast.id, fastMode: null })).thread.fastMode, undefined);
   await assert.rejects(c.call('nope.method'), (e: { code: number }) => e.code === -32601);
   // A byline kind from a newer caller: the thread still starts, with none.
   const bylined = await c.call('threads.create', { text: 'x', accountId: 'claude-3', startedBy: { kind: 'robot', label: 'R2' } });

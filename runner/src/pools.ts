@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { Account, Pool, Provider, UsageWindow } from './protocol.ts';
 import { PROVIDERS } from './protocol.ts';
 import { providerName } from './providers.ts';
+import { ACP_AGENTS, ACP_PROVIDERS } from './adapters/acp/agents.ts';
 import { accountRoom, MIN_ROOM_PERCENT, resetTime } from './usage.ts';
 
 // How long a wait lasts when no login in the pool says when it's back, and
@@ -46,7 +47,10 @@ function withFolders(pool: Pool, members: Account[], folders: Record<string, str
 // The pools in force: runner.json's `pools` when it has any, else the
 // built-in ones. A runner.json entry of the wrong shape is skipped.
 export function readPools(cfg: { pools?: unknown; accountNotes?: Record<string, string> }, accounts: Account[], folders: Record<string, string[]> = {}): Pool[] {
-  const saved = Array.isArray(cfg.pools) ? cfg.pools.map(shapeOf).filter((p): p is Pool => !!p) : [];
+  // A saved pool of nothing but an ACP agent this runner doesn't offer (the
+  // experiment off) isn't there.
+  const missing = ACP_PROVIDERS.map((p) => ACP_AGENTS[p].accountId).filter((id) => !accounts.some((a) => a.id === id));
+  const saved = (Array.isArray(cfg.pools) ? cfg.pools.map(shapeOf).filter((p): p is Pool => !!p) : []).filter((p) => !p.accountIds.length || !p.accountIds.every((id) => missing.includes(id)));
   if (saved.length) return saved;
   return defaultPools(accounts, cfg.accountNotes ?? {}, folders);
 }

@@ -186,6 +186,10 @@ export default defineSchema({
     // runner tiles. On this row since it rarely changes; the figures have a
     // row of their own (runnerStats), read only by the Runners view.
     pressure: v.optional(v.string()),
+    // Set while this runner isn't following GitHub's main properly (API 67,
+    // runner/src/follow-origin.ts): why, in a sentence or two, for the main
+    // Mac's Updates panel and the canary.
+    followProblem: v.optional(v.string()),
     // Its active schedules have been copied to scheduleWakes (API 45), once.
     wakesSeeded: v.optional(v.boolean()),
     // How a Mac app reaches this runner to open one of its threads (API 12):

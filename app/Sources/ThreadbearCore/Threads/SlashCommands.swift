@@ -65,7 +65,7 @@ public enum SlashPalette {
     }
 
     public static func cliName(_ provider: String) -> String {
-        provider == "codex" ? "Codex" : "Claude Code"
+        Providers.info(provider).cliName
     }
 
     /// The command being typed, without its slash, while the message is

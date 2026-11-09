@@ -26,7 +26,7 @@ import { SessionNotFoundError } from '../types.ts';
 import type { AcpAgent } from './agents.ts';
 import { AcpExitedError, AcpProcess, AcpRpcError, AUTH_REQUIRED, type AcpTimings, type InitializeResult, type RequestId } from './connection.ts';
 import { AcpMcpServer } from './mcp-http.ts';
-import { AcpNormalizer, absolutePath, isPlainObject, writesFiles, type AcpToolCall } from './normalize.ts';
+import { AcpNormalizer, absolutePath, isPlainEdit, isPlainObject, requestPaths, writesFiles, type AcpToolCall } from './normalize.ts';
 
 export type AcpAdapterDeps = {
   agent: AcpAgent;
@@ -143,7 +143,7 @@ export class AcpSession implements AgentSession {
   private sessionId?: string;
   private init: InitializeResult = {};
   private held: UserInput[] = [];
-  private turn?: { id?: string; startedAt: number; interrupted: boolean };
+  private turn?: { id?: string; startedAt: number; interrupted: boolean; dropped: string[] };
   private pending = new Map<RequestId, Pending>();
   private rules: Set<string>;
   private mode: PermissionMode;
@@ -283,9 +283,23 @@ export class AcpSession implements AgentSession {
   // Puts the agent in the session mode this thread's mode calls for. If it
   // can't be done, a thread that has to ask doesn't run: Cursor's read-only
   // mode is all that stands between it and its own allow-list.
-  private async applyMode(): Promise<void> {
-    const want = this.deps.agent.modeFor(this.mode);
-    if (!want || want === this.currentMode) return;
+  // One at a time, and until the agent is where the thread's mode is now:
+  // a quick Full then Ask must not end on whichever answer came last.
+  private applyMode(): Promise<void> {
+    const run = this.modeChain.then(() => this.settleMode());
+    this.modeChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async settleMode(): Promise<void> {
+    for (let i = 0; i < 8; i++) {
+      const want = this.deps.agent.modeFor(this.mode);
+      if (!want || want === this.currentMode) return;
+      await this.setAgentMode(want);
+    }
+  }
+
+  private async setAgentMode(want: string): Promise<void> {
     try {
       const option = this.configOptions.find((o) => o.category === 'mode');
       if (option?.id) {
@@ -302,6 +316,8 @@ export class AcpSession implements AgentSession {
     }
     if (this.currentMode !== want && this.mode !== 'full') throw new Error(`Couldn't put ${providerName(this.deps.agent.provider)} in its ${want} mode, so this thread wasn't started.`);
   }
+
+  private modeChain: Promise<unknown> = Promise.resolve();
 
   private async applyModel(model: string): Promise<void> {
     const option = this.configOptions.find((o) => o.category === 'model');
@@ -341,7 +357,15 @@ export class AcpSession implements AgentSession {
   }
 
   private request(id: RequestId, method: string, params: unknown): void {
-    if (method === 'session/request_permission' && !this.replaying) return void this.permission(id, (params ?? {}) as { toolCall?: AcpToolCall; options?: PermissionOption[] });
+    if (method === 'session/request_permission' && !this.replaying) {
+      // Never left unanswered: the turn would hang with session/prompt open.
+      this.permission(id, (params ?? {}) as { toolCall?: AcpToolCall; options?: PermissionOption[] }).catch((e: unknown) => {
+        this.deps.log.error('acp permission handler threw', { threadId: this.opts.threadId, error: String(e) });
+        this.pending.delete(id);
+        this.proc.respond(id, { outcome: { outcome: 'cancelled' } });
+      });
+      return;
+    }
     // We said we offer no fs or terminal, and the extensions aren't handled
     // yet: refused at once, so nothing hangs waiting for an answer.
     this.deps.log.info('refused an ACP request', { threadId: this.opts.threadId, method });
@@ -366,30 +390,38 @@ export class AcpSession implements AgentSession {
     // Read at the moment it's asked, not when the turn began.
     if (this.mode === 'full') return this.answer(id, options, true);
 
-    const { kind, paths: reported } = seen;
-    const paths = reported.map((f) => absolutePath(f, this.opts.cwd));
-    const input = seen.input;
+    const { kind } = seen;
+    // What this request names and what earlier updates to the call said:
+    // more names only makes the check stricter.
+    const paths = [...new Set([...seen.paths, ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))];
+    const input = isPlainObject(p.toolCall?.rawInput) && Object.keys(p.toolCall.rawInput).length ? p.toolCall.rawInput : seen.input;
     const command = kind === 'execute' && typeof input.command === 'string' ? input.command : '';
     const argv = command ? shellWords(command) : null;
-    const rule = argv?.length && ruleMayCover(argv) ? commandRule(argv, this.opts.cwd) : null;
+    // A tool can name its own folder (OpenCode's workdir): the rule and the
+    // card go by where the command really runs.
+    const said = [input.workdir, input.cwd, input.workingDirectory, input.directory, input.dir].find((d): d is string => typeof d === 'string' && d !== '');
+    const where = said ? absolutePath(said, this.opts.cwd) : this.opts.cwd;
+    const rule = argv?.length && ruleMayCover(argv) ? commandRule(argv, where) : null;
 
     let code: CodeWrite = false;
     if (writesFiles(kind)) {
       // An edit with no named files can't be checked: it asks every time.
       code = paths.length ? this.runsAsCode(paths) : 'unsure';
+      if (!code && !isPlainEdit(input)) code = 'unsure';
       if (!code && this.rules.has(EDIT_RULE)) return this.answer(id, options, true);
     } else if (paths.length && kind !== 'read' && kind !== 'search' && kind !== 'fetch' && kind !== 'think') {
       // A kind that doesn't say what it does, naming a file that runs.
       code = this.runsAsCode(paths);
     }
-    if (rule && this.rules.has(rule)) return this.answer(id, options, true);
+    // A saved rule doesn't stand in for a file that runs as code.
+    if (!code && rule && this.rules.has(rule)) return this.answer(id, options, true);
 
     const title = command
       ? firstLineSafely(command, 200, '…')
       : writesFiles(kind) && paths.length === 1
         ? `Edit ${displayPath(paths[0], this.opts.cwd)}`
         : firstLineSafely(seen.title || kind || 'Use a tool', 200, '…');
-    const shown: Record<string, unknown> = command ? { command, cwd: this.opts.cwd } : writesFiles(kind) ? { paths } : input;
+    const shown: Record<string, unknown> = command ? { command, cwd: where } : writesFiles(kind) ? { paths } : input;
     const card = cardInput(shown, command ? ['command', 'cwd'] : writesFiles(kind) ? ['paths'] : 'all');
     if (card.tooLong) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: tooLongForCard(card.tooLong) } });
@@ -402,7 +434,9 @@ export class AcpSession implements AgentSession {
     try {
       a = await this.sink.requestApproval({
         toolUseId: typeof p.toolCall?.toolCallId === 'string' ? p.toolCall.toolCallId : undefined,
-        name: command ? 'shell' : writesFiles(kind) ? 'apply_patch' : (kind ?? 'tool'),
+        // As an MCP tool's, for anything else: a card whose arguments say
+        // what it does can only be allowed where all of them are shown.
+        name: command ? 'shell' : writesFiles(kind) ? 'apply_patch' : `mcp__acp__${kind ?? 'tool'}`,
         title: code ? `${title} (${codeWriteNote(code)})` : title,
         input: card.input,
         wholeInput: input,
@@ -473,17 +507,20 @@ export class AcpSession implements AgentSession {
   }
 
   private async runTurn(input: UserInput): Promise<void> {
-    const turn = { id: input.id, startedAt: this.now(), interrupted: false };
+    const turn = { id: input.id, startedAt: this.now(), interrupted: false, dropped: [] as string[] };
     this.turn = turn;
     this.state = 'turn';
     let result: TurnResult;
     try {
+      if (!this.deps.on()) throw new Error(`${providerName(this.deps.agent.provider)} threads are off: the acpAgents experiment isn't on.`);
       // Between turns, so the next message takes any change made during this one.
       await this.applyMode();
       if (this.modelChanged) {
         this.modelChanged = false;
         await this.applyModel(this.model ?? this.opts.account.defaultModel ?? '');
       }
+      // Stop pressed during the setup above: nothing has reached the model.
+      if (turn.interrupted) throw new Error('Stopped');
       const r = await this.proc.request<{ stopReason?: string }>('session/prompt', { sessionId: this.sessionId, prompt: this.promptBlocks(input) }, null);
       this.emit(this.normalizer.closeOpen('Stopped'));
       result = this.resultFor(turn, r?.stopReason);
@@ -500,7 +537,7 @@ export class AcpSession implements AgentSession {
       const text = this.normalizer.takeLastAssistantText();
       if (text) this.sink.output({ kind: 'planProposed', itemId: `${turn.id ?? 'plan'}-plan`, text });
     }
-    const answered = turn.id ? [turn.id] : [];
+    const answered = [...(turn.id ? [turn.id] : []), ...turn.dropped];
     this.sink.output({ kind: 'result', result: { ...result, ...(turn.id ? { answers: turn.id } : {}), answered, queuedTurns: this.held.length, ...(this.normalizer.costUsd !== undefined ? { totalCostUsd: this.normalizer.costUsd } : {}) } });
     this.next();
   }
@@ -529,9 +566,13 @@ export class AcpSession implements AgentSession {
     // Stop means stop: what's waiting for a later turn goes too.
     const dropped = this.held.map((m) => m.id).filter((x): x is string => Boolean(x));
     this.held = [];
-    if (dropped.length) this.sink.output({ kind: 'result', result: { outcome: 'interrupted', durationMs: 0, answers: dropped[0], answered: dropped, queuedTurns: 0 } });
     const turn = this.turn;
-    if (!turn) return;
+    if (!turn) {
+      if (dropped.length) this.sink.output({ kind: 'result', result: { outcome: 'interrupted', durationMs: 0, answers: dropped[0], answered: dropped, queuedTurns: 0 } });
+      return;
+    }
+    // They end with this turn, so the runner sees one result, when it's over.
+    turn.dropped.push(...dropped);
     turn.interrupted = true;
     this.cancelPending(true);
     this.proc.notify('session/cancel', { sessionId: this.sessionId });
@@ -548,8 +589,20 @@ export class AcpSession implements AgentSession {
   // These agents offer no effort level of Threadbear's (providers.ts).
   async setEffort(_effort: EffortLevel | undefined): Promise<void> {}
 
+  // Asked for at once, as a running turn in Cursor's writable mode wouldn't
+  // send a request to stop at. One that can't be made safe doesn't go on.
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     this.mode = mode;
+    if (!this.sessionId || (this.state !== 'ready' && this.state !== 'turn')) return;
+    try {
+      await this.applyMode();
+    } catch (e) {
+      this.deps.log.warn('could not change the agent mode', { threadId: this.opts.threadId, error: String(e) });
+      if (this.turn) {
+        this.sink.output({ kind: 'event', event: { type: 'system.note', text: `Stopped this turn, as ${providerName(this.deps.agent.provider)} couldn't be switched to the mode you picked.` } });
+        await this.interrupt();
+      }
+    }
   }
 
   async commands(): Promise<SlashCommand[]> {

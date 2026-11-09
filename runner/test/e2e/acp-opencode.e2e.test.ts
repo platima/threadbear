@@ -111,6 +111,9 @@ describe('ACP threads end to end (real opencode acp)', { concurrency: false, ski
 
   test('models come from a real session', { timeout: 60_000 }, async () => {
     const r = rig('full', false);
+    // After the session's first turn: OpenCode sets up its database on a first
+    // run, and two processes doing that at once in one new home can collide.
+    await r.turn('Reply with just the word pong.');
     const models = await r.adapter.models(r.account);
     assert.ok(models.some((m) => m.id === MODEL));
   });

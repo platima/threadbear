@@ -338,6 +338,7 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
   // have been copied. Serialize the entire landing before rebasing, across
   // CLI processes, so waiting for that queue cannot stale another landing.
   let release: () => Promise<void>;
+  const asked = Date.now();
   try {
     release = await lockLanding(path.resolve(t.path, common, 'threadbear-land.lock'), opts.out ?? console.log);
   } catch (e) {
@@ -345,7 +346,7 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     return 1;
   }
   try {
-    return await landLocked(t, opts);
+    return await landLocked(t, opts, { file: path.resolve(t.path, common, 'threadbear-land-times.log'), waitedMs: Date.now() - asked });
   } finally {
     await release();
   }
@@ -413,7 +414,65 @@ async function lockLanding(file: string, out: (line: string) => void): Promise<(
   return (await take(true))!;
 }
 
-async function landLocked(t: LandTarget, opts: LandOptions): Promise<number> {
+// A passing check prints nothing of its own, so on 9 Nov finding out where
+// landings spent their time meant scraping transcripts and running timed
+// checks by hand, and a test that only passed on check.sh's second run went
+// unseen. So each check leaves a line in `threadbear-land-times.log`, beside
+// the landing lock (docs/thread-worktrees.md, "Where a landing's time goes").
+export const LAND_TIMES_MAX_BYTES = 1024 * 1024;
+export const LAND_TIMES_KEEP = 1000;
+
+type CheckStep = { name: string; status: 'ok' | 'FAIL' | 'skip'; seconds?: number; secondRun?: string[] };
+
+// What a check's output says about where its time went, from check.sh's and
+// check-remote.sh's own lines. Another repo's check just has no steps.
+export function parseCheckTimes(text: string): { host?: string; copySeconds?: number; steps: CheckStep[] } {
+  const found: { host?: string; copySeconds?: number; steps: CheckStep[] } = { steps: [] };
+  let last: CheckStep | undefined;
+  for (const line of text.split('\n')) {
+    const host = /^Checking on (\S+) \((?:copied in (\d+)s)?/.exec(line);
+    if (host) {
+      found.host = host[1];
+      if (host[2] !== undefined) found.copySeconds = Number(host[2]);
+      continue;
+    }
+    const step = /^(ok|FAIL|skip)\s+(\S.*?)\s+(?:(\d+)s\b|\()(.*)$/.exec(line);
+    if (step) {
+      last = { name: step[2], status: step[1] as CheckStep['status'] };
+      if (step[3] !== undefined) last.seconds = Number(step[3]);
+      if (/passed on a second run/.test(step[4])) last.secondRun = [];
+      found.steps.push(last);
+      continue;
+    }
+    const again = /^\s+✖ (.*?)(?: \([\d.]+ms\))?$/.exec(line);
+    if (again && last?.secondRun) last.secondRun.push(again[1]);
+  }
+  return found;
+}
+
+// Never in a landing's way: anything that goes wrong here is only a line
+// missing from a log. Not following a link and not waiting on a fifo, as
+// opening one would hold the landing lock for good.
+function logCheckTimes(file: string, entry: Record<string, unknown>): void {
+  try {
+    const { O_WRONLY, O_APPEND, O_CREAT, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+    const fd = fs.openSync(file, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o644);
+    try {
+      if (!fs.fstatSync(fd).isFile()) return;
+      fs.writeSync(fd, `${JSON.stringify(entry)}\n`);
+      if (fs.fstatSync(fd).size <= LAND_TIMES_MAX_BYTES) return;
+    } finally {
+      fs.closeSync(fd);
+    }
+    // Only one landing at a time gets here: the landing lock is held.
+    const kept = fs.readFileSync(file, 'utf8').trimEnd().split('\n').slice(-LAND_TIMES_KEEP);
+    fs.writeFileSync(file, `${kept.join('\n')}\n`);
+  } catch {
+    // See above.
+  }
+}
+
+async function landLocked(t: LandTarget, opts: LandOptions, times: { file: string; waitedMs: number }): Promise<number> {
   const out = opts.out ?? ((l: string) => process.stdout.write(l + '\n'));
   const err = opts.err ?? ((l: string) => process.stderr.write(l + '\n'));
   const fail = (...lines: string[]): number => {
@@ -518,6 +577,17 @@ async function landLocked(t: LandTarget, opts: LandOptions): Promise<number> {
   if (check) {
     out(`Running the check: ${check}`);
     const r = await runCheck(check, t.path, opts.shell);
+    logCheckTimes(times.file, {
+      at: new Date().toISOString(),
+      branch: t.branch,
+      commit: checked,
+      ok: r.ok,
+      ...(r.ok ? {} : { exit: r.code }),
+      seconds: Math.round(r.durationMs / 1000),
+      waitedSeconds: Math.round(times.waitedMs / 1000),
+      ...(opts.dryRun ? { dryRun: true } : {}),
+      ...parseCheckTimes(r.text),
+    });
     if (!r.ok) {
       const tail = r.text.trimEnd().split('\n').slice(-CHECK_TAIL_LINES);
       return fail(

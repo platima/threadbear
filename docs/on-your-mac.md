@@ -110,11 +110,19 @@ File references are where to look.
   macOS's `lockf` (Linux's `flock`) with a small Node child to hold an OS
   lock from before rebasing until the check and fast-forward finish.
   Another landing waits; exiting, including a crash, releases the lock.
+  Beside it, `threadbear-land-times.log` records how long each landing's
+  check took (branch, commit, step times, no output), cut back at 1 MiB.
 - **The runner** listens on `127.0.0.1:8797` only, and needs a token
   (`runner/src/config.ts`). It starts the official `claude` and `codex`
-  CLIs for your threads.
+  CLIs for your threads. Each thread's CLI gets a key of its own in its
+  environment (`THREADBEAR_THREAD_KEY`), never the token. When something
+  connects, the runner runs `lsof` and `ps` on that one connection to see
+  which process it is and whether it's under a thread's CLI
+  (`runner/src/peer.ts`, docs/protocol.md "Who's really calling").
 - **With the `acpAgents` experiment on** (off by default) it also starts the
-  `opencode acp` and Cursor's `agent acp` CLIs for threads on them, and each
+  `opencode acp` and Cursor's `agent acp` CLIs for threads on them, runs each
+  with `--version` when the runner starts, and runs its own updater
+  (`opencode upgrade`, `agent update`) only when you press Update in the app, and each
   live thread on one has a listener on `127.0.0.1` on a port the system picks,
   serving that thread's Threadbear tools, needing a random token made for it.
 - **New installs start threads on Auto.** On Auto, Claude runs with its
@@ -155,6 +163,15 @@ File references are where to look.
   only hear about it when it needs you (including a step its mode asks
   you about). A later failure goes to the same thread.
   `followMain: false` turns this off with the rest.
+- **Following GitHub on a second machine** (`runner/src/follow-origin.ts`):
+  only with `followOrigin: true` in that machine's `runner.json`, which
+  nothing sets for you. Every 5 minutes the runner runs `git fetch origin
+  main` in its checkout (the only network call it adds, to whatever
+  `origin` is), fast-forwards that checkout's `main` when it can, and builds
+  and runs `origin/main`, with no signature check. It never resets or
+  rewrites anything: a commit made only there stays, and `tb status` says so.
+  `tb land` refuses in that repo. If `origin` is Mike's repo rather than
+  your own, leave this off.
 - **Schedule checks** (`runner/src/schedule-check.ts`, experiment
   `scheduleChecks`, off by default): a schedule's check command runs in
   `/bin/sh` before each run, as you, for at most a minute (or up to five,
@@ -173,11 +190,21 @@ File references are where to look.
   `upstream`'s `release/*` tags, fetches the newest few into a folder of
   their own (`<home>/runner/upstream-fetch`, deleted after each check),
   checks each with `ssh-keygen -Y verify` against the pinned key (the
-  signature goes in a temp file under `$TMPDIR` for a moment), and copies
-  the newest that passes into your checkout, as `refs/threadbear/upstream/`. It never changes your code by
+  signature goes in a temp file under `$TMPDIR` for a moment), fetches
+  upstream's `main` with them to check the tag's commit is on it, and
+  copies the newest that passes into your checkout, as
+  `refs/threadbear/upstream/`. A release's `scripts/release-signers` and
+  `scripts/release-keys-revoked` can change the pinned keys
+  (`<home>/upstream-signers`, `<home>/upstream-revoked`, and what's waiting
+  in `<home>/upstream-keys.json`, changed by one runner at a time under
+  `<home>/upstream-keys.lock`): a new key after a week, a revoked one at
+  once (`runner/src/release-keys.ts`). It never changes your code by
   itself. Every 5 days, when there's one your copy doesn't have, it starts
   one thread (on your own Claude or Codex login, on your default mode) that
-  merges it in a worktree, runs the checks and asks you before it lands
+  works out the merge without checking it out (`scripts/merge-preview.sh`,
+  in a throwaway repo under `$TMPDIR` it deletes), tells you what it brings
+  and asks; it runs nothing from the release (no checks, installs or builds)
+  until you say go, then merges, checks and lands
   (`runner/src/bring-in.ts`). A release Mike marks important starts one
   straight away. Settings › General › Updates from Mike, or
   `"releases": { "bringIn": 14 }` (or `"important"`, or `"off"`) in
@@ -283,7 +310,7 @@ File references are where to look.
 | downloads.claude.ai, registry.npmjs.org | Anthropic, npm | CLI version checks and installs; `npm ci` |
 | registry.npmjs.org (the Windows runner) | npm | Only a Windows install, on the runner's first start after it is installed or updated: the one tarball of the Claude Agent SDK (about 4 MB) that `runner/package-lock.json` names, checked against the hash in that file before it is unpacked (see "On Windows"). A plain request: npm sees the PC's address. Nothing else is sent. |
 | Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `cardReviewer` experiment on (off by default), an approval card in a thread on Auto, with the thread's first and latest messages, goes to Opus through the same CLI so it can decide in your place. With the `labReview` experiment on (off by default), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one. After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
-| OpenCode's Zen (opencode.ai), models.dev, and whichever providers you've logged it into | theirs | Only with the `acpAgents` experiment on and a thread on OpenCode: that thread's prompts and tool output, through the official CLI |
+| OpenCode's Zen (opencode.ai), models.dev, and whichever providers you've logged it into | theirs | Only with the `acpAgents` experiment on and a thread on OpenCode: that thread's prompts and tool output, through the official CLI, and small jobs' text when a pool of only OpenCode logins is picked for them in Settings |
 | Cursor (api2.cursor.sh) | theirs | Only with the `acpAgents` experiment on and a thread on Cursor: the same, on your own login |
 | Mike's push relay | Mike's | Only when a paired iPhone or Android phone gets a notification (an Android phone's goes on to Google's Firebase Cloud Messaging, from the relay). It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A Connectors gateway | whoever runs it | Only if one is set in `runner.json` or `~/.claude.json`. Its `/health` every few minutes (and once more at the end of a turn where a call to one of its services failed, to see if it needs signing in), and for a project with a Notion page, a Notion read or two every 5 minutes for its task board (`runner/src/notion-tasks.ts`), signed with the header the `headersHelper` command in that `connectors` entry prints, which it runs for each read |

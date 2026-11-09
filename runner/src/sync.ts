@@ -130,7 +130,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 66;
+export const BACKEND_API_VERSION = 67;
 // From this one sync:sharedThreads lists a runner's rows shared by link, which
 // it checks against its own threads on every start and every
 // SHARE_RECONCILE_MS (reconcileShares).
@@ -304,6 +304,9 @@ export const SECRETS_API_VERSION = 35;
 // (runner-stats.ts), and its heartbeat carries `pressure`; an older backend's
 // validator would turn the heartbeat down.
 export const RUNNER_STATS_API_VERSION = 45;
+// From this one a heartbeat can carry `followProblem` (follow-origin.ts); an
+// older backend's validator would turn the heartbeat down.
+export const FOLLOW_PROBLEM_API_VERSION = 67;
 // How far back a start looks for pictures, as new ones go up as they come.
 // Reading a whole log for each thread is too much to do for all of them on
 // every start, and it's the threads in use that Mike opens on the phone.
@@ -594,6 +597,9 @@ export type SyncDeps = {
   sharedUsage?: { setShared(rows: SharedReading[]): void };
   // This machine's figures (runner-stats.ts). Absent in tests, which report none.
   sample?: () => Promise<MachineStats>;
+  // What this machine has to say about following GitHub's main, for the
+  // heartbeat (update.ts, status().followProblem).
+  followProblem?: () => string | undefined;
   // For the sidebar table (thread-index.ts): telling the app about other
   // runners' threads, and the data dir their tokens are copied into.
   publish?: (n: Notification) => void;
@@ -3447,6 +3453,9 @@ export class ConvexSync {
   private heartbeat(): void {
     if (!this.running) return;
     this.scrubber.known.refreshIfDue();
+    // Git's errors and commit subjects, so through the scrubber like the rest.
+    const problem = (this.backendApiVersion ?? 0) >= FOLLOW_PROBLEM_API_VERSION ? this.deps.followProblem?.() : undefined;
+    const followProblem = problem ? { followProblem: this.scrubber.safeText(problem) } : {};
     const runner = {
       runnerId: this.runnerId,
       name: this.name,
@@ -3458,6 +3467,7 @@ export class ConvexSync {
       ...(this.deps.config.icon && (this.backendApiVersion ?? 0) >= RUNNER_ICON_API_VERSION ? { icon: this.deps.config.icon } : {}),
       ...(this.deps.config.rpcUrl && (this.backendApiVersion ?? 0) >= THREAD_INDEX_API_VERSION ? { rpcUrl: this.deps.config.rpcUrl } : {}),
       ...(this.stats?.pressure && (this.backendApiVersion ?? 0) >= RUNNER_STATS_API_VERSION ? { pressure: this.stats.pressure } : {}),
+      ...followProblem,
     };
     void this.post('mutation', 'sync:heartbeat', { key: this.deps.key, runner }).then(
       (r) => {
@@ -3622,6 +3632,11 @@ export class ConvexSync {
   /** Whether remoteThreads has heard from the backend (ThreadIndex.heard); true with sync off, as there's nothing to wait for. */
   remoteHeard(): boolean {
     return this.index?.heard() ?? true;
+  }
+
+  /** Runners online now that say they aren't following GitHub's main properly. */
+  behindRunners(): { name: string; problem: string }[] {
+    return (this.index?.current().runners ?? []).flatMap((r) => (r.online && r.followProblem ? [{ name: r.name, problem: r.followProblem }] : []));
   }
 
   /** remoteThreads.list: other runners' threads, empty with sync off. */
