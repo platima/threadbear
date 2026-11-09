@@ -30,7 +30,7 @@ export default defineConfig({
     strictPort: true,
     host: '127.0.0.1',
     fs: { allow: [path.resolve(here, '..')] },
-    proxy: { '/bridge': { target: 'ws://127.0.0.1:5185', ws: true }, '/upload': { target: 'http://127.0.0.1:5185' } },
+    proxy: { '/bridge': { target: 'ws://127.0.0.1:5185', ws: true }, '/terminal': { target: 'ws://127.0.0.1:5185', ws: true }, '/upload': { target: 'http://127.0.0.1:5185' } },
   },
   preview: { port: 5183, strictPort: true, host: '127.0.0.1' },
 });

@@ -208,6 +208,20 @@ const nodeModules = path.join(runner, 'node_modules');
   const ws = path.join(repo, 'desktop', 'node_modules', 'ws');
   if (!fs.existsSync(ws)) throw new Error('desktop/node_modules/ws is missing. Run npm ci in desktop/');
   copy(ws, path.join(desk, 'node_modules', 'ws'));
+  // The Terminal's pseudo-terminal (bridge/terminal.ts): @lydell/node-pty and the package
+  // for this platform with its prebuilt addon. desktop/node_modules has the build machine's
+  // platform only, so npm installs the target's (--os/--cpu) from the lockfile, checked
+  // against its hashes, in a folder of its own. Nothing is compiled and no script runs.
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-pty-'));
+  try {
+    for (const f of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(repo, 'desktop', f), path.join(work, f));
+    run('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--os=linux', `--cpu=${ARCHES[arch].node}`], { cwd: work });
+    const prebuilt = path.join(work, 'node_modules', '@lydell', `node-pty-linux-${ARCHES[arch].node}`, 'prebuilds', `linux-${ARCHES[arch].node}`, 'pty.node');
+    if (!fs.existsSync(prebuilt)) throw new Error(`The terminal's @lydell/node-pty-linux-${ARCHES[arch].node} package did not install, so the Terminal would not work. Is it in desktop/package-lock.json?`);
+    copy(path.join(work, 'node_modules', '@lydell'), path.join(desk, 'node_modules', '@lydell'));
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
 }
 
 // --- The docs the runner points agents at, licence, readmes

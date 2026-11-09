@@ -27,6 +27,9 @@ export type Snapshot = {
   accounts: Account[];
   pools: Pool[];
   threads: Map<string, ThreadSummary>;
+  // How many times the runner has given the whole list of threads (on each connect). Nonzero
+  // means a thread missing from `threads` is gone or archived, not just not loaded yet.
+  listings: number;
   archivedLoaded: boolean;
   selected?: string;
   loading: boolean;
@@ -39,7 +42,7 @@ export class AppStore {
   readonly model = new TranscriptModel();
   private events: PersistedEvent[] = [];
   private listeners = new Set<() => void>();
-  private snap: Snapshot = { conn: 'closed', accounts: [], pools: [], threads: new Map(), archivedLoaded: false, loading: false, version: 0, loadingEarlier: false, notices: [] };
+  private snap: Snapshot = { conn: 'closed', accounts: [], pools: [], threads: new Map(), listings: 0, archivedLoaded: false, loading: false, version: 0, loadingEarlier: false, notices: [] };
   private subscribed?: string;
   private firstSeq = 0;
   private earlierToken = 0;
@@ -129,7 +132,7 @@ export class AppStore {
       for (const t of threads) map.set(t.id, t);
       // Archived ones already loaded stay.
       for (const [id, t] of this.snap.threads) if (t.archivedAt && !map.has(id)) map.set(id, t);
-      this.set({ threads: map });
+      this.set({ threads: map, listings: this.snap.listings + 1 });
       if (this.snap.selected) await this.open(this.snap.selected, true);
     } catch (e) {
       // The connection closing under this is already said by the banner.

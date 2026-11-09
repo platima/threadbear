@@ -646,6 +646,15 @@ stops when the thread is archived or deleted, and they all stop when you
 quit Threadbear. The Terminal is a panel like the others: drag it
 beside the thread, into a tab, or out into a window of its own.
 
+The Windows and Linux app has it too, under the thread, with Ctrl+J. It
+starts PowerShell 7 if the PC has it and Windows PowerShell otherwise, and
+the menu in its header (and Settings, This app) changes the default: each
+WSL distribution, Git Bash and Command Prompt are listed as well, and on
+Linux your login shell and the others in `/etc/shells`. The choice applies
+the next time a shell starts. End shell stops the one running, and Ctrl+J
+hides the panel without stopping it. It has no panel layout to drag about:
+it sits under the thread and its height can be dragged.
+
 ## Highlights
 <!-- slug: highlights -->
 

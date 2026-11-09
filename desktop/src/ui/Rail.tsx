@@ -25,7 +25,7 @@ type Item = { id: string; title: string; hint?: string; icon: ReactNode; foot?: 
 // threads at the top, then at the foot Connectors, Runners, Updates, Usage and Settings, then this
 // window's own buttons. The Updates button carries a dot, and says so in its tooltip, while a newer
 // release is out; Usage is a honey pot filled to the room left.
-export function Rail({ route, go, conn, help, snap }: { route: string; go: (route: string) => void; conn: string; help: () => void; snap: Snapshot }) {
+export function Rail({ route, go, conn, help, snap, terminal, toggleTerminal }: { route: string; go: (route: string) => void; conn: string; help: () => void; snap: Snapshot; terminal: boolean; toggleTerminal: () => void }) {
   const [theme, setTheme] = useState<Theme>(readTheme);
   const update = useAvailableUpdate();
   const cycle = () => {
@@ -63,6 +63,9 @@ export function Rail({ route, go, conn, help, snap }: { route: string; go: (rout
       {items.filter((p) => !p.foot).map(button)}
       <span className="grow" />
       {items.filter((p) => p.foot).map(button)}
+      <button className={`ghost${terminal ? ' on' : ''}`} title="Terminal: a shell in this thread's folder, under the thread. Ctrl+J shows or hides it. Its shells keep running while it is hidden." aria-label="Terminal" aria-pressed={terminal} onClick={toggleTerminal}>
+        &gt;_
+      </button>
       <button className="ghost" title={`Appearance: ${theme === 'auto' ? "follows your system's light or dark setting" : theme}. Click to go round: system, dark, light.`} aria-label="Appearance" onClick={cycle}>
         {theme === 'dark' ? '☾' : theme === 'light' ? '☀︎' : '◐'}
       </button>

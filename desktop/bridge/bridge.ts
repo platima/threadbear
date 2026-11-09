@@ -47,6 +47,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket, { WebSocketServer } from 'ws';
 import { dataDirFor } from '../../runner/src/platform.ts';
+import { Terminals } from './terminal.ts';
 
 // What goes wrong in here is logged and the bridge carries on serving; the
 // shell hides this process' output, so this is for a person running it by hand.
@@ -356,6 +357,14 @@ server.on('clientError', (_err, socket) => {
 const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
 wss.on('error', (e) => log('websocket server:', e));
 
+// The Terminal's shells (terminal.ts): their own socket, for typing and output, and
+// small messages only. They end with this process, so a shell never outlives the app.
+const terminals = new Terminals();
+const termWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+termWss.on('error', (e) => log('terminal websocket server:', e));
+process.on('exit', () => terminals.stopAll());
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => process.exit(0));
+
 function refuse(socket: Duplex, code: number, text: string): void {
   try {
     socket.write(`HTTP/1.1 ${code} ${text}\r\nconnection: close\r\ncontent-length: 0\r\n\r\n`);
@@ -370,11 +379,12 @@ server.on('upgrade', (req, socket, head) => {
   socket.on('error', () => {});
   try {
     const t = target(req.url);
-    if (!t || t.path !== '/bridge' || !allowed(req.headers.origin, req.headers.host) || !keyOk(t.query.get('k'))) {
+    if (!t || (t.path !== '/bridge' && t.path !== '/terminal') || !allowed(req.headers.origin, req.headers.host) || !keyOk(t.query.get('k'))) {
       refuse(socket, 403, 'Forbidden');
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ui) => pipe(ui));
+    if (t.path === '/terminal') termWss.handleUpgrade(req, socket, head, (ui) => terminals.serve(ui));
+    else wss.handleUpgrade(req, socket, head, (ui) => pipe(ui));
   } catch (e) {
     log('upgrade failed:', e);
     refuse(socket, 400, 'Bad Request');

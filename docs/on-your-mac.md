@@ -441,13 +441,38 @@ said otherwise.
   shows a remote picture in a message as its description, not as a download.
   Pictures pasted into the composer are saved briefly under
   `%TEMP%\threadbear-uploads` and imported by the runner.
+- **The Terminal** (Ctrl+J, under the thread; `desktop/bridge/terminal.ts` and
+  `shells.ts`): the bridge starts a shell of yours in a pseudo-terminal (ConPTY
+  on Windows), one per thread you open it on, in that thread's folder, and only
+  when you ask for one (Ctrl+J, or Start a shell); looking at threads starts
+  nothing. The shells are the bridge's own child processes. A thread's shell
+  stops when the thread is archived or deleted, End shell stops one, and all of
+  them stop when the app quits (a shell that outlives a page reload is kept by
+  the bridge, which is why the window can be reloaded without losing it).
+  To list the shells it looks for `pwsh.exe` on the PATH and in `Program Files\PowerShell\7`,
+  `powershell.exe` and `cmd.exe` in `System32`, Git for Windows' `bash.exe` as the
+  runner does, and, if `System32\wsl.exe` is there, runs `wsl.exe -l -q` to
+  list the Linux distributions (a distribution's shell is `wsl.exe -d <name>
+  --cd <folder>`). On Linux it reads `$SHELL` and `/etc/shells`. The window can
+  only ask for a shell from that list, by its id; it never names a program. The
+  choice of default is kept in the page's local storage (Settings, "This app",
+  or the menu in the Terminal). A shell is given the bridge's environment less
+  `THREADBEAR_BRIDGE_KEY` and any thread id, plus `TERM`, `COLORTERM` and
+  `TERM_PROGRAM=Threadbear`. It runs what you type, as you, with no sandbox, the
+  same as any terminal. Its socket (`/terminal` on the bridge) takes the same
+  key and origin checks as the runner's, so another program on the PC without
+  the launch key can't open one. Nothing is sent anywhere. The pseudo-terminal
+  comes from `@lydell/node-pty` (MIT), a package of prebuilt binaries for the
+  platform (nothing is compiled), which on Windows includes Microsoft's
+  `conpty.dll` and `OpenConsole.exe` (MIT).
 - **Installers** (`installer/`, built by `.github/workflows/installers.yml`
   from `release.yml`): a setup exe (Inno Setup), an MSI (WiX) and a zip, for
   x64 and arm64. They put the app in `%LOCALAPPDATA%\Programs\Threadbear` (or
   Program Files for a system-wide install): `Threadbear.exe`, a pinned
   `node\node.exe` (its SHA-256 is checked at build time, `installer/node.json`),
   the runner's source and its production packages (not the Claude Agent SDK:
-  see the next item), the bridge and built UI, the
+  see the next item), the bridge and built UI (with `ws` and the Terminal's
+  `@lydell/node-pty` in `desktop\node_modules`), the
   guide and a few of the docs the guide points at, `README-WINDOWS.txt` and
   `THIRD-PARTY-NOTICES.txt`. They add a Start menu entry (the setup exe also
   one for the notices, and a desktop shortcut if asked) and an entry in

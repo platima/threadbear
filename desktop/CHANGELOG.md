@@ -15,7 +15,7 @@ release stops before anything is published if it is missing.
 
 ### ✨ Highlights
 
-- Threadbear for Windows: a window and a tray icon around the threads, asks and approvals the Mac app has, and most of its panels. Closing the window keeps it in the tray, and Quit ends it.
+- Threadbear for Windows: a window and a tray icon around the threads, asks and approvals the Mac app has, and most of its panels, a Terminal included (PowerShell, WSL, Git Bash). Closing the window keeps it in the tray, and Quit ends it.
 - The runner runs on Windows 11, with Claude Code. It starts when you sign in, through a Task Scheduler task the app offers to set up the first time you open it, and the app starts it again after an update. If you would rather it did not run all the time, say no and the app offers a runner that starts only while Threadbear is open and stops when you quit it.
 - When a login has run out, the error is shown once, with a button for each of `claude auth login` and `claude setup-token` that opens a terminal on it. Settings, "This app", has an Exit on close box (off by default, so closing the window still leaves the app in the tray).
 - Toasts when a thread needs you or finishes, a folder picker for new threads, and links that open in your browser. Several approvals at once come as one card with a tick on each call, as on the Mac, so a reply with eight edits is one click and not eight.
@@ -27,6 +27,7 @@ release stops before anything is published if it is missing.
 ### Added
 
 - The desktop app: threads, the transcript, the composer with pictures, asks and review cards, Projects, Schedules, Usage, Runners and Settings pages, Highlights, Actions, Agents and Files panes, a first-run tour, and the shortcuts sheet.
+- A Terminal under the thread (Ctrl+J), as the Mac app has: a real shell in the thread's folder, one for each thread, started only when you ask and kept running while you look at other threads, and found again if the window is reloaded. It starts PowerShell 7 if the PC has it and Windows PowerShell 5.1 otherwise; WSL distributions (listed by `wsl.exe`), Git Bash and Command Prompt are offered too, and the menu in its header, or Settings, "This app", changes the default. On Linux it uses your login shell. The shells are children of the app's bridge and end with it; the pseudo-terminal is `@lydell/node-pty` (prebuilt, MIT, with Microsoft's ConPTY files on Windows).
 - The rail is laid out as the Mac app's is: Threads, Projects and Scheduled at the top, and Connectors, Runners, Updates, Usage and Settings together at the foot. Usage is a honey pot filled to the room left on the login with the most room, and its tooltip says how much.
 - An Updates page, as the Mac app has an Updates panel: this app's version and whether a newer release is out, how the runner updates and whether threads are still finishing on a previous version, and Claude Code's updates, in one place.
 - A Connectors page, for a runner that has a Connectors gateway set up: the services your agents get from it, which need signing in, and buttons that open each sign-in page in your browser. The button is left out of the rail for a runner with no gateway, and gets a dot when a service needs you. The window never talks to the gateway; the runner does.

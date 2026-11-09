@@ -1,8 +1,58 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { REPO, setUpdateCheck, updateCheckOn } from '../../core/updates.ts';
+import { choiceLabel, terminals } from '../../core/terminals.ts';
 import { getExitOnClose, isNative, setExitOnClose } from '../../core/native.ts';
 import { APP_VERSION, runUpdateCheck, useAvailableUpdate, useSessionKeepsSettings } from '../update-state.ts';
 import { Card, Note } from './ops-ui.tsx';
+
+// Which shell the Terminal starts. The list is what the bridge finds on this PC (PowerShell 7 and
+// 5.1, each WSL distribution, Git Bash, Command Prompt); "Automatic" picks the first PowerShell.
+function TerminalShell() {
+  const sessions = terminals();
+  const state = useSyncExternalStore(sessions.subscribe, sessions.getSnapshot);
+  const [looking, setLooking] = useState(false);
+  const [kept, setKept] = useState(true);
+  useEffect(() => {
+    void sessions.loadShells();
+  }, [sessions]);
+  const info = state.shells;
+  const look = async () => {
+    setLooking(true);
+    await sessions.loadShells(true);
+    setLooking(false);
+  };
+  return (
+    <>
+      <div className="ops-row">
+        <label className="grow" title="The shell a new terminal starts with, under a thread (Ctrl+J)">
+          Terminal shell
+        </label>
+        <select
+          value={state.choice}
+          disabled={!info || !!info.unavailable}
+          title="The shell the Terminal starts with. It applies the next time a shell starts; one that is running is not changed."
+          onChange={(e) => setKept(sessions.setChoice(e.target.value))}
+        >
+          <option value="auto">{choiceLabel(info, 'auto')}</option>
+          {info?.shells.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.label}
+            </option>
+          ))}
+          {info && state.choice !== 'auto' && !info.shells.some((s) => s.id === state.choice) && <option value={state.choice}>{choiceLabel(info, state.choice)}</option>}
+        </select>
+        <button className="ghost" onClick={() => void look()} disabled={looking || !info} title="Look for shells again, after installing PowerShell 7 or a WSL distribution">
+          {looking ? 'Looking...' : 'Look again'}
+        </button>
+      </div>
+      <Note>
+        {info?.unavailable ?? 'Automatic uses PowerShell 7 if this PC has it, otherwise Windows PowerShell. WSL shells start in the thread\'s folder.'}
+        {info?.notes.map((n) => ` ${n}`)}
+        {!kept && ' This window can\'t keep the choice, so it lasts until the window closes.'}
+      </Note>
+    </>
+  );
+}
 
 // About the app itself rather than the runner: its version, and the one
 // network call it makes on its own (docs/on-your-mac.md, "On Windows").
@@ -45,6 +95,7 @@ export function AppSection() {
   return (
     <Card>
       <h3>Threadbear for Windows {APP_VERSION}</h3>
+      <TerminalShell />
       {exitOnClose !== undefined && (
         <>
           <label className="ops-row" title="Closing the window ends Threadbear, instead of leaving it in the tray">

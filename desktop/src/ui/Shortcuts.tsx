@@ -10,6 +10,7 @@ export function Shortcuts({ onClose, onTour }: { onClose: () => void; onTour: ()
     [`${mod}+1 to ${mod}+${Math.min(9, PAGES.length + 1)}`, 'Threads, then each page in the rail'],
     ['Enter', 'Send'],
     ['Shift+Enter', 'New line'],
+    [`${mod}+J`, 'Show or hide the terminal'],
     [`${mod}+/`, 'This list'],
     ['Esc', 'Close this list'],
   ];

@@ -631,6 +631,29 @@ the real registry it fetched 0.3.310 in about a second (21 files) and the runner
 imported `query`, `createSdkMcpServer` and `tool` from it. Asking Anthropic would
 still settle whether bundling is allowed, and would let this go if it is.
 
+### The Terminal (9 Nov 2026)
+
+The Mac app's Terminal panel (⌘J) is a SwiftTerm view with a pty. The window has the same
+under the thread: Ctrl+J, one shell per thread in its folder, started only on request.
+
+Where the pseudo-terminal lives was the one real choice. Rust (`portable-pty` in the shell)
+would have meant a new crate, a changed `Cargo.lock` that nothing here can regenerate
+without a Rust toolchain, an event channel from the shell to a page it serves from
+loopback, and no way to run any of it before CI. In the bridge it is Node: `@lydell/node-pty`
+(MIT) ships prebuilt binaries per platform, so nothing is compiled, and ConPTY comes with it.
+That made it testable on a Windows PC, and it works in a browser tab as well as the installed
+app. The shells are kept by the bridge, so a reloaded window finds them again with what they
+had printed (the last 256 KB), and they end with the bridge when the app quits.
+
+What was run, on Windows 11 x64 with PowerShell 7.6.2, Windows PowerShell 5.1 and a WSL 2
+Debian: the real bridge, a real WebSocket and a real shell in `bridge/terminal.test.ts`; and
+by hand in the built page: PowerShell 7 and `WSL: Debian` started from the menu, typing, colours,
+a reload attaching again, Ctrl+J hiding and showing it, light and dark themes, and the
+default shell in Settings and in the panel staying in step. `wsl.exe -l -q` prints UTF-16, so
+it is decoded as that (`parseWslList`). Not run: the installed app (the shell's webview), the
+arm64 and Linux packages (`stage.ps1` and `stage.mjs` fetch the target's package with
+`npm ci --os --cpu`, tried here for win32-arm64 only), and a Linux desktop.
+
 ## Upstream pull requests
 
 Scoped on 6 Nov 2026, against `mikecann/threadbear` at `d488512`. Nothing is
