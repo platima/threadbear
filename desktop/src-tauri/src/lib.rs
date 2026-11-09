@@ -16,6 +16,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -29,6 +30,17 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 // lives: the bridge ends itself when that pipe closes, which Windows does for
 // us if this program is killed or crashes (bridge.ts, THREADBEAR_BRIDGE_WATCH_STDIN).
 struct Bridge(Mutex<Option<Child>>);
+
+// Whether closing the window may leave the app running in the tray: on Windows
+// once the tray icon is made. Not on Linux, where making an indicator does not mean
+// the desktop shows it (GNOME shows none without an extension), so there closing the
+// window ends the app, as it always did.
+struct TrayReady(AtomicBool);
+
+// Set once this copy has started its bridge and window, so it is cleaned up when it
+// exits however it exits. (A copy that only gets `--quit` to hand on never sets it,
+// and so leaves a runner alone.)
+struct UiStarted(AtomicBool);
 
 // How long to wait for the bridge to say it is ready.
 const BRIDGE_READY: Duration = Duration::from_secs(20);
@@ -117,7 +129,7 @@ fn runner_script(args: &[String]) -> Result<(i32, String), String> {
 
 // What `--runner` may be followed by. Anything else is refused: the script
 // would otherwise ignore it and go on to install and start the task.
-const RUNNER_FLAGS: [&str; 6] = ["--installed", "--start", "--stop", "--uninstall", "--status", "--dry-run"];
+const RUNNER_FLAGS: [&str; 8] = ["--installed", "--start", "--stop", "--uninstall", "--status", "--dry-run", "--on-demand", "--mode"];
 
 fn unknown_runner_flag(rest: &[String]) -> Option<&String> {
     rest.iter().find(|a| !RUNNER_FLAGS.contains(&a.as_str()))
@@ -187,9 +199,9 @@ fn runner_command(rest: &[String]) -> ! {
     std::process::exit(code)
 }
 
-// Where a "no thanks" to the runner is remembered: %LOCALAPPDATA% on Windows,
-// $XDG_STATE_HOME (else ~/.local/state) on Linux.
-fn declined_marker() -> Option<PathBuf> {
+// Where this program keeps its own small notes: %LOCALAPPDATA%\Threadbear on
+// Windows, $XDG_STATE_HOME (else ~/.local/state)/Threadbear on Linux.
+fn state_dir() -> Option<PathBuf> {
     let base = if cfg!(windows) {
         PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
     } else if let Some(state) = std::env::var_os("XDG_STATE_HOME").filter(|s| !s.is_empty()) {
@@ -197,7 +209,159 @@ fn declined_marker() -> Option<PathBuf> {
     } else {
         PathBuf::from(std::env::var_os("HOME")?).join(".local").join("state")
     };
-    Some(base.join("Threadbear").join("declined-runner-task"))
+    Some(base.join("Threadbear"))
+}
+
+// Where a "no thanks" to the runner is remembered.
+fn declined_marker() -> Option<PathBuf> {
+    state_dir().map(|d| d.join("declined-runner-task"))
+}
+
+fn remember_declined() {
+    if let Some(m) = declined_marker() {
+        if let Some(dir) = m.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(m, "declined\n");
+    }
+}
+
+fn forget_declined() {
+    if let Some(m) = declined_marker() {
+        let _ = std::fs::remove_file(m);
+    }
+}
+
+// Where the "Exit on close" choice is kept: a file that is there when it is on.
+// It is read when the window is closed, so it lives where this program can read
+// it at once, not in the page's own saved state.
+fn exit_on_close_marker() -> Option<PathBuf> {
+    state_dir().map(|d| d.join("exit-on-close"))
+}
+
+fn exit_on_close_on() -> bool {
+    exit_on_close_marker().map(|m| m.exists()).unwrap_or(false)
+}
+
+// The page's "Exit on close" box (Settings, This app): whether closing the
+// window ends the app, instead of leaving it in the tray. Off unless asked for.
+// None on Linux, where closing the window always ends the app (see TrayReady), so
+// the page has no box to show.
+#[tauri::command]
+fn get_exit_on_close() -> Option<bool> {
+    if cfg!(windows) {
+        Some(exit_on_close_on())
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
+fn set_exit_on_close(on: bool) -> Result<(), String> {
+    let marker = exit_on_close_marker().ok_or("Couldn't find the folder to keep the choice in.")?;
+    if on {
+        if let Some(dir) = marker.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&marker, "on\n").map_err(|e| e.to_string())
+    } else {
+        match std::fs::remove_file(&marker) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+// The page's sign-in buttons, under a failed turn whose login ran out: a terminal
+// window running one of two fixed Claude Code commands, and nothing else (what is
+// run is chosen here, not by the page). `config_dir` is the login's own folder when
+// it isn't the default one; it goes to the command as CLAUDE_CONFIG_DIR.
+#[tauri::command]
+fn open_claude_login(kind: String, config_dir: Option<String>) -> Result<(), String> {
+    let args: &[&str] = match kind.as_str() {
+        "login" => &["auth", "login"],
+        "setup-token" => &["setup-token"],
+        _ => return Err("That isn't one of the sign-in commands.".to_string()),
+    };
+    let dir = match config_dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        Some(d) if Path::new(d).is_dir() => Some(d.to_string()),
+        Some(_) => return Err("That login's folder isn't there.".to_string()),
+        None => None,
+    };
+    open_in_terminal("claude", args, dir.as_deref())
+}
+
+// A console window of its own, left open (cmd /K) so the person can read what the
+// command says: `claude setup-token` prints a token there.
+#[cfg(windows)]
+fn open_in_terminal(program: &str, args: &[&str], config_dir: Option<&str>) -> Result<(), String> {
+    let mut cmd = Command::new("cmd.exe");
+    cmd.args(["/C", "start", "Threadbear: sign in", "cmd.exe", "/K", program]).args(args);
+    if let Some(d) = config_dir {
+        cmd.env("CLAUDE_CONFIG_DIR", d);
+    }
+    // The cmd that runs `start` stays hidden; `start` opens the visible window.
+    hide_window(&mut cmd);
+    cmd.spawn().map(|_| ()).map_err(|e| format!("Couldn't open a terminal ({e})."))
+}
+
+// Whichever terminal this desktop has, tried in turn, running the command and then
+// waiting for Enter so what it printed can be read.
+#[cfg(not(windows))]
+fn open_in_terminal(program: &str, args: &[&str], config_dir: Option<&str>) -> Result<(), String> {
+    let terminals: [(&str, &[&str]); 5] = [("x-terminal-emulator", &["-e"]), ("gnome-terminal", &["--"]), ("konsole", &["-e"]), ("xfce4-terminal", &["-x"]), ("xterm", &["-e"])];
+    for (terminal, flags) in terminals {
+        let mut cmd = Command::new(terminal);
+        cmd.args(flags)
+            .arg("sh")
+            .arg("-c")
+            .arg("\"$@\"; printf '\\nPress Enter to close this window. '; read _")
+            .arg("sh")
+            .arg(program)
+            .args(args);
+        if let Some(d) = config_dir {
+            cmd.env("CLAUDE_CONFIG_DIR", d);
+        }
+        if cmd.spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    Err(format!("No terminal was found to open. Run it yourself: {} {}", program, args.join(" ")))
+}
+
+// How the runner is set up, by the script's own `--mode`: starting at sign-in,
+// only when something starts it (this app, when it opens), or not at all.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum RunnerMode {
+    None,
+    SignIn,
+    OnDemand,
+}
+
+fn parse_runner_mode(text: &str) -> RunnerMode {
+    match text.trim() {
+        "sign-in" => RunnerMode::SignIn,
+        "on-demand" => RunnerMode::OnDemand,
+        _ => RunnerMode::None,
+    }
+}
+
+// If the script can't say, it is taken as no runner of ours: nothing is stopped
+// on quit that this can't vouch for.
+fn runner_mode() -> RunnerMode {
+    match runner_script(&["--mode".to_string()]) {
+        Ok((0, text)) => parse_runner_mode(&text),
+        _ => RunnerMode::None,
+    }
+}
+
+// A runner that was set up to run only while this app is open ends with it. A
+// runner that starts at sign-in is left running, as it always was.
+fn stop_runner_if_on_demand() {
+    if runner_mode() == RunnerMode::OnDemand {
+        let _ = runner_script(&["--stop".to_string()]);
+    }
 }
 
 // What the app tells the person when it offers to set the runner up.
@@ -219,6 +383,89 @@ fn offer_text() -> String {
     }
 }
 
+// What the app tells the person when it offers a runner that starts only while
+// the app is open, which is the other way to have one.
+fn on_demand_text() -> String {
+    if cfg!(windows) {
+        format!(
+            "Start the runner only while Threadbear is open instead?\n\n\
+             Threadbear does nothing without its runner. This way it starts when you open Threadbear and stops when you quit it; \
+             closing the window leaves it running in the tray. Nothing starts when you sign in.\n\n\
+             This adds a Task Scheduler task for your account with no sign-in trigger (no admin rights) and puts the tb command on your PATH. \
+             {} --runner --uninstall removes both.",
+            program_name()
+        )
+    } else {
+        format!(
+            "Start the runner only while Threadbear is open instead?\n\n\
+             Threadbear does nothing without its runner. This way it starts when you open Threadbear and stops when you quit it; \
+             closing the window quits it. Nothing starts when you log in.\n\n\
+             This adds a systemd user service for your account (no root), which is not enabled, and puts the tb command in ~/.local/bin. \
+             {} --runner --uninstall removes both.",
+            program_name()
+        )
+    }
+}
+
+// Runs the setup script with these arguments and says in a window if it could not.
+fn install_runner(handle: &AppHandle, args: &[String]) {
+    match runner_script(args) {
+        Ok((0, _)) => {}
+        Ok((_, text)) | Err(text) => {
+            handle
+                .dialog()
+                .message(format!("The runner could not be set up.\n\n{text}"))
+                .title("Threadbear")
+                .kind(MessageDialogKind::Error)
+                .show(|_| {});
+        }
+    }
+}
+
+// Offers the runner that starts at sign-in. Declined on the first run (not
+// `asked`), it goes on to offer the one that runs only while the app is open,
+// and only when that is declined too is the "no thanks" remembered. Asked for from
+// the tray, a "no thanks" changes nothing.
+fn offer_sign_in(app: &AppHandle, asked: bool) {
+    let handle = app.clone();
+    app.dialog()
+        .message(offer_text())
+        .title("Set up the runner?")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom("Set up".into(), "No thanks".into()))
+        .show(move |yes| {
+            if !yes {
+                if !asked {
+                    offer_on_demand(&handle, false);
+                }
+                return;
+            }
+            forget_declined();
+            install_runner(&handle, &[]);
+        });
+}
+
+// Offers the runner that starts when the app opens and stops when it quits. A
+// "no thanks" is remembered unless this was asked for from the tray or the page.
+fn offer_on_demand(app: &AppHandle, asked: bool) {
+    let handle = app.clone();
+    app.dialog()
+        .message(on_demand_text())
+        .title("Run the runner while Threadbear is open?")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom("Only while open".into(), "No thanks".into()))
+        .show(move |yes| {
+            if !yes {
+                if !asked {
+                    remember_declined();
+                }
+                return;
+            }
+            forget_declined();
+            install_runner(&handle, &["--on-demand".to_string()]);
+        });
+}
+
 // The runner is a Task Scheduler task (a systemd user service on Linux) for this
 // user, and installing the app does not make one (an MSI, a portable zip or a
 // tarball can't do it per user), so the app offers it the first time it opens
@@ -229,54 +476,103 @@ fn offer_runner(app: &AppHandle, asked: bool) {
     if !asked && std::env::var_os("THREADBEAR_NO_RUNNER_OFFER").is_some() {
         return;
     }
-    let installed = matches!(runner_script(&["--installed".to_string()]), Ok((0, _)));
-    if installed {
+    let mode = runner_mode();
+    if mode != RunnerMode::None {
         // The installer stops the task while it upgrades the app, and nothing
-        // else brings it back before the next sign-in, so start it if it isn't running.
-        let _ = runner_script(&["--start".to_string()]);
-        if asked {
-            app.dialog()
-                .message("The runner already starts when you sign in.")
-                .title("Threadbear")
-                .kind(MessageDialogKind::Info)
-                .show(|_| {});
+        // else brings it back before the next sign-in (or, for a runner that
+        // runs only while the app is open, at all), so start it if it isn't running.
+        // A failure is said in a window when someone asked, and only logged otherwise.
+        let started = start_registered(app, asked);
+        if asked && started {
+            if mode == RunnerMode::OnDemand {
+                // Only while the app is open now: switch it to sign-in if that is what was asked.
+                offer_sign_in(app, true);
+            } else {
+                app.dialog()
+                    .message("The runner already starts when you sign in.")
+                    .title("Threadbear")
+                    .kind(MessageDialogKind::Info)
+                    .show(|_| {});
+            }
         }
         return;
     }
     if !asked && declined_marker().map(|m| m.exists()).unwrap_or(false) {
         return;
     }
-    let handle = app.clone();
-    app.dialog()
-        .message(offer_text())
-        .title("Set up the runner?")
+    offer_sign_in(app, asked);
+}
+
+// Starts the runner task if it is set up (it also counts as started if it was already
+// running). A failure is said in a window when `tell` (someone asked for the start),
+// and only logged otherwise. Whether it started.
+fn start_registered(app: &AppHandle, tell: bool) -> bool {
+    match runner_script(&["--start".to_string()]) {
+        Ok((0, _)) => true,
+        Ok((_, text)) | Err(text) => {
+            if tell {
+                app.dialog()
+                    .message(format!("The runner could not be started.\n\n{text}"))
+                    .title("Threadbear")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            } else {
+                eprintln!("The runner could not be started: {text}");
+            }
+            false
+        }
+    }
+}
+
+// The tray's "only while Threadbear is open" item.
+fn offer_runner_while_open(app: &AppHandle) {
+    if runner_mode() == RunnerMode::OnDemand {
+        if start_registered(app, true) {
+            app.dialog()
+                .message("The runner already starts when Threadbear opens, and stops when you quit it.")
+                .title("Threadbear")
+                .kind(MessageDialogKind::Info)
+                .show(|_| {});
+        }
+        return;
+    }
+    offer_on_demand(app, true);
+}
+
+// The page's "Start the runner" button, for when it can't reach a runner: one that is
+// set up is started, and with none the person is offered the kind that runs only while
+// the app is open. It answers only when that is done or declined, so the page can show
+// it is working until then and not take a second click; a failure comes back as words
+// for the page.
+#[tauri::command]
+async fn start_runner(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || start_or_set_up(&app))
+        .await
+        .map_err(|e| format!("The runner could not be started ({e})."))?
+}
+
+fn start_or_set_up(app: &AppHandle) -> Result<(), String> {
+    if runner_mode() != RunnerMode::None {
+        return match runner_script(&["--start".to_string()]) {
+            Ok((0, _)) => Ok(()),
+            Ok((_, text)) | Err(text) => Err(format!("The runner could not be started.\n\n{text}")),
+        };
+    }
+    let yes = app
+        .dialog()
+        .message(on_demand_text())
+        .title("Run the runner while Threadbear is open?")
         .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancelCustom("Set up".into(), "No thanks".into()))
-        .show(move |yes| {
-            if !yes {
-                if let Some(m) = declined_marker() {
-                    if let Some(dir) = m.parent() {
-                        let _ = std::fs::create_dir_all(dir);
-                    }
-                    let _ = std::fs::write(m, "declined\n");
-                }
-                return;
-            }
-            if let Some(m) = declined_marker() {
-                let _ = std::fs::remove_file(m);
-            }
-            match runner_script(&[]) {
-                Ok((0, _)) => {}
-                Ok((_, text)) | Err(text) => {
-                    handle
-                        .dialog()
-                        .message(format!("The runner could not be set up.\n\n{text}"))
-                        .title("Threadbear")
-                        .kind(MessageDialogKind::Error)
-                        .show(|_| {});
-                }
-            }
-        });
+        .buttons(MessageDialogButtons::OkCancelCustom("Only while open".into(), "No thanks".into()))
+        .blocking_show();
+    if !yes {
+        return Ok(());
+    }
+    forget_declined();
+    match runner_script(&["--on-demand".to_string()]) {
+        Ok((0, _)) => Ok(()),
+        Ok((_, text)) | Err(text) => Err(format!("The runner could not be set up.\n\n{text}")),
+    }
 }
 
 // The folder with bridge/bridge.ts in it: THREADBEAR_DESKTOP_DIR, or the one
@@ -456,6 +752,7 @@ fn start_ui(app: &mut tauri::App) -> Result<(), String> {
     let desktop = find_desktop_dir().ok_or("Couldn't find the desktop folder with bridge/bridge.ts in it. Set THREADBEAR_DESKTOP_DIR.")?;
     let (child, url) = start_bridge(&desktop)?;
     *app.state::<Bridge>().0.lock().unwrap() = Some(child);
+    app.state::<UiStarted>().0.store(true, Ordering::Relaxed);
     let address: tauri::Url = url.parse().map_err(|e| format!("The bridge gave an address that isn't one ({url}): {e}"))?;
 
     WebviewWindowBuilder::new(app, "main", WebviewUrl::External(address))
@@ -480,7 +777,8 @@ fn start_ui(app: &mut tauri::App) -> Result<(), String> {
     match build_tray(app) {
         Err(why) if cfg!(windows) => return Err(why),
         Err(why) => eprintln!("{why}"),
-        Ok(()) => {}
+        // Only on Windows does a tray icon that was made mean one that is shown (see TrayReady).
+        Ok(()) => app.state::<TrayReady>().0.store(cfg!(windows), Ordering::Relaxed),
     }
 
     // Offer the runner on the first run, or start it if it is set up but
@@ -491,13 +789,15 @@ fn start_ui(app: &mut tauri::App) -> Result<(), String> {
     Ok(())
 }
 
-// The tray icon and its menu: show the window, set up the runner, quit.
+// The tray icon and its menu: show the window, set up the runner (at sign-in, or
+// only while the app is open), quit.
 fn build_tray(app: &mut tauri::App) -> Result<(), String> {
     let build_err = |e: tauri::Error| format!("Couldn't set up the tray icon ({e}).");
     let show = MenuItem::with_id(app, "show", "Show Threadbear", true, None::<&str>).map_err(build_err)?;
     let runner = MenuItem::with_id(app, "runner", "Start the runner at sign-in...", true, None::<&str>).map_err(build_err)?;
+    let runner_open = MenuItem::with_id(app, "runner_open", "Start the runner only while Threadbear is open...", true, None::<&str>).map_err(build_err)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).map_err(build_err)?;
-    let menu = Menu::with_items(app, &[&show, &runner, &quit]).map_err(build_err)?;
+    let menu = Menu::with_items(app, &[&show, &runner, &runner_open, &quit]).map_err(build_err)?;
     let mut tray = TrayIconBuilder::new()
         .tooltip("Threadbear")
         .menu(&menu)
@@ -507,6 +807,10 @@ fn build_tray(app: &mut tauri::App) -> Result<(), String> {
             "runner" => {
                 let app = app.clone();
                 std::thread::spawn(move || offer_runner(&app, true));
+            }
+            "runner_open" => {
+                let app = app.clone();
+                std::thread::spawn(move || offer_runner_while_open(&app));
             }
             "quit" => app.exit(0),
             _ => {}
@@ -552,6 +856,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Bridge(Mutex::new(None)))
+        .manage(TrayReady(AtomicBool::new(false)))
+        .manage(UiStarted(AtomicBool::new(false)))
+        // What the page may ask of the shell besides the plugins' own commands
+        // (capabilities/default.json): the "Exit on close" box and "Start the runner".
+        .invoke_handler(tauri::generate_handler![get_exit_on_close, set_exit_on_close, start_runner, open_claude_login])
         .setup(move |app| {
             // --quit with nothing running: there is nothing to end, so do not
             // start. (With a copy running, the plugin hands this launch's
@@ -567,12 +876,14 @@ pub fn run() {
             }
             Ok(())
         })
-        // Closing the window keeps the app in the tray; Quit in its menu ends it.
-        // (Not on Linux, where a tray may not be there to bring the window back
-        // from: closing it ends the app, and the runner goes on as its service.)
+        // On Windows, closing the window keeps the app in the tray; Quit in its menu ends it.
+        // Not when the person turned on "Exit on close" (Settings, This app). On Linux closing
+        // it always ends the app (a tray may not be shown), and a runner that starts at login
+        // goes on as its service.
         .on_window_event(|window, event| {
-            if cfg!(windows) {
-                if let WindowEvent::CloseRequested { api, .. } = event {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let tray = window.app_handle().state::<TrayReady>().0.load(Ordering::Relaxed);
+                if tray && !exit_on_close_on() {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -583,8 +894,16 @@ pub fn run() {
 
     app.run(|app, event| {
         if let RunEvent::Exit = event {
-            if let Some(mut child) = app.state::<Bridge>().0.lock().unwrap().take() {
+            let bridge = app.state::<Bridge>().0.lock().unwrap().take();
+            if let Some(mut child) = bridge {
                 let _ = child.kill();
+            }
+            // A runner set up to run only while the app is open ends with it, whichever way
+            // the app ends (a failed bridge has taken its child already, which is why this
+            // goes by UiStarted). A copy that never got as far as a window, `--quit` with
+            // nothing running, leaves the runner alone.
+            if app.state::<UiStarted>().0.load(Ordering::Relaxed) {
+                stop_runner_if_on_demand();
             }
         }
     });
@@ -605,12 +924,34 @@ mod tests {
     }
 
     #[test]
+    fn the_scripts_mode_is_read_and_anything_else_is_no_runner() {
+        assert_eq!(parse_runner_mode("sign-in"), RunnerMode::SignIn);
+        assert_eq!(parse_runner_mode("on-demand\n"), RunnerMode::OnDemand);
+        assert_eq!(parse_runner_mode("  none "), RunnerMode::None);
+        // Whatever it can't read is no runner of ours, so nothing is stopped on quit by guesswork.
+        assert_eq!(parse_runner_mode(""), RunnerMode::None);
+        assert_eq!(parse_runner_mode("sign-in on-demand"), RunnerMode::None);
+        assert_eq!(parse_runner_mode("ERROR: something"), RunnerMode::None);
+    }
+
+    #[test]
+    fn the_exit_on_close_choice_is_kept_beside_the_declined_note() {
+        let (a, b) = (exit_on_close_marker(), declined_marker());
+        if let (Some(a), Some(b)) = (a, b) {
+            assert_eq!(a.parent(), b.parent());
+            assert_ne!(a, b);
+        }
+    }
+
+    #[test]
     fn only_the_scripts_own_options_follow_runner() {
         let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert!(unknown_runner_flag(&args(&[])).is_none());
         assert!(unknown_runner_flag(&args(&["--status"])).is_none());
         assert!(unknown_runner_flag(&args(&["--start"])).is_none());
         assert!(unknown_runner_flag(&args(&["--dry-run", "--uninstall"])).is_none());
+        assert!(unknown_runner_flag(&args(&["--on-demand"])).is_none());
+        assert!(unknown_runner_flag(&args(&["--mode"])).is_none());
         assert_eq!(unknown_runner_flag(&args(&["--staus"])).map(String::as_str), Some("--staus"));
         assert_eq!(unknown_runner_flag(&args(&["--status", "now"])).map(String::as_str), Some("now"));
     }

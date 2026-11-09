@@ -3,7 +3,7 @@
 // top: tool output, diffs, cards. Events come in `seq` order; an older page
 // of them means building again from the start.
 
-import type { AnyEvent, ApprovalDecision, ApprovalOption, AskAnswer, DesignReview, Hunk, ImageRef, NeedsWho, PersistedEvent, PlanEntry, QueuedCall, Question, ReviewDraft, ToolKind, TurnOutcome } from './types.ts';
+import type { AnyEvent, ApprovalDecision, ApprovalOption, AskAnswer, DesignReview, Hunk, ImageRef, NeedsWho, PersistedEvent, PlanEntry, QueuedCall, Question, ReviewDraft, ToolKind, TurnErrorKind, TurnOutcome } from './types.ts';
 import type { TurnMessage } from '../../../web/src/turns.ts';
 
 export type ToolData = {
@@ -39,6 +39,7 @@ export type Row = TurnMessage & {
   costUsd?: number;
   ok?: boolean;
   detail?: string; // an action's command, a turn's error
+  errorKind?: TurnErrorKind; // what a failed turn's error was, once the runner says: the login ran out, the limit, the network
 };
 
 export type Streaming = { itemId: string; type: 'assistant.text' | 'reasoning'; text: string };
@@ -225,14 +226,25 @@ export class TranscriptModel {
         this.streaming.clear();
         this.lastEnd = { seq: e.seq, outcome: e.outcome, needs: e.needs, next: e.next };
         if (e.outcome !== 'completed' || e.error) {
-          this.push({ ...base, id: `e${e.seq}`, kind: 'turnEnd', role: 'tool', text: e.error ?? (e.outcome === 'interrupted' ? 'Stopped' : 'Failed'), outcome: e.outcome, durationMs: e.durationMs, detail: e.error });
+          // The runner sends the error as its own event first, and then says it again
+          // on the turn's end. One row says it, and learns what kind of error it was.
+          const said = e.error ? this.errorRowIn(base.turn, e.error) : undefined;
+          if (said) {
+            if (e.errorKind) {
+              said.errorKind = e.errorKind;
+              this.touch(said);
+            }
+          } else {
+            this.push({ ...base, id: `e${e.seq}`, kind: 'turnEnd', role: 'tool', text: e.error ?? (e.outcome === 'interrupted' ? 'Stopped' : 'Failed'), outcome: e.outcome, durationMs: e.durationMs, detail: e.error, ...(e.errorKind ? { errorKind: e.errorKind } : {}) });
+          }
         }
         break;
       case 'system.note':
         this.push({ ...base, id: `n${e.seq}`, kind: 'note', role: 'tool', text: e.text });
         break;
       case 'error':
-        this.push({ ...base, id: `x${e.seq}`, kind: 'error', role: 'tool', text: e.message });
+        // The same error twice in a turn (a retry that fails the same way) is said once.
+        if (!this.errorRowIn(base.turn, e.message)) this.push({ ...base, id: `x${e.seq}`, kind: 'error', role: 'tool', text: e.message });
         break;
       case 'action.run':
         this.push({ ...base, id: `c${e.seq}`, kind: 'action', role: 'tool', text: e.title, ok: e.ok, detail: e.text, durationMs: e.durationMs });
@@ -285,6 +297,17 @@ export class TranscriptModel {
 
   private touch(r: Row): void {
     r.rev = (r.rev ?? 0) + 1;
+  }
+
+  // This turn's error row with exactly this text, if one is already there: looked for
+  // back to the turn's start (the last message or turn end), not through earlier turns.
+  private errorRowIn(turn: string | undefined, text: string): Row | undefined {
+    for (let i = this.rows.length - 1; i >= 0; i--) {
+      const r = this.rows[i]!;
+      if (r.kind === 'user' || r.kind === 'turnEnd') break;
+      if (r.kind === 'error' && r.text === text && r.turn === turn) return r;
+    }
+    return undefined;
   }
 
   private push(r: Row): void {

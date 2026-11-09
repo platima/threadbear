@@ -328,13 +328,13 @@ export function Composer({ store, snap, busy = false }: { store: AppStore; snap:
           )}
           {existing && t ? (
             <>
-              <ModelMenu account={account} provider={t.provider} model={t.model} inUse={t.modelInUse} disabled={!online} onPick={(id) => change({ model: id })} />
+              <ModelMenu account={account} provider={t.provider} model={t.model} inUse={t.modelInUse} disabled={!online} offline={!online} onPick={(id) => change({ model: id })} />
               <EffortMenu account={account} model={t.model} inUse={t.modelInUse} effort={t.effort} now={t.effortInUse ?? account?.defaultEffort ?? defaults?.efforts?.[t.provider]} disabled={!online} onPick={(level) => change({ effort: level })} />
               <ModeMenu mode={t.permissionMode} disabled={!online} onPick={(m) => change({ permissionMode: m })} />
             </>
           ) : (
             <>
-              <ModelMenu account={account} provider={account?.provider} model={model} inUse={newDefaultModel} onPick={(id) => { setModel(id ?? undefined); setEffort(undefined); }} />
+              <ModelMenu account={account} provider={account?.provider} model={model} inUse={newDefaultModel} offline={!online} onPick={(id) => { setModel(id ?? undefined); setEffort(undefined); }} />
               <EffortMenu account={account} model={model} inUse={newDefaultModel} effort={effort} now={account?.defaultEffort ?? (account ? defaults?.efforts?.[account.provider] : undefined)} onPick={(l) => setEffort(l ?? undefined)} />
               <ModeMenu mode={mode} onPick={setMode} />
             </>

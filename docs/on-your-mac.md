@@ -279,7 +279,7 @@ File references are where to look.
 | Convex (the Convex panel) | yours | Only for a thread in a Convex project, when its Convex panel opens: the runner's Convex CLI asks api.convex.dev for the project's deployments and a deploy key, the runner asks the deployment whether a kept key still works (`/api/check_admin_key`), and the panel loads Convex's embedded dashboard (dashboard-embedded.convex.dev) with that key. Sign in to Convex goes to auth.convex.dev. (`runner/src/convex-keys.ts`) |
 | Your other Macs, over ssh | yours | Only when you run `tb runner add <name> --ssh <host>` or `tb runner check --ssh <host>` on your first Mac: it reads that Mac's Threadbear `runner.json`, writes its id and the deployment's address there if it hasn't them, writes its new key into that Mac's `secrets/convex-key`, and looks whether that Mac has a deploy key, Convex panel keys or a Convex login (names only, never a key), through your own ssh setup with agent and port forwarding off (`runner/src/runner-keys.ts`). `tb runner audit` asks this Mac's runner for its threads' last seqs and your deployment for what the main key made. `tb runner rotate-owner` sets env vars on your deployment with your deploy key, and, if you give it a Convex team access token for that run (`CONVEX_TEAM_TOKEN`, never kept), asks api.convex.dev for the deployment's deploy keys (their names and dates) before it rotates. |
 | GitHub | Mike's repo | Release tags fetched every 6 hours; the fork at setup |
-| GitHub (the Windows app) | the fork's | Only the installed Windows app (see "On Windows"): `api.github.com/repos/<the fork>/releases/latest` once a day, to say in its rail when a newer release is out. A plain request: GitHub sees the PC's address and the app's user agent, and nothing else is sent. Settings, "This app", turns it off. |
+| GitHub (the Windows app) | the fork's | Only the installed Windows app (see "On Windows"): `api.github.com/repos/<the fork>/releases/latest` once a day (the recent releases, `.../releases?per_page=10`, for a copy that is itself a pre-release, since "latest" never includes one), to say in its rail when a newer release is out. A plain request: GitHub sees the PC's address and the app's user agent, and nothing else is sent. Settings, "This app", turns it off. |
 | downloads.claude.ai, registry.npmjs.org | Anthropic, npm | CLI version checks and installs; `npm ci` |
 | registry.npmjs.org (the Windows runner) | npm | Only a Windows install, on the runner's first start after it is installed or updated: the one tarball of the Claude Agent SDK (about 4 MB) that `runner/package-lock.json` names, checked against the hash in that file before it is unpacked (see "On Windows"). A plain request: npm sees the PC's address. Nothing else is sent. |
 | Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `cardReviewer` experiment on (off by default), an approval card in a thread on Auto, with the thread's first and latest messages, goes to Opus through the same CLI so it can decide in your place. With the `labReview` experiment on (off by default), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one. After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
@@ -485,14 +485,30 @@ said otherwise.
   logs and the data.
 - **The runner's task is offered, not assumed:** the first time the installed
   app opens, it asks once whether to start the runner when you sign in to
-  Windows, and sets that task up (the item above) if you say yes. "No thanks"
-  is remembered in `%LOCALAPPDATA%\Threadbear\declined-runner-task`; the tray
-  menu's "Start the runner at sign-in..." asks again. Each time the app opens
-  with the task registered it runs `--runner --start`, so the runner comes back
-  after an update. `Threadbear.exe --runner [--installed | --start | --stop |
-  --status | --uninstall | --dry-run]` runs the same script from a terminal or
-  an installer (its answer prints to the terminal that started it; an unknown
-  flag is refused).
+  Windows, and sets that task up (the item above) if you say yes. On "No
+  thanks" it asks a second question: whether to start the runner only while
+  Threadbear is open. Yes makes the same task with no logon trigger
+  (`install-windows.mjs --on-demand`), so nothing starts it at sign-in; the app
+  starts it when it opens and stops it (`--stop`) when it quits, and
+  `--mode` tells the app which kind it is (`sign-in`, `on-demand` or `none`).
+  A second "No thanks" is remembered in
+  `%LOCALAPPDATA%\Threadbear\declined-runner-task`. The tray menu's "Start the
+  runner at sign-in..." and "Start the runner only while Threadbear is open..."
+  ask again and switch from one kind to the other, and the connection banner's
+  "Start the runner" button starts a set-up runner or offers the second kind.
+  Each time the app opens with the task registered it runs `--runner --start`,
+  so the runner comes back after an update. `Threadbear.exe --runner
+  [--installed | --start | --stop | --status | --uninstall | --dry-run |
+  --on-demand | --mode]` runs the same script from a terminal or an installer
+  (its answer prints to the terminal that started it; an unknown flag is
+  refused).
+- **Exit on close** (Settings, This app): off by default, so closing the window
+  leaves the app in the tray. On, closing it ends the app. The choice is the
+  file `%LOCALAPPDATA%\Threadbear\exit-on-close`, which is there when it is on
+  (the shell reads it when the window is closed). On Linux there is no box:
+  closing the window always ends the app there, since making a tray indicator
+  does not mean the desktop shows it, and a runner set up to run only while the
+  app is open stops with it.
 - **The update check** (`desktop/src/core/updates.ts`): the installed app asks
   `api.github.com/repos/<the fork>/releases/latest` once a day (a plain
   request, so GitHub sees the PC's address and the app's user agent, and

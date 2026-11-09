@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { errorText, type AppStore, type Snapshot } from '../core/store.ts';
-import { PANES } from './registry.ts';
+import { PANES, tip } from './registry.ts';
 import { Transcript } from './Transcript.tsx';
 import { Composer } from './Composer.tsx';
 import './thread/thread.css';
@@ -123,16 +123,16 @@ export function ThreadView({ store, snap }: { store: AppStore; snap: Snapshot })
         )}
         {problem && <span className="error">{problem}</span>}
         {panes.map((p) => (
-          <button key={p.id} className={p.id === tab ? 'on' : ''} title={p.title} onClick={() => pick(p.id)}>
+          <button key={p.id} className={p.id === tab ? 'on' : ''} title={tip(p.title, p.hint)} onClick={() => pick(p.id)}>
             {p.title}
             {p.badge?.(t) ? <span className="badge">{p.badge(t)}</span> : null}
           </button>
         ))}
-        <button title={t.starredAt ? 'Unstar' : 'Star'} onClick={() => change({ starred: !t.starredAt })}>
+        <button title={t.starredAt ? 'Starred. Click to take it out of the Starred section at the top of the sidebar.' : 'Star this thread to keep it in the Starred section at the top of the sidebar'} onClick={() => change({ starred: !t.starredAt })}>
           {t.starredAt ? '★' : '☆'}
         </button>
         <select
-          title="Hibernate"
+          title="Hibernate this thread: put it away until a time you choose. Its agent stops and it leaves the list, then it comes back marked unread. A thread that is already hibernating can be woken here."
           value=""
           onChange={(e) => {
             const v = e.target.value;
@@ -145,10 +145,10 @@ export function ThreadView({ store, snap }: { store: AppStore; snap: Snapshot })
           </option>
           <option value="1h">For an hour</option>
           <option value="tomorrow">Until tomorrow</option>
-          <option value="restart">Until restart</option>
+          <option value="restart">Until the runner restarts</option>
           {(t.snoozedUntil || t.snoozedUntilRestart) && <option value="wake">Wake now</option>}
         </select>
-        <button title={t.archivedAt ? 'Move this thread back to the inbox' : 'Put this thread away'} onClick={() => change(t.archivedAt ? { archived: false } : { archived: true, archivedBy: 'mike' })}>
+        <button title={t.archivedAt ? 'Move this thread back to the inbox' : 'Archive this thread: it leaves the inbox but stays here to read and search, and you can bring it back'} onClick={() => change(t.archivedAt ? { archived: false } : { archived: true, archivedBy: 'mike' })}>
           {t.archivedAt ? 'Bring back' : 'Archive'}
         </button>
       </div>

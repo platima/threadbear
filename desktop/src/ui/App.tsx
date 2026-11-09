@@ -8,7 +8,7 @@ import { Rail } from './Rail.tsx';
 import { Shortcuts } from './Shortcuts.tsx';
 import { TOUR_KEY, Tour } from './Tour.tsx';
 import { PAGES } from './registry.ts';
-import { isNative } from '../core/native.ts';
+import { isNative, startRunner } from '../core/native.ts';
 import { runUpdateCheck } from './update-state.ts';
 
 export function useSnap(store: AppStore) {
@@ -28,6 +28,18 @@ export function App({ store }: { store: AppStore }) {
   const snap = useSnap(store);
   const [width, setWidth] = useState(() => clampWidth(readWidth(saved()), window.innerWidth));
   const [help, setHelp] = useState(false);
+  // The banner's Start the runner button: busy until the shell has started the runner, or the
+  // person has taken or turned down the set-up it offered (the shell answers only then), so a second
+  // click can't open a second offer. What went wrong is said beside it.
+  const [starting, setStarting] = useState(false);
+  const [startProblem, setStartProblem] = useState<string>();
+  const start = async () => {
+    setStarting(true);
+    setStartProblem(undefined);
+    const problem = await startRunner();
+    setStarting(false);
+    setStartProblem(problem);
+  };
   const [tour, setTour] = useState(false);
   // The installed app asks once a day whether a newer release is out
   // (core/updates.ts); a page in an ordinary browser tab never does.
@@ -113,6 +125,16 @@ export function App({ store }: { store: AppStore }) {
         {offline && (
           <div className={snap.conn === 'closed' ? 'banner bad' : 'banner'}>
             {snap.conn === 'connecting' ? 'Connecting to the runner...' : `Not connected to the runner${snap.connWhy ? `: ${snap.connWhy}` : ''}. Trying again.`}
+            {snap.conn === 'closed' && /^no runner token/i.test(snap.connWhy ?? '') && " That means the runner isn't running, so there is nothing to connect to."}
+            {snap.conn === 'closed' && isNative() && (
+              <>
+                {' '}
+                <button className="ghost" disabled={starting} aria-busy={starting} onClick={() => void start()} title={starting ? 'Working on it: waiting for the runner to start, or for your answer to the window that opened' : 'Start the runner, or choose how it should start'}>
+                  {starting ? 'Starting...' : 'Start the runner'}
+                </button>
+                {startProblem && <span className="error"> {startProblem}</span>}
+              </>
+            )}
           </div>
         )}
         {snap.notices.slice(-1).map((n, i) => (

@@ -33,6 +33,69 @@ async function toast(title: string, body: string): Promise<void> {
   }
 }
 
+// The shell's own choice and request (src-tauri/src/lib.rs): whether closing
+// the window ends the app (Settings, This app), and starting the runner. In a
+// plain browser tab they do nothing.
+
+// (`using.call` is the shell's channel; the tests pass their own.)
+type Using = { call?: Invoke | null };
+const channel = (using: Using): Invoke | undefined => (using.call === undefined ? invoke() : (using.call ?? undefined));
+
+// Whether closing the window ends the app. Undefined outside the shell, when it won't
+// say, and on Linux, where closing always ends the app so there is no choice to show.
+export async function getExitOnClose(using: Using = {}): Promise<boolean | undefined> {
+  const call = channel(using);
+  if (!call) return undefined;
+  try {
+    return (await call<boolean | null>('get_exit_on_close')) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Sets it. Gives back what went wrong, or undefined when it worked.
+export async function setExitOnClose(on: boolean, using: Using = {}): Promise<string | undefined> {
+  const call = channel(using);
+  if (!call) return 'Only the installed app can change this.';
+  try {
+    await call('set_exit_on_close', { on });
+    return undefined;
+  } catch (e) {
+    return typeof e === 'string' ? e : ((e as Error)?.message ?? 'unknown');
+  }
+}
+
+// A terminal window running one of two fixed Claude Code sign-in commands, for a
+// login that ran out: `claude auth login` ('login') or `claude setup-token`
+// ('setup-token'). `configDir` is the login's own folder when it isn't the default one.
+// Gives back what went wrong, or undefined when the window opened. The shell decides
+// what is run; the page only names which.
+export async function openClaudeLogin(kind: 'login' | 'setup-token', configDir?: string, using: Using = {}): Promise<string | undefined> {
+  const call = channel(using);
+  if (!call) return 'Only the installed app can open a terminal.';
+  try {
+    await call('open_claude_login', { kind, ...(configDir ? { configDir } : {}) });
+    return undefined;
+  } catch (e) {
+    return typeof e === 'string' ? e : ((e as Error)?.message ?? 'unknown');
+  }
+}
+
+// Starts the runner if it is set up, or offers to set one up that runs only while
+// the app is open. It answers when the start is done, or the offer taken or declined,
+// not before (the shell waits), so the page can show it is working until then. Gives
+// back what went wrong, or undefined when it started or was declined.
+export async function startRunner(using: Using = {}): Promise<string | undefined> {
+  const call = channel(using);
+  if (!call) return 'Only the installed app can start the runner.';
+  try {
+    await call('start_runner');
+    return undefined;
+  } catch (e) {
+    return typeof e === 'string' ? e : ((e as Error)?.message ?? 'unknown');
+  }
+}
+
 // A toast when a thread starts needing the person, or finishes, and they
 // aren't looking at the window.
 export function notifyTransition(before: ThreadSummary, after: ThreadSummary): void {

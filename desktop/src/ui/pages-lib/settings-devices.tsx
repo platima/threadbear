@@ -53,6 +53,7 @@ export function DevicesSection({ store, snap }: { store: AppStore; snap: Snapsho
   return (
     <>
       <Problem error={req.error} what="Phones and browsers" />
+      {snap.conn !== 'open' && <Note>The runner isn't connected, so there is nothing to pair with yet. Once it is, the button below works.</Note>}
       {off && <Note>Pairing needs the sync backend, and it's off: {reason}</Note>}
 
       <Card>
@@ -67,7 +68,7 @@ export function DevicesSection({ store, snap }: { store: AppStore; snap: Snapsho
           <span className="set-inline">
             <input className="set-days" type="number" min={1} max={365} step={1} value={days} onChange={(e) => setDays(e.target.value)} title="How many days until it stops working, 1 to 365" /> days
           </span>
-          <button className="primary" onClick={() => void pair()} disabled={act.busy === 'pair' || off || snap.conn !== 'open'} title={kind === 'phone' ? 'Make a code for a phone to scan' : 'Make a sign-in link for a browser'}>
+          <button className="primary" onClick={() => void pair()} disabled={act.busy === 'pair' || off || snap.conn !== 'open'} title={snap.conn !== 'open' ? "Not connected to the runner, so there is nothing to pair with yet" : off ? "The sync backend is off, so nothing can pair" : kind === 'phone' ? 'Make a code for a phone to scan' : 'Make a sign-in link for a browser'}>
             {kind === 'phone' ? 'Show a code' : 'Make a link'}
           </button>
         </div>

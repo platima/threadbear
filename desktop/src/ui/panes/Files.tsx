@@ -208,6 +208,7 @@ function FilesPane(props: PaneProps) {
 const pane: PaneDef = {
   id: 'files',
   title: 'Files',
+  hint: "Browse and preview the files in this thread's folder",
   order: 40,
   available: (t) => Boolean(t.cwd),
   Pane: FilesPane,

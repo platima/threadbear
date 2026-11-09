@@ -169,5 +169,5 @@ function UsagePage({ store, snap }: PageProps) {
   );
 }
 
-const page: PageDef = { id: 'usage', title: 'Usage', icon: '◔', order: 50, Main: UsagePage };
+const page: PageDef = { id: 'usage', title: 'Usage', hint: "How much of each login's 5-hour and weekly limits is left, and what threads have cost", icon: '◔', order: 50, Main: UsagePage };
 export default page;

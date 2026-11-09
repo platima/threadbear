@@ -68,7 +68,7 @@ export function Confirm({
       >
         {yes}
       </button>
-      <button title="Do nothing" onClick={() => setAsking(false)}>
+      <button title="Don't go ahead: close this question and change nothing" onClick={() => setAsking(false)}>
         Cancel
       </button>
     </span>

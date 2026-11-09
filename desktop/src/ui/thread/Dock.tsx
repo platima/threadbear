@@ -219,7 +219,7 @@ export function DoneCard({ store, thread, next, add }: { store: AppStore; thread
         <span>Done. Nothing needed from you.</span>
         <span className="grow" />
         {error && <span className="error">{error}</span>}
-        <Menu label="Archive" title="Put this thread away" items={VERDICTS.map((v) => ({ key: v.key, label: v.label, note: v.note, onPick: () => archive(v.verdict) }))} />
+        <Menu label="Archive" title="Archive this thread: pick how it went, or just archive it. It stays to read and search, and you can bring it back." items={VERDICTS.map((v) => ({ key: v.key, label: v.label, note: v.note, onPick: () => archive(v.verdict) }))} />
       </div>
       {next.length > 0 && (
         <div className="tb-next">

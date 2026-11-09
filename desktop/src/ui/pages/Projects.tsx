@@ -660,6 +660,7 @@ function NewProject({ store }: { store: AppStore }) {
 const def: PageDef = {
   id: 'projects',
   title: 'Projects',
+  hint: 'Threads grouped by the work they belong to, with where each project stands, its folders and links',
   icon: '▤',
   order: 10,
   Sidebar: ProjectsSidebar,
