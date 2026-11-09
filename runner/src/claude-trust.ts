@@ -17,13 +17,13 @@
 // Trust itself is kept with the patches' (patch-trust.ts), per folder,
 // under the same folder key, so a worktree counts as its main checkout.
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { followOptions } from './patch-trust.ts';
 import { realPath } from './platform.ts';
 import type { PermissionMode } from './protocol.ts';
+import { untrustedGitSync } from './safe-git.ts';
 import { looksRunnable, reachOf, reachOfCommand, Reads } from './script-trust.ts';
 import { allowCommand } from './shell-allowlist.ts';
 
@@ -370,7 +370,9 @@ class TooBig extends Error {}
 function nestedSkills(dir: string, depth = 0): { files: string[]; problem?: string } {
   const git = (...args: string[]): string | undefined => {
     try {
-      return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, maxBuffer: 64 * 1024 * 1024 });
+      // Not plain git: the folder's own .git/config could name an fsmonitor
+      // program, and this runs before the folder is trusted.
+      return untrustedGitSync(dir, args);
     } catch {
       return undefined;
     }

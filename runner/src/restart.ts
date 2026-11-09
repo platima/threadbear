@@ -138,6 +138,11 @@ export function threadEnv(threadId: string, home: string, basePath = process.env
     // A picture copied in here can be on the thread's shared page; one
     // anywhere else can't (docs/protocol.md, "Sharing").
     THREADBEAR_MEDIA_DIR: paths.media(home, threadId),
+    // The Node this runner runs on, which the repo's scripts take before
+    // looking on PATH (scripts/find-node.sh): a thread's checks, landing and
+    // deploys then use the runner's own Node on any Mac, not one at a path
+    // only Mike's has (a fork's commit, 8 Nov).
+    THREADBEAR_NODE: process.execPath,
     // The old names too, for skills and scripts written before the rename.
     THREADBARE_THREAD_ID: threadId,
     THREADBARE_HOME: home,

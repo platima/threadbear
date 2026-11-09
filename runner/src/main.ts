@@ -6,9 +6,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { readShareImage } from './share-images.ts';
-import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION } from './config.ts';
+import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
-import { RELEASE, markGoodLater, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, tellLaunchListening } from './release.ts';
+import { RELEASE, markConfigStop, markGoodLater, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, tellLaunchListening } from './release.ts';
 import { PatchTrust } from './patch-trust.ts';
 import type { RunnerUpdates } from './runner.ts';
 import { Peers, PrimaryLink, ThreadRouter, drainChildrenName, peersElsewhere, phoneCommands, primaryElsewhere, primaryRemote, projectRouter, removeDrainInfo, scheduleRouter, writeDrainInfo, type CrossRunnerHooks, type Elsewhere } from './handover.ts';
@@ -36,7 +36,10 @@ import { AccountRegistry } from './accounts.ts';
 import { ClaudeAdapter } from './adapters/claude/adapter.ts';
 import { ProcessRegistry, killGroup } from './proc.ts';
 import { Runner } from './runner.ts';
+import { startOwnThread } from './own-threads.ts';
 import { CodexAdapter } from './adapters/codex/adapter.ts';
+import { AcpAdapter } from './adapters/acp/adapter.ts';
+import { ACP_AGENTS, ACP_PROVIDERS } from './adapters/acp/agents.ts';
 import { resolveCodexBinary } from './adapters/codex/appserver.ts';
 import { checkSurface, testedVersion } from './adapters/codex/surface.ts';
 import { CliUpdates } from './updates/manager.ts';
@@ -232,6 +235,8 @@ async function main(): Promise<void> {
     alwaysAsk: ALWAYS_ASK_TOOLS,
     neverAsk: NEVER_ASK_TOOLS,
   });
+  // The threadbear tools for an agent that isn't given them in-process.
+  const codexStyleTools = (threadId: string) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons') });
   // One app-server per live Codex thread, each starting what E says is
   // current, with the same threadbear tools as dynamic tools.
   const codex = new CodexAdapter({
@@ -239,10 +244,26 @@ async function main(): Promise<void> {
     codexArgs: cfg.codexArgs,
     registry,
     log,
-    toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons') }),
+    toolsFor: codexStyleTools,
     onNotice: (text) => runner.notice('warning', text),
     extraGuidance: () => (experimentOn(cfg.home, 'richBlocks') ? RICH_BLOCKS_LINE : ''),
   });
+  // One process per live thread on an agent that speaks ACP, off unless the
+  // experiment is on (they find no account, and refuse to start without it).
+  const acpAdapters = Object.fromEntries(
+    ACP_PROVIDERS.map((p) => [
+      p,
+      new AcpAdapter({
+        agent: ACP_AGENTS[p],
+        binary: () => ACP_AGENTS[p].findBinary({ explicit: p === 'cursor' ? cfg.cursorPath : cfg.opencodePath, home: os.homedir(), pathEnv: process.env.PATH ?? '' }),
+        on: () => experimentOn(cfg.home, 'acpAgents'),
+        registry,
+        log,
+        toolsFor: codexStyleTools,
+        extraGuidance: () => (experimentOn(cfg.home, 'richBlocks') ? RICH_BLOCKS_LINE : ''),
+      }),
+    ]),
+  );
   // The runner's own small-model calls, on the settings' Claude pool.
   const models = new Models({
     home: cfg.home,
@@ -265,7 +286,7 @@ async function main(): Promise<void> {
     atMac: () => atMac,
     config: cfg,
     store,
-    adapters: { claude, codex },
+    adapters: { claude, codex, ...acpAdapters },
     accounts,
     // A draining runner's readings go to the primary, which owns
     // usage.json (docs/protocol.md, "Handovers").
@@ -564,14 +585,8 @@ async function main(): Promise<void> {
   const updateFixer = new UpdateFixer({
     home: cfg.home,
     log,
-    start: ({ text, title, why }) => runner.create({
-      text,
-      title,
-      cwd: updateRelease?.checkout,
-      // It fixes, lands and watches the build without anyone to approve.
-      permissionMode: 'full',
-      startedBy: { kind: 'runner', label: 'Threadbear', why },
-    }).thread.id,
+    // On the install's default mode (own-threads.ts).
+    start: (r) => startOwnThread(runner, r, updateRelease?.checkout),
     open: openThread,
     send: (threadId, text) => void runner.send(threadId, text, [], { queue: true }),
   });
@@ -599,14 +614,9 @@ async function main(): Promise<void> {
     clock: realClock,
     log,
     setting: () => bringInSetting(cfg.home),
-    start: ({ text, title, why }) => runner.create({
-      text,
-      title,
-      cwd: thisRelease?.checkout,
-      // As Bring Them In does: it merges and runs the checks in its worktree.
-      permissionMode: 'full',
-      startedBy: { kind: 'runner', label: 'Threadbear', why },
-    }).thread.id,
+    // On the install's default mode (own-threads.ts). It merges and runs
+    // the checks in its worktree, then asks before landing.
+    start: (r) => startOwnThread(runner, r, thisRelease?.checkout),
     open: openThread,
     send: (threadId, text) => void runner.send(threadId, text, [], { queue: true }),
     // The app's Bring Them In and Let's Discuss titles (UpdatesPanel).
@@ -1158,6 +1168,17 @@ function missingCodex(start: string, cfg: ReturnType<typeof loadConfig>): string
 }
 
 main().catch(async (e) => {
+  if (e instanceof RunnerJsonError) {
+    // Mike's own setup to fix, not a bug: said plainly in the log (launchd
+    // sends stderr there; tb logs shows it), with no stack and nothing sent
+    // to Sentry, as the parse error can quote the file. EX_CONFIG.
+    process.stderr.write(`${new Date().toISOString()} ERROR runner failed to start: ${e.message}\n`);
+    // Under launch.mjs's child supervision it records the boot just after
+    // the spawn, so wait for it; the launcher from before that runs the
+    // runner in its own process and recorded it already, under this pid.
+    await markConfigStop(path.dirname(e.file), process.pid, supervised() ? 3000 : 0);
+    process.exit(78);
+  }
   process.stderr.write(`runner failed to start: ${e?.stack ?? e}\n`);
   reportException(e, 'runner failed to start');
   await flushSentry();

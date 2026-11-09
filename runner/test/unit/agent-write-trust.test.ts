@@ -944,6 +944,7 @@ test("worktree setup doesn't run the main checkout's uncommitted package.json", 
   fs.chmodSync(path.join(bin, 'npm'), 0o755);
   fs.chmodSync(path.join(bin, 'node'), 0o755);
   put(path.join(main, 'worktree-setup.sh'), fs.readFileSync(path.join(REPO, 'worktree-setup.sh'), 'utf8'));
+  put(path.join(main, 'runner', 'scripts', 'find-node.sh'), fs.readFileSync(path.join(REPO, 'runner', 'scripts', 'find-node.sh'), 'utf8'));
   for (const dir of ['.', 'runner', 'app/Tools/mock-runner']) {
     put(path.join(main, dir, 'package.json'), '{}\n');
     put(path.join(main, dir, 'package-lock.json'), '{}\n');

@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Config } from './config.ts';
-import { expandHome, readRunnerJson, writeRunnerJson } from './config.ts';
+import { expandHome, peekRunnerJson, readRunnerJson, writeRunnerJson } from './config.ts';
 import type { Clock } from './clock.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
 import type { Notification } from './runner.ts';
@@ -56,7 +56,7 @@ export class SettingsService {
       idleMinutes: Math.round((this.cfg.idleMs / 60_000) * 100) / 100,
       maxLiveCLIs: this.cfg.maxLive,
       // What the next start will do, which is what the switch means.
-      followMain: readRunnerJson(this.cfg.home).followMain !== false,
+      followMain: peekRunnerJson(this.cfg.home).followMain !== false,
       bulletReplies: this.cfg.bulletReplies,
       oneReply: this.cfg.oneReply,
       bringIn: bringInSetting(this.cfg.home),
@@ -228,5 +228,5 @@ function maxTokens(p: Record<string, unknown>): { maxTokens?: number } {
 
 // runner.json `releases.bringIn`, or every 5 days.
 export function bringInSetting(home: string): BringInSetting {
-  return parseBringIn(readRunnerJson(home).releases?.bringIn) ?? DEFAULT_BRING_IN_DAYS;
+  return parseBringIn(peekRunnerJson(home).releases?.bringIn) ?? DEFAULT_BRING_IN_DAYS;
 }

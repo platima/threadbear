@@ -352,10 +352,12 @@ function supervise(entryBody: string, ms: number): Promise<{ code: number | null
   const entry = path.join(dir, 'fake-main.mjs');
   fs.writeFileSync(entry, entryBody);
   const sv = spawn(process.execPath, [path.join(SCRIPTS, 'windows-run.mjs')], {
-    env: { ...process.env, THREADBEAR_SUPERVISE_NO_RUN: '', LOCALAPPDATA: dir, THREADBEAR_SUPERVISE_ENTRY: entry, THREADBEAR_SUPERVISE_FIRST_WAIT_MS: '100' },
+    env: { ...process.env, THREADBEAR_SUPERVISE_NO_RUN: '', LOCALAPPDATA: dir, HOME: dir, THREADBEAR_SUPERVISE_ENTRY: entry, THREADBEAR_SUPERVISE_FIRST_WAIT_MS: '100' },
     stdio: 'ignore',
   });
-  const logFile = path.join(dir, 'Threadbear', 'Logs', 'runner-supervisor.log');
+  // Where the supervisor keeps its log: %LOCALAPPDATA%\Threadbear\Logs on Windows,
+  // ~/Library/Logs elsewhere (it runs the Linux service too).
+  const logFile = IS_WINDOWS ? path.join(dir, 'Threadbear', 'Logs', 'runner-supervisor.log') : path.join(dir, 'Library', 'Logs', 'runner-supervisor.log');
   return new Promise((resolve) => {
     let ended = true;
     const timer = setTimeout(() => {

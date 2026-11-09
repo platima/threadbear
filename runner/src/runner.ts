@@ -42,6 +42,7 @@ import type {
   PersistedEvent,
   Pool,
   Provider,
+  ProviderInfo,
   Question,
   RewoundFiles,
   RunnerDefaults,
@@ -52,6 +53,7 @@ import type {
   TurnOutcome,
 } from './protocol.ts';
 import { agentsStillWorking, ErrorCode, LIMITS, PROTOCOL_VERSION, RpcError, sentByAgent } from './protocol.ts';
+import { activeProviders, cliName, providerInfo, providerName, providersForHello } from './providers.ts';
 import type { ArchivedBy, ArchiveVerdict, LibrarianStatus, Project, Schedule } from './protocol.ts';
 import { Projects } from './projects.ts';
 import type { Settings } from './settings.ts';
@@ -79,8 +81,9 @@ import { BIN_DIR, threadEnv } from './restart.ts';
 import { cleanUpWorktree, makeWorktree, sameSubfolder, worktreeInstructions } from './worktrees.ts';
 import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
 import { pickAccount as pickByRoom, resetTime, type UsageReading } from './usage.ts';
-import { DEFAULT_POOL_FOLDERS, RUNNER_VERSION, expandHome, paths, readRunnerJson, writeRunnerJson, type Config } from './config.ts';
+import { DEFAULT_POOL_FOLDERS, RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
 import { missingBashNotice } from './system-tools.ts';
+import { experimentOn } from './experiments.ts';
 import { WAIT_SLACK_MS, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from './pools.ts';
 import { copyImageInto, imageRefFor } from './media.ts';
 import { isDirectory } from './fsutil.ts';
@@ -356,6 +359,9 @@ type Runtime = {
   releasedGen?: number; // generation of the session being released on purpose
   resumed: boolean; // the live session was started with resume
   retriedFresh: boolean;
+  // The reason fast mode was last said to be unavailable in this thread's
+  // transcript, so each turn doesn't say it again.
+  fastModeNoted?: string;
   // News of the standing instructions went out in this turn (settleInstructionsNews).
   instructionsNewsSent?: boolean;
   // Where the live session's transcript was carried from, if it moved
@@ -1200,7 +1206,7 @@ export class Runner {
 
   // --------------------------------------------------------------- queries
 
-  hello(): { runnerVersion: string; protocol: number; accounts: Account[]; pools: Pool[]; defaults: RunnerDefaults; clis?: CliStatus[] } {
+  hello(): { runnerVersion: string; protocol: number; accounts: Account[]; providers: ProviderInfo[]; pools: Pool[]; defaults: RunnerDefaults; clis?: CliStatus[] } {
     const accounts = this.accounts.list();
     const pools = this.pools(accounts);
     const defaults: RunnerDefaults = { cwd: this.cfg.defaults.cwd, accountId: this.defaultAccountId(accounts) };
@@ -1213,7 +1219,7 @@ export class Runner {
     if (this.cfg.defaults.efforts) defaults.efforts = { ...this.cfg.defaults.efforts };
     // The app's composer starts a new thread on it.
     if (this.cfg.defaults.permissionMode) defaults.permissionMode = this.cfg.defaults.permissionMode;
-    const out: ReturnType<Runner['hello']> = { runnerVersion: RUNNER_VERSION, protocol: PROTOCOL_VERSION, accounts, pools, defaults };
+    const out: ReturnType<Runner['hello']> = { runnerVersion: RUNNER_VERSION, protocol: PROTOCOL_VERSION, accounts, providers: providersForHello(activeProviders(this.cfg.home)), pools, defaults };
     const clis = this.cliList();
     if (clis) out.clis = clis;
     return out;
@@ -1227,7 +1233,7 @@ export class Runner {
   defaultAccountId(all = this.accounts.list()): string {
     // Only accounts this runner can start a CLI for.
     const accounts = all.filter((a) => this.adapters[a.provider]);
-    const json = readRunnerJson(this.cfg.home).defaults;
+    const json = peekRunnerJson(this.cfg.home).defaults;
     const saved = json?.accountId ?? this.cfg.defaults.accountId;
     const last = saved && accounts.some((a) => a.id === saved) ? saved : (accounts.find((a) => a.id === 'claude-main')?.id ?? accounts[0]?.id);
     if (json?.keepAccount && last) return last;
@@ -1826,8 +1832,9 @@ export class Runner {
     // message may have brought hooks.
     // A thread shut in a sandbox starts in one or not at all (the adapters
     // check too); one that starts in one is shut in it from now on.
-    const inSandbox = rec.provider === 'claude' && this.sandboxed(rec.cwd);
-    if (rec.confined && !inSandbox) throw new Error(rec.provider === 'claude' ? CONFINED_NO_SANDBOX(rec.cwd) : "This thread runs in a sandbox, and Codex can't, so it wasn't started. Move it to a Claude login.");
+    const canSandbox = providerInfo(rec.provider).sandbox;
+    const inSandbox = canSandbox && this.sandboxed(rec.cwd);
+    if (rec.confined && !inSandbox) throw new Error(canSandbox ? CONFINED_NO_SANDBOX(rec.cwd) : `This thread runs in a sandbox, and ${providerName(rec.provider)} can't, so it wasn't started. Move it to a Claude login.`);
     if (inSandbox) rec.confined = true;
     const claude = rec.provider === 'claude' ? this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec)) : undefined;
     rt.claudeSkipped = claude && !claude.trusted ? claude.hash : undefined;
@@ -1839,6 +1846,8 @@ export class Runner {
         account,
         model: rec.model,
         effort: rec.effort,
+        // Off again if the experiment was turned off since it was picked.
+        ...(rec.fastMode && experimentOn(this.cfg.home, 'fastMode') ? { fastMode: true } : {}),
         permissionMode: rec.permissionMode,
         ...(rec.confined ? { confined: true } : {}),
         sessionId: rec.nativeSessionId,
@@ -2009,6 +2018,15 @@ export class Runner {
           this.markDirty(st);
         }
         break;
+      case 'fastMode': {
+        // Asked for and turned down (a login without usage credits, an
+        // organization that turned it off): said once, so Mike knows he's
+        // not getting it. A cooldown after a rate limit passes by itself.
+        const why = rec.fastMode && experimentOn(this.cfg.home, 'fastMode') && o.state === 'off' && o.reason && o.reason !== 'pending' ? o.reason : undefined;
+        if (why && rt.fastModeNoted !== why) this.emit(st, { type: 'system.note', text: `Fast mode isn't available (${fastModeWhy(why)}), so this thread runs at standard speed.` }, rt.turn?.turnId);
+        if (o.state === 'on' || why) rt.fastModeNoted = why;
+        break;
+      }
       case 'context':
         rec.contextTokens = o.contextTokens;
         if (o.contextWindow !== undefined) rec.contextWindow = o.contextWindow;
@@ -2272,7 +2290,11 @@ export class Runner {
     // archive, which Mike asked it for). It can't archive itself mid-turn,
     // as that stops the CLI, so it happens here, once the turn is over, and
     // not if a message is already waiting for the next one.
-    const away = outcome === 'completed' && !turn.auto && said?.needs === 'nothing' && !rec.queue.length;
+    // Nor while a card is still waiting (a subagent's, which outlives the
+    // turn): archiving or snoozing would hide it and stop the work behind it.
+    // More likely now the runner's own threads run on the install's mode
+    // (own-threads.ts; Codex review, 9 Nov 2026).
+    const away = outcome === 'completed' && !turn.auto && said?.needs === 'nothing' && !rec.queue.length && !rt.approvals.size;
     const archive = away && archiveFromTool(turn.endTurn);
     // Hibernating likewise (end_turn's snooze). Archive wins if it asked for both.
     const snooze = away && !archive ? snoozeFromTool(turn.endTurn) : undefined;
@@ -2627,6 +2649,7 @@ export class Runner {
     poolId?: string | null;
     model?: string | null;
     effort?: EffortLevel | null;
+    fastMode?: boolean;
     permissionMode?: PermissionMode;
     snoozedUntil?: string | null; // an ISO time, 'restart' for until the runner next starts, or 'release' for until it starts on a new release
     archived?: boolean;
@@ -2680,9 +2703,9 @@ export class Runner {
     }
     if (newAccount && toAccountId !== rec.accountId) this.checkProvider(newAccount);
     // Checked before anything changes: where it would run after this.
-    const stillIn = (newAccount?.provider ?? rec.provider) === 'claude' && this.sandboxed(newCwd ?? rec.cwd);
+    const stillIn = providerInfo(newAccount?.provider ?? rec.provider).sandbox && this.sandboxed(newCwd ?? rec.cwd);
     if (rec.confined && (newCwd !== undefined || toAccountId !== undefined) && !stillIn && !params.unconfine) {
-      throw new RpcError(ErrorCode.badParams, `"${rec.title}" runs in a sandbox, and this would take it out of it (a folder that isn't in one, or a Codex login). Only the user can do that.`);
+      throw new RpcError(ErrorCode.badParams, `"${rec.title}" runs in a sandbox, and this would take it out of it (a folder that isn't in one, or a login that can't run in one). Only the user can do that.`);
     }
     // Pinned (an account named, or poolId null), or into a pool.
     if (params.accountId !== undefined || params.poolId === null) {
@@ -2782,6 +2805,27 @@ export class Runner {
           rt.releaseWhenIdle = true;
         });
         if (sayNextTurn()) nextTurn.push(effort ? `${effortTitle(effort)} effort` : "The model's own effort level");
+      }
+    }
+    // Fast mode: Claude only, and off on a model that doesn't have it (a
+    // pick of one, or a move onto one), which says so.
+    let fast = !providerChanged && rec.fastMode === true;
+    if (params.fastMode !== undefined) fast = params.fastMode;
+    if (fast && account && (touched || params.fastMode !== undefined)) {
+      const checked = this.checkFastMode(account, model);
+      if (!checked.ok) {
+        fast = false;
+        if (checked.note) this.emit(st, { type: 'system.note', text: checked.note }, rt.turn?.turnId);
+      }
+    }
+    if (fast !== (rec.fastMode === true)) {
+      if (fast) rec.fastMode = true;
+      else delete rec.fastMode;
+      rt.fastModeNoted = undefined;
+      if (rt.session && !release && rec.provider === 'claude') {
+        rt.session.setFastMode?.(fast).catch(() => {
+          rt.releaseWhenIdle = true;
+        });
       }
     }
     if (params.permissionMode !== undefined && params.permissionMode !== rec.permissionMode) {
@@ -3256,6 +3300,7 @@ export class Runner {
     if (pendingReviews) s.pendingReviews = pendingReviews;
     if (rec.model) s.model = rec.model;
     if (rec.effort) s.effort = rec.effort;
+    if (rec.fastMode && experimentOn(this.cfg.home, 'fastMode')) s.fastMode = true;
     if (rec.modelInUse) s.modelInUse = rec.modelInUse;
     if (rec.effortInUse) s.effortInUse = rec.effortInUse;
     if (rec.snoozedUntil) s.snoozedUntil = rec.snoozedUntil;
@@ -3512,9 +3557,9 @@ export class Runner {
       title,
       worktree: false,
       origin: 'runner',
-      // The runner's own, so not the default for new threads: Mike answering
-      // it runs as it always has.
-      permissionMode: 'full',
+      // On the install's default mode, like the runner's other threads
+      // (own-threads.ts): what it says comes from this Mac, but whoever
+      // answers it may ask its agent to act.
       startedBy: { kind: 'runner', label: 'Threadbear' },
     }).st;
     st.rec.forceUnread = true;
@@ -3721,15 +3766,6 @@ export function oneLine(text: string, max: number): string {
   return cutSafely(s, max, '…');
 }
 
-// A provider's name in notes.
-export function providerName(p: Provider): string {
-  return p === 'codex' ? 'Codex' : 'Claude';
-}
-
-function cliName(p: Provider): string {
-  return p === 'codex' ? 'Codex' : 'Claude Code';
-}
-
 // Claude's own ids: its aliases, and anything starting claude- (with or
 // without a [1m] suffix).
 export function isClaudeModel(id: string): boolean {
@@ -3748,6 +3784,27 @@ export function modelTitle(account: Account, model: string): string {
 }
 
 const EFFORT_TITLES: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra' };
+
+// Why the CLI says fast mode can't serve (its fast_mode_disabled_reason),
+// in plain words for the note.
+export function fastModeWhy(reason: string): string {
+  switch (reason) {
+    case 'free':
+      return "this login's plan doesn't include it";
+    case 'preference':
+      return "this login's organization turned it off";
+    case 'extra_usage_disabled':
+      return 'usage credits are off for this login';
+    case 'network_error':
+      return "Claude Code couldn't check, as the network was down";
+    case 'not_first_party':
+      return 'it needs the Anthropic API directly';
+    case 'model_not_allowed':
+      return "this login's organization doesn't allow the model";
+    default:
+      return `Claude Code says ${reason.replace(/_/g, ' ')}`;
+  }
+}
 
 export function effortTitle(e: EffortLevel): string {
   return EFFORT_TITLES[e] ?? e;

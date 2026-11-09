@@ -30,6 +30,7 @@ import { asksForAppRestart, type AppRestarts } from './app-restarts.ts';
 import { PANEL_PLACES } from './panel-requests.ts';
 import { nudgedThisTurn, signInNudge, turnSignIns, uncovered, type ConnectorService } from './connectors.ts';
 import type { PanelPlace } from './protocol.ts';
+import { providerInfo, providerName } from './providers.ts';
 import { readRelease, type ReleaseJson } from './release.ts';
 import { userLine } from './user-name.ts';
 import type { ConvexSync } from './sync.ts';
@@ -140,8 +141,6 @@ type Result = { content: { type: 'text'; text: string }[]; isError?: boolean };
 // Every level, Codex's ultra included; the runner drops one the thread's
 // model doesn't offer, with a note.
 const effortEnum = z.enum(EFFORT_LEVELS as unknown as [EffortLevel, ...EffortLevel[]]);
-
-const providerName = (a: Pick<Account, 'provider'>): string => (a.provider === 'codex' ? 'Codex' : 'Claude');
 
 const ok = (text: string): Result => ({ content: [{ type: 'text', text }] });
 const fail = (text: string): Result => ({ content: [{ type: 'text', text }], isError: true });
@@ -508,7 +507,7 @@ export function buildThreadbearTools(
       `runner: ${runner} (read through Convex: messages and one line per tool call; tool output stays on that runner)`,
       `status: ${t.status}${t.needsYou ? ' (needs the user)' : ''}`,
       `folder: ${t.cwd} (on ${runner})`,
-      `account: ${t.accountId} (${t.provider === 'codex' ? 'Codex' : 'Claude'})`,
+      `account: ${t.accountId} (${providerName(t.provider)})`,
       `model: ${t.model ?? 'default'}`,
       t.snoozedUntil ? `snoozed until: ${t.snoozedUntil}` : '',
       t.archivedAt ? `archived: ${t.archivedAt}` : '',
@@ -523,7 +522,7 @@ export function buildThreadbearTools(
       `title: ${t.title}`,
       `status: ${t.status}${t.needsYou ? ' (needs the user)' : ''}`,
       `folder: ${t.cwd}`,
-      `account: ${t.accountId} (${providerName(t)})`,
+      `account: ${t.accountId} (${providerName(t.provider)})`,
       `pool: ${t.poolId ?? 'none (pinned to its account)'}`,
       t.waitingForRoom ? `waiting for room until: ${t.waitingForRoom.until}` : '',
       `model: ${t.model ?? 'default'}${t.modelInUse ? ` (running as ${t.modelInUse})` : ''}`,
@@ -1628,7 +1627,7 @@ export function buildThreadbearTools(
       handle(async () => {
         const h = control.hello();
         const rows = h.accounts.map((a) => {
-          const bits = [providerName(a), a.note ?? '', usageLine(a.usage, now()), a.id === h.defaults.accountId ? 'default for new threads' : ''].filter(Boolean);
+          const bits = [providerName(a.provider), a.note ?? '', usageLine(a.usage, now()), a.id === h.defaults.accountId ? 'default for new threads' : ''].filter(Boolean);
           const head = `${a.id}  ${a.title}  [${bits.join('; ')}]`;
           const models = a.models?.length ? `\n    models: ${a.models.map((m) => (m.model === a.defaultModel || m.id === a.defaultModel ? `${m.id} (default)` : m.id)).join(', ')}` : '';
           return head + models;
@@ -1855,20 +1854,21 @@ export function buildThreadbearTools(
         const caller = await restricted();
         const cwd = await folder(f);
         const accountId = await account(acc);
-        // Out of a sandbox: a folder that isn't in one, or a Codex login,
-        // which never runs in one (sandbox.ts).
+        // Out of a sandbox: a folder that isn't in one, or a login that
+        // can't run in one (sandbox.ts).
         // Only a full access caller outside any sandbox (Mike's own level)
         // moves one out unasked; any other asks first.
         const provider = accountId ? control.hello().accounts.find((a) => a.id === accountId)?.provider : undefined;
         const shutIn = id === selfId ? Boolean(caller?.confined) : Boolean(await control.confinedOf?.(id));
-        const leaves = shutIn && (!control.sandboxed?.(cwd) || provider === 'codex');
+        const noSandbox = provider !== undefined && !providerInfo(provider).sandbox;
+        const leaves = shutIn && (!control.sandboxed?.(cwd) || noSandbox);
         if (caller) {
           const t = id === selfId ? undefined : await accessOf(id);
           const checks = schedules ? (await schedules.list(id)).filter((sc) => sc.threadId === id && sc.check?.trim()) : [];
           const name = threadName(id, t?.title ?? '');
           const reasons = [
             ...(t && above(t, caller) ? [`Move "${t.title}", which has ${accessName(t, caller)}, to ${cwd}${then?.trim() ? ' and send it a message' : ''}`] : []),
-            ...(leaves ? [`Move ${name} out of the sandbox to ${cwd}${provider === 'codex' ? ' on a Codex login' : ''}: from its next turn it runs on this machine with ${MODE_NAMES[(await modeOf(id)).mode]}`] : []),
+            ...(leaves ? [`Move ${name} out of the sandbox to ${cwd}${noSandbox ? ` on a ${providerName(provider)} login` : ''}: from its next turn it runs on this machine with ${MODE_NAMES[(await modeOf(id)).mode]}`] : []),
             ...(checks.length ? [`Move ${name} to ${cwd}, where ${checks.length === 1 ? `the schedule "${checks[0].title}" runs its shell check` : `${checks.length} schedules run their shell checks`} as you`] : []),
           ];
           await confirm('move_thread', reasons, { threadId: id, folder: cwd, ...(acc ? { account: accountId } : {}), ...(then ? { then } : {}) }, extra?.signal);

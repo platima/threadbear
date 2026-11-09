@@ -90,9 +90,11 @@ die() {
 }
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
+# THREADBEAR_NODE, else the node on PATH, else nvm's newest, else Homebrew's
+# (find-node.sh, which says what's missing on stderr).
 node_bin() {
-  local pinned="${THREADBEAR_NODE:-$HOME/.nvm/versions/node/v24.22.1/bin/node}"
-  if [ -x "$pinned" ]; then printf '%s' "$pinned"; else command -v node || die "no node binary (set THREADBEAR_NODE)"; fi
+  . "$APP_ROOT/../runner/scripts/find-node.sh"
+  threadbear_find_node
 }
 
 # The folder with symlinks resolved, or as given if it doesn't exist.

@@ -69,7 +69,9 @@ extension AppModel {
     func newThreadRequest(text: String, images: [ImageRef]) -> NewThreadRequest {
         // This Mac's logins, or the chosen runner's for a draft on it.
         let logins = draftLogins
-        let ask = newThreadPermission
+        // `.unknown` is the runner's own default, a mode this app doesn't
+        // know: left out, the runner starts the thread on exactly that.
+        let ask: PermissionMode? = newThreadPermission == .unknown ? nil : newThreadPermission
         // Another runner that hasn't said hello yet: its own defaults,
         // in the folder typed for it if any (the runner checks it).
         if newThreadRunnerId != nil, newThreadLogins == nil {
@@ -83,12 +85,24 @@ extension AppModel {
                 model = logins.defaults.model(for: provider) ?? logins.account(newThreadAccountId)?.defaultModel
             }
             return NewThreadRequest(text: text, images: images, cwd: cwd, poolId: poolId, model: model,
-                                    effort: lastEfforts[provider], permissionMode: ask)
+                                    effort: lastEfforts[provider], fastMode: newThreadFast(provider: provider, model: model, logins: logins), permissionMode: ask)
         }
         let account = newThreadAccountId
         let provider = logins.account(account)?.provider ?? "claude"
         return NewThreadRequest(text: text, images: images, cwd: cwd, accountId: account,
-                                model: lastModels[provider], effort: lastEfforts[provider], permissionMode: ask)
+                                model: lastModels[provider], effort: lastEfforts[provider],
+                                fastMode: newThreadFast(provider: provider, model: lastModels[provider], logins: logins), permissionMode: ask)
+    }
+
+    /// Whether the next new thread asks for fast mode: the draft's toggle,
+    /// where the model it starts on has it (the picker hides it elsewhere,
+    /// so a hidden "on" never sends).
+    func newThreadFast(provider: String, model: String?, logins: RunnerLogins) -> Bool {
+        guard newThreadFastMode, experiments.contains("fastMode") else { return false }
+        let account = logins.account(newThreadAccountId)
+        let resolved = ComposerChips.resolvedModel(model, logins.defaults.model(for: provider), account?.defaultModel)
+        let choices = account?.provider == provider ? account?.models ?? [] : logins.accounts.first { $0.provider == provider }?.models ?? []
+        return ModelPicker.offersFastMode(model: resolved, in: choices, provider: provider)
     }
 
     /// A model picked in a pool's column of the picker. For a new thread

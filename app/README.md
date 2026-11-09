@@ -183,7 +183,12 @@ and the perf run stay away from the real one. Install the runner itself with
   answer 2." Then "The
   runner is restarting. Reconnecting…" with a spinner while it's down. The
   app retries every half second then, and the line goes once it's back. A
-  runner that isn't back within 90 seconds gets the usual banner. The
+  runner that isn't back within 90 seconds gets the usual banner. A message
+  you send to one of this Mac's threads meanwhile doesn't bounce back
+  into the box: it shows dimmed at the end of the thread with "Runner
+  restarting. Sends when it's back." under it, and goes once the new
+  runner connects (several go in the order you sent them). If the runner
+  isn't back 90 seconds after you sent it, it goes back in the box. The
   message the runner sends to carry a thread on (`origin: "runner"`) is a
   small centred note under the "Runner restarted" one, "Sent by the runner
   after it restarted" over its text, not a bubble of yours.
@@ -572,7 +577,7 @@ is an error. Commands marked "the open thread" act on `id` when it's given
 | `select-text` | `row`, `words`, `action` | selects the first match of `words` in a message row and shows the selection bar (says its window number); `action` (`explain`, `quote` or `copy`) clicks that instead. Explain opens the pane; `dump`'s panels line shows its answers |
 | `menu` | `row`, `click` | a transcript row's context menu, or chooses an item from it |
 | `debug-info`, `copy-thread-id`, `clipboard` | `row`, `id` | what "Copy debug info" and "Copy thread id" (the open thread) copy, copied to the instance's pasteboard as the menu items do; `clipboard` reads it back |
-| `appearance`, `resize` | `mode` (light, dark, system); `w`, `h`, `review` (a review's id: resize its window instead) | |
+| `appearance`, `resize` | `mode` (light, dark, system); `w`, `h`, `review` (a review's id: resize its window instead), `settings` (true: the Settings window) | |
 | `zoom` | `to` (in, out, reset) or `percent` | the window's zoom, as ⌘=, ⌘- and ⌘0 set it; says the percent it's at |
 | `archive`, `unarchive`, `snooze` | `id`, `seconds` (default 3600) | the open thread; says which thread it acted on |
 | `undo-archive`, `open-archived` | | the Archived note's Undo, or a click on the note (opens the thread) |

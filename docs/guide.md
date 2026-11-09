@@ -51,7 +51,9 @@ asked you something, as what they find can change what it asks. It comes to
 the inbox when they're done, and you can still open it and answer early.
 Hibernating and Archived, at the foot, hold the threads that are put away
 (see [Hibernate and archive](#hibernate-and-archive)). They start folded,
-showing only how many; click a heading to open or fold it. Hibernating also
+showing only how many; click a heading to open or fold it. Folded, Archived
+stays at the bottom of the sidebar however many threads are above it, and
+opening it scrolls its threads into view. Hibernating also
 has the threads that have booked a message to themselves for later (an
 agent saying "I'll check again in 20 minutes") and have nothing for you
 until then. Each row says when it wakes, soonest first. When the time comes
@@ -271,6 +273,12 @@ away. If the file changes on disk while you have unsaved edits (an agent
 rewrote it), nothing is written over: a bar asks whether to take the
 file's version or keep yours.
 
+A Markdown file opens drawn, as a page to read: headings, lists, tables,
+code and pictures, with the lines kept to a comfortable width. In place
+of the pencil, a menu in its bar switches between Preview (drawn) and
+Markdown (the raw text, ready to type in, saved as above), and the next
+Markdown file you open shows the way you last picked.
+
 An HTML file opens in the side pane as a static page, with the styles,
 pictures, fonts and media beside it that its markup names. Script files,
 SVGs and other pages beside it don't load, so a mockup made of several
@@ -339,8 +347,9 @@ on it too. It's `"defaults": { "permissionMode": "auto" }` in `runner.json`
 in the data folder (`"full"`, `"ask"` or `"auto"`; none is Full access), so
 ask any thread to change it. It applies once the runner next restarts. The
 threads Threadbear starts by itself, to bring in Mike's releases or fix a
-failed update, stay on Full access. Deleting a thread is one thing an agent
-always has to ask about, whatever the mode.
+failed update, start on it too, so on Ask before edits (or Auto on Codex,
+which asks before edits) they wait for you to allow what they need. Deleting
+a thread is one thing an agent always has to ask about, whatever the mode.
 
 An agent in Ask before edits or Auto can't give itself more room. Switching
 any thread or schedule to more access, starting a thread with more access
@@ -355,8 +364,10 @@ runs the repo's own code (`npm test`, `make`, `cargo run`) asks every
 time, as the repo can change what it runs.
 
 A card shows the whole command. On the phone, one that's too long to read
-there in full (or one asking for more access) has only Deny: allow it in
-the Mac app.
+there in full, one with anything but plain ASCII in it (an accent, an
+emoji, an invisible or text-reversing character), or one asking for more
+access has only Deny: allow it in the Mac app, whose card writes an
+invisible character out by name (like `⟨U+2028⟩`).
 
 ### When an agent needs a password or a key
 
@@ -536,8 +547,10 @@ To get rid of one for good, hover it there and click the trash, or
 right-click it and choose Delete…; after you confirm, it goes to the
 runner's trash folder, with no Undo in the app.
 
-Back and Forward (⌘[ and ⌘], in the Go menu) step through the threads and
-pages you've had open, as a browser does. A mouse's side buttons do the same,
+Back and Forward (⌘[ and ⌘], in the Go menu, or the ‹ and › beside the share
+icon at the top right of a thread) step through the threads and
+pages you've had open, as a browser does. Hover either arrow to see which
+thread it goes to. A mouse's side buttons do the same,
 and so does a trackpad swipe, as in Safari: with natural scrolling right for
 Back and left for Forward, and the other way round without it. A card in the
 middle of the window says which thread or page you'll land on, and fills the
@@ -611,9 +624,27 @@ the one you're reading, right-click it in the list and pick Open in New
 Panel.
 
 The View menu has the rest: Show or Hide Threads (⌃⌘S) for the list,
-Show or Hide Panels (⌥⌘P) for the panels beside the thread, and Reset
-Panel Layout, which puts everything back how it started. Threadbear remembers your
-layout between launches.
+Show or Hide Panels (⌥⌘P) for the panels beside the thread, Show or Hide
+Terminal (⌘J), and Reset Panel Layout, which puts everything back how it
+started. Threadbear remembers your layout between launches.
+
+### Terminal
+<!-- slug: terminal -->
+
+⌘J opens a terminal under the thread, and ⌘J again hides it. It's a real
+one, with your login shell, its colours and full-screen programs like vim
+or htop, and it takes the keyboard as it opens. Each thread has a shell
+of its own, started in the thread's folder (its worktree, when it has
+one), and it keeps running while you look at other threads, so going back
+finds it as you left it. A thread on another Mac or the cloud gets a shell
+on this Mac in your home folder, with a line saying so, and so do an
+archived thread (its worktree may be another thread's by now) and the
+new-thread page. If the shell exits, New Shell starts another. A shell
+only starts when you ask for one, with ⌘J or a click on the empty panel,
+so looking through threads with it open starts nothing. A thread's shell
+stops when the thread is archived or deleted, and they all stop when you
+quit Threadbear. The Terminal is a panel like the others: drag it
+beside the thread, into a tab, or out into a window of its own.
 
 ## Highlights
 <!-- slug: highlights -->
@@ -1013,6 +1044,7 @@ key:
 - Actual Size: `actualSize`, ⌘0
 - Show Threads: `toggleThreads`, ⌃⌘S
 - Show Panels: `togglePanels`, ⌥⌘P
+- Show Terminal: `toggleTerminal`, ⌘J
 - Reset Panel Layout: `resetPanelLayout`, no key
 
 In the file, a key is its modifiers and then the key, joined with `+`: `cmd`,
@@ -1119,7 +1151,9 @@ The Threadbear iPhone app is for when you're away from the Mac: ask a
 thread a question, steer it, answer the ones that need you, start new
 ones, and see how they're all getting on. Its inbox sorts threads the
 way the Mac's does, into Starred, Inbox, Running, Hibernating and
-Archived. To star a thread, swipe its row to the right, or use the menu when
+Archived. A thread that finished saying it needs nothing from you is done
+there too: it doesn't rise to the top or count towards what needs you,
+though it shows as unread until you open it. To star a thread, swipe its row to the right, or use the menu when
 you press and hold it or the ... menu inside it. All but Starred and Inbox start folded, showing how many they hold; tap a
 heading to open or fold it, and the phone remembers. Each heading stays at the top while you scroll through its threads, and a thread that changes heading travels there, so one finishing rises from Running into the Inbox. A folded Archived isn't
 loaded at all, nor the hibernated threads in a folded Hibernating, so the
@@ -1398,7 +1432,12 @@ controls for only a few common things, and the ⓘ beside each section says
 what it is and what to ask your agent. Click it to read it, or hover for a
 quick look. Most settings live in `runner.json` in Threadbear's data folder,
 and an agent can change them or set up anything more involved, so ask one
-first.
+first. If you edit it by hand and leave it broken (a trailing comma, say),
+the runner won't start until it's fixed, and never writes over it: `tb logs`
+names the file and what's wrong.
+
+Drag the Settings window wider for more room; each tab still sets how tall
+it is.
 
 When something goes wrong, the app says so in an orange bar at the top of
 the thread. Investigate on that bar starts a thread in your Threadbear

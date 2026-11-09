@@ -116,6 +116,7 @@ struct AppDump: Encodable {
         case .auto: "auto"
         case .plan: "plan first"
         case .full: "full access"
+        case .unknown: "unknown"
         }
     }
 

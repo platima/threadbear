@@ -308,8 +308,12 @@ async function add(name: string | undefined, f: Flags, call: (kind: 'query' | 'm
     try {
       json = JSON.parse(r.out);
     } catch {
-      return fail(`${f.ssh}'s runner.json isn't JSON.`);
+      return fail(`${f.ssh}'s runner.json isn't JSON. Fix it there first; this won't write over it.`);
     }
+    // Valid JSON that isn't an object ([] or "x") is as broken as a typo:
+    // spread into the file written back, it became one with nothing in it
+    // but a new runner id (config.ts, RunnerJsonError).
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return fail(`${f.ssh}'s runner.json holds JSON, but not an object in { }. Fix it there first; this won't write over it.`);
     if (json.sync?.url && json.sync.url.replace(/\/+$/, '') !== url.replace(/\/+$/, '')) return fail(`${f.ssh} mirrors to ${clean(json.sync.url, 120)}, not this Mac's ${url}, so a key from here is no use to it.`);
     // What that Mac says it is, which this Mac decides whether to believe:
     // a Mac that's been tampered with could name this one, or any runner

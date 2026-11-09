@@ -13,7 +13,8 @@ import { cutOut } from '../store.ts';
 import { appliedChanges, undoChanges } from '../undo-edits.ts';
 import crypto from 'node:crypto';
 import type { ThreadState } from '../runner.ts';
-import { checkImages, providerName } from '../runner.ts';
+import { checkImages } from '../runner.ts';
+import { providerName } from '../providers.ts';
 
 export const editingPart = {
   // Mike changes one of his earlier messages and carries on from there

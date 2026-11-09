@@ -296,14 +296,17 @@ public struct ModelChoice: Sendable, Hashable, Codable, Identifiable {
     public var effortLevels: [String]
     /// The model's own level, when the CLI says (Codex).
     public var defaultEffort: String?
+    /// It has Claude Code's fast mode (protocol "Fast mode").
+    public var fastMode: Bool
 
-    public init(id: String, model: String, title: String, description: String? = nil, effortLevels: [String] = [], defaultEffort: String? = nil) {
+    public init(id: String, model: String, title: String, description: String? = nil, effortLevels: [String] = [], defaultEffort: String? = nil, fastMode: Bool = false) {
         self.id = id
         self.model = model
         self.title = title
         self.description = description
         self.effortLevels = effortLevels
         self.defaultEffort = defaultEffort
+        self.fastMode = fastMode
     }
 
     public init(from decoder: Decoder) throws {
@@ -314,6 +317,7 @@ public struct ModelChoice: Sendable, Hashable, Codable, Identifiable {
         description = try c.decodeIfPresent(String.self, forKey: .description)
         effortLevels = try c.decodeIfPresent([String].self, forKey: .effortLevels) ?? []
         defaultEffort = try? c.decodeIfPresent(String.self, forKey: .defaultEffort)
+        fastMode = (try? c.decodeIfPresent(Bool.self, forKey: .fastMode)) == true
     }
 }
 
@@ -333,11 +337,21 @@ public enum PermissionMode: String, Sendable, Hashable, Codable {
     /// plan is "Plan first": the agent reads and plans but changes nothing
     /// until Mike approves its plan (docs/protocol.md, "Plan first").
     case full, ask, auto, plan
+    /// A mode from a newer runner that this app doesn't know. It used to be
+    /// read as Full access, the least safe reading, and a schedule made
+    /// from such a thread then asked for full access (9 Nov review). Now
+    /// it shows as unknown, and anything this app sends for it says Ask
+    /// before edits (`sent`), the strictest mode that still runs turns.
+    case unknown
 
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = PermissionMode(rawValue: raw) ?? .full
+        self = PermissionMode(rawValue: raw) ?? .unknown
     }
+
+    /// What to send the runner for this mode: never `unknown`, which no
+    /// runner takes, and never anything looser than Ask in its place.
+    public var sent: PermissionMode { self == .unknown ? .ask : self }
 }
 
 public struct ImageRef: Sendable, Hashable, Codable {
@@ -1073,6 +1087,8 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
     public var model: String?
     /// The level chosen for the thread; nil is the model's own.
     public var effort: String?
+    /// Claude Code's fast mode is on (protocol "Fast mode"); never on Codex.
+    public var fastMode: Bool
     /// What the CLI actually ran the last turn on and at, once one has run.
     public var modelInUse: String?
     public var effortInUse: String?
@@ -1196,7 +1212,7 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         snoozedUntil: Date? = nil, snoozedUntilRestart: Bool = false, snoozedUntilRelease: Bool = false, wakeWhen: WakeWhen? = nil, waitingOn: [WaitingOn]? = nil, woke: ThreadWoke? = nil, archivedAt: Date? = nil, starredAt: Date? = nil, onOldRunner: Bool = false, preview: String = "",
         lastSeq: Int = 0, lastSeenSeq: Int = 0, nativeSessionId: String? = nil,
         contextTokens: Int? = nil, costUsd: Double? = nil,
-        effort: String? = nil, modelInUse: String? = nil, effortInUse: String? = nil, contextWindow: Int? = nil,
+        effort: String? = nil, fastMode: Bool = false, modelInUse: String? = nil, effortInUse: String? = nil, contextWindow: Int? = nil,
         panels: [Panel] = [], actions: [Action] = [], hooks: [Hook] = [], patches: [PatchInfo] = [], background: [BackgroundTask] = [],
         subagents: [Subagent] = [], projects: [ThreadProject] = [], pendingReviews: Int? = nil, worktree: ThreadWorktree? = nil, needs: String? = nil, asks: [Ask] = [], asksSeq: Int? = nil,
         highlightsAt: Date? = nil,
@@ -1213,6 +1229,7 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         self.provider = provider
         self.model = model
         self.effort = effort
+        self.fastMode = fastMode
         self.modelInUse = modelInUse
         self.effortInUse = effortInUse
         self.permissionMode = permissionMode
@@ -1272,6 +1289,7 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? "claude"
         model = try c.decodeIfPresent(String.self, forKey: .model)
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
+        fastMode = (try? c.decodeIfPresent(Bool.self, forKey: .fastMode)) == true
         modelInUse = try c.decodeIfPresent(String.self, forKey: .modelInUse)
         effortInUse = try c.decodeIfPresent(String.self, forKey: .effortInUse)
         permissionMode = try c.decodeIfPresent(PermissionMode.self, forKey: .permissionMode) ?? .full
@@ -1336,6 +1354,7 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         try c.encode(provider, forKey: .provider)
         try c.encodeIfPresent(model, forKey: .model)
         try c.encodeIfPresent(effort, forKey: .effort)
+        if fastMode { try c.encode(true, forKey: .fastMode) }
         try c.encodeIfPresent(modelInUse, forKey: .modelInUse)
         try c.encodeIfPresent(effortInUse, forKey: .effortInUse)
         try c.encode(permissionMode, forKey: .permissionMode)
@@ -1391,7 +1410,7 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, cwd, accountId, provider, model, effort, modelInUse, effortInUse, permissionMode, status, live, needsYou, pendingReviews
+        case id, title, cwd, accountId, provider, model, effort, fastMode, modelInUse, effortInUse, permissionMode, status, live, needsYou, pendingReviews
         case createdAt, updatedAt, lastActivityAt, snoozedUntil, snoozedUntilRestart, snoozedUntilRelease, wakeWhen, waitingOn, woke, archivedAt, starredAt, onOldRunner, preview
         case lastSeq, lastSeenSeq, nativeSessionId, contextTokens, contextWindow, costUsd, panels, actions, hooks, patches, background, subagents
         case projects, worktree, needs, asks, asksSeq, highlightsAt, schedule, startedBy, asked, poolId, waitingForRoom, waitingForNetwork, panelRequest, share, sample, looseEnds, moving
@@ -1670,11 +1689,11 @@ public struct RunnerDefaults: Sendable, Hashable, Codable {
         models = Self.strings(c, .models)
         efforts = Self.strings(c, .efforts)
         poolId = ((try? c.decodeIfPresent(String.self, forKey: .poolId)) ?? nil).flatMap { $0.isEmpty ? nil : $0 }
-        // By its raw name: PermissionMode's own decoding turns a mode this
-        // app doesn't know into Full access, where none is right. Plan first
-        // is never a default (the runner ignores it too).
+        // A mode this app doesn't know stays `.unknown`: read as none, the
+        // composer fell back to Full access and asked for it. Plan first is
+        // never a default (the runner ignores it too).
         permissionMode = ((try? c.decodeIfPresent(String.self, forKey: .permissionMode)) ?? nil)
-            .flatMap(PermissionMode.init(rawValue:)).flatMap { $0 == .plan ? nil : $0 }
+            .map { PermissionMode(rawValue: $0) ?? .unknown }.flatMap { $0 == .plan ? nil : $0 }
     }
 
     /// The model a new thread on `provider` gets when it names none.
@@ -1711,9 +1730,12 @@ public struct HelloResult: Sendable, Hashable, Decodable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        runnerVersion = try c.decodeIfPresent(String.self, forKey: .runnerVersion) ?? "?"
-        `protocol` = try c.decodeIfPresent(Int.self, forKey: .protocol) ?? 1
-        accounts = try c.decodeIfPresent([Account].self, forKey: .accounts) ?? []
+        // Each read leniently, as accounts.updated reads its list: one odd
+        // field or account here made hello throw, and the app reconnected
+        // forever without ever connecting (9 Nov review).
+        runnerVersion = ((try? c.decodeIfPresent(String.self, forKey: .runnerVersion)) ?? nil) ?? "?"
+        `protocol` = c.lenientInt(forKey: .protocol) ?? 1
+        accounts = c.lossyArray(Account.self, forKey: .accounts)
         defaults = (try? c.decodeIfPresent(RunnerDefaults.self, forKey: .defaults))
             ?? RunnerDefaults(cwd: "", accountId: accounts.first?.id ?? "claude-main")
         if defaults.accountId.isEmpty { defaults.accountId = accounts.first?.id ?? "claude-main" }

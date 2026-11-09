@@ -4,29 +4,27 @@ import Foundation
 /// scrolled: the newest ones live from phone:messages, and older chunks asked
 /// for once each with beforeSeq.
 ///
-/// The live page grows by raising its limit, as far as the server lets one
-/// query go (`liveMax`, phone:messages' PAGE_MAX, or fewer rows when they're
-/// big). Past that it used to be stuck on "Loading…" for good, about 5,500
-/// messages short of the start of a 7,500-message thread (8 Nov). Older rows
-/// now come in chunks from where the shown ones begin.
+/// The live page stays the size it opened with. It used to grow by raising
+/// its limit as you scrolled back, up to 2,000 rows, and a live query reads
+/// its whole page again for every new message: a scrolled-back phone on the
+/// launch thread cost 37.6 MB of Convex I/O in a day (8 Nov), more than a
+/// free plan's daily share. Older rows come in chunks from where the shown
+/// ones begin, read once, since past messages don't change.
 public struct MessageHistory: Sendable, Equatable {
     /// The most rows one phone:messages query returns (PAGE_MAX in convex/phone.ts).
     public static let liveMax = 2000
 
     /// The newest messages, live.
     public private(set) var live: MessagePage?
-    /// The limit `live` was asked for with; a bigger one is on its way while
-    /// it isn't the one asked for now.
-    public private(set) var liveLimit = 0
     /// Older messages from chunks, oldest first, all before `live`'s.
     public private(set) var older: [PhoneMessage] = []
     public private(set) var olderImages: [MessageImage] = []
     /// Whether there's more before `older`; nil until a chunk has come.
     public private(set) var olderHasMore: Bool?
-    /// From the first ask for a chunk: the live page no longer grows, and
-    /// rows that slide off its top as new ones come in move to `older`, or
-    /// there'd be a hole between the two.
-    public private(set) var chunked = false
+    /// Pictures from phone:images (API 37) from `older`'s first row on: one
+    /// that finishes uploading after its row was read (into a chunk, or off
+    /// the live page's top) comes only from there.
+    public private(set) var lateImages: [MessageImage] = []
 
     public init() {}
 
@@ -35,16 +33,18 @@ public struct MessageHistory: Sendable, Equatable {
     /// The pictures of every row shown, each once.
     public var images: [MessageImage] {
         var seen = Set<String>()
-        return (olderImages + (live?.images ?? [])).filter { seen.insert($0.url).inserted }
+        let shown = Set(messages.map(\.seq))
+        return (olderImages + (live?.images ?? []) + lateImages.filter { shown.contains($0.seq) }).filter { seen.insert($0.url).inserted }
     }
 
     public var hasMore: Bool { olderHasMore ?? (live?.hasMore ?? false) }
 
     public var firstSeq: Int? { older.first?.seq ?? live?.messages.first?.seq }
 
-    /// A new value of the live query, asked for with `limit`.
-    public mutating func takeLive(_ page: MessagePage, limit: Int) {
-        if chunked, let old = live, let first = page.messages.first?.seq {
+    /// A new value of the live query. Rows that slide off its top as new ones
+    /// come in move to `older`, or there'd be a hole above the live ones.
+    public mutating func takeLive(_ page: MessagePage) {
+        if let old = live, let first = page.messages.first?.seq {
             if let last = old.messages.last?.seq, last < first {
                 // Nothing in common with the page before (the phone was away
                 // while a whole page of new messages came): what's between
@@ -62,32 +62,16 @@ public struct MessageHistory: Sendable, Equatable {
             }
         }
         live = page
-        liveLimit = limit
     }
 
-    /// What "Load earlier" should do next.
-    public enum Next: Equatable {
-        /// Ask the live query for more.
-        case grow(limit: Int)
-        /// Ask for a chunk of older rows before this seq.
-        case older(before: Int)
-        /// Nothing: there's no more, or more is on its way.
-        case none
-    }
+    /// Where phone:images should watch from: the first row read once, or
+    /// nil while the live page is all there is.
+    public var lateImagesFrom: Int? { older.first?.seq }
 
-    public func next(limit: Int, step: Int) -> Next {
-        guard let live, hasMore, liveLimit == limit else { return .none }
-        // A full page under the server's most: more of it. One that came back
-        // short of what was asked had reached what one query may read.
-        if !chunked, live.messages.count >= limit, limit < Self.liveMax {
-            return .grow(limit: min(limit + step, Self.liveMax))
-        }
-        return firstSeq.map { .older(before: $0) } ?? .none
-    }
+    public mutating func takeLateImages(_ images: [MessageImage]) { lateImages = images }
 
-    /// Before asking for the first chunk: from now on the live page's
-    /// rows are kept as it slides.
-    public mutating func startChunks() { chunked = true }
+    /// The seq to ask for an older chunk before, or nil when there's no more.
+    public var nextBefore: Int? { hasMore ? firstSeq : nil }
 
     /// A chunk of rows before `seq`. False, and nothing changes, if the
     /// shown rows no longer start there (it came too late).

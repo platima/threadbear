@@ -94,6 +94,9 @@ public protocol Backend: Sendable {
     /// API 2: up to `limit` messages and tool lines before `beforeSeq`, once,
     /// for scrolling back past what the live page holds (MessageHistory).
     func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int) async throws -> MessagePage
+    /// API 37: a thread's pictures from `from` on, live. It re-runs only when
+    /// a picture row changes, so it covers rows read once (MessageHistory).
+    func images(_ threadId: String, from: Int) -> AsyncThrowingStream<[MessageImage], Error>
     /// For a backend before API 2: asks the runner for up to 50 text messages older than `beforeSeq`;
     /// they turn up in `thread(_:)` once it has written them.
     func loadEarlier(threadId: String, beforeSeq: Int) async throws -> String
@@ -144,7 +147,13 @@ public final class ConvexBackend: Backend, @unchecked Sendable {
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
-        do { return try JSONDecoder().decode(T.self, from: data) } catch {
+        do {
+            // Every list the backend answers (threads, projects, schedules,
+            // accounts...) is read item by item, so one row this build
+            // can't read is skipped rather than failing the whole answer.
+            if let list = T.self as? LossyListDecodable.Type, let value = try list.decodeLossily(data) as? T { return value }
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
             throw TransportError.server("Couldn't read the server's answer: \(error)")
         }
     }
@@ -289,6 +298,10 @@ public final class ConvexBackend: Backend, @unchecked Sendable {
     public func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int) async throws -> MessagePage {
         let answer = try await transport.query("phone:messages", args(["threadId": .string(threadId), "beforeSeq": .number(Double(beforeSeq)), "limit": .number(Double(limit)), "tools": .bool(true)]))
         return try Self.decode(MessagePage.self, answer)
+    }
+
+    public func images(_ threadId: String, from: Int) -> AsyncThrowingStream<[MessageImage], Error> {
+        live("phone:images", ["threadId": .string(threadId), "from": .number(Double(from))], as: [MessageImage].self)
     }
 
     public func command(_ commandId: String) -> AsyncThrowingStream<CommandStatus?, Error> {

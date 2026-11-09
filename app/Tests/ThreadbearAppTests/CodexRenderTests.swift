@@ -7,12 +7,19 @@ import XCTest
 /// under its title, and a generated image bigger than a screenshot.
 @MainActor
 final class CodexRenderTests: XCTestCase {
-    func testCodexFooterIsTheDurationOnly() {
+    /// Both providers' footers show tokens, Codex's input counting its
+    /// cached part once (Mike, 9 Nov 2026: dollars read like a bill).
+    func testFooterShowsTokensForBothProviders() {
         let codex = TurnCompletion(turnId: "t1", outcome: .completed, durationMs: 12_400,
-                                   usage: .object(["inputTokens": .number(24177), "outputTokens": .number(310)]))
-        XCTAssertEqual(RowRenderer.footerText(codex).string, "12s", "Codex reports no cost, and its tokens are in Copy debug info")
-        let claude = TurnCompletion(turnId: "t1", outcome: .completed, durationMs: 12_400, costUsd: 0.04)
-        XCTAssertEqual(RowRenderer.footerText(claude).string, "12s · $0.04", "Claude's footer doesn't change")
+                                   usage: .object(["inputTokens": .number(24177), "cachedInputTokens": .number(12032), "outputTokens": .number(310)]))
+        XCTAssertEqual(RowRenderer.footerText(codex).string, "12s · 310 out · 24k in")
+        let claude = TurnCompletion(turnId: "t1", outcome: .completed, durationMs: 12_400, costUsd: 0.45,
+                                    usage: .object(["inputTokens": .number(16), "outputTokens": .number(1661),
+                                                    "cacheReadTokens": .number(337_191), "cacheWriteTokens": .number(44033)]))
+        XCTAssertEqual(RowRenderer.footerText(claude).string, "12s · 1.7k out · 381k in")
+        // A turn from a runner that sent no tokens keeps its cost.
+        let old = TurnCompletion(turnId: "t1", outcome: .completed, durationMs: 12_400, costUsd: 0.04)
+        XCTAssertEqual(RowRenderer.footerText(old).string, "12s · $0.04")
     }
 
     func testApprovalCardShowsCodexsReason() {

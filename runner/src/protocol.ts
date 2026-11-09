@@ -4,8 +4,25 @@
 
 export const PROTOCOL_VERSION = 1;
 
-export type Provider = 'claude' | 'codex';
-export const PROVIDERS: readonly Provider[] = ['claude', 'codex'];
+// cursor and opencode run over ACP (adapters/acp/), behind the acpAgents
+// experiment: activeProviders (providers.ts) is the list a runner offers.
+export type Provider = 'claude' | 'codex' | 'cursor' | 'opencode';
+export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'cursor', 'opencode'];
+
+// What a provider is called and can do (providers.ts holds the table). `id`
+// is a plain string as a client can be sent one it has never heard of.
+export type ProviderInfo = {
+  id: string;
+  name: string;
+  cliName: string;
+  loginCommand: string;
+  effort: 'claude' | 'codex' | 'none';
+  autoMode: 'classifier' | 'asks';
+  sandbox: boolean;
+  rewind: boolean;
+  smallJobs: boolean;
+  usageReadings: boolean;
+};
 
 export function isProvider(v: unknown): v is Provider {
   return typeof v === 'string' && (PROVIDERS as readonly string[]).includes(v);
@@ -64,6 +81,7 @@ export type ModelChoice = {
   description?: string;
   effortLevels?: EffortLevel[];
   defaultEffort?: EffortLevel; // the model's own level, when the CLI says (Codex)
+  fastMode?: true; // the CLI offers fast mode on it (Claude's supportsFastMode)
 };
 
 export type UsageWindowKind = 'five_hour' | 'weekly' | 'weekly_model' | 'daily' | 'monthly' | 'allowance' | 'other';
@@ -186,6 +204,7 @@ export type ThreadSummary = {
   provider: Provider;
   model?: string;
   effort?: EffortLevel;
+  fastMode?: true; // Claude Code's fast mode; absent means standard speed
   modelInUse?: string;
   effortInUse?: EffortLevel;
   permissionMode: PermissionMode;

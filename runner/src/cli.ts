@@ -2,9 +2,10 @@
 import { parseArgs } from 'node:util';
 import { startedByFlags } from './started-by-flags.ts';
 import path from 'node:path';
-import { loadConfig, readToken, runnerUrl } from './config.ts';
+import { loadConfig, readToken, runnerUrl, RunnerJsonError } from './config.ts';
 import { RunnerClient } from './client.ts';
 import { poolLine } from './pools.ts';
+import { providerName } from './providers.ts';
 import type { Account, ImageRef, Pool, LibrarianStatus, PersistedEvent, Project, RunnerDefaults, Schedule, ThreadSummary } from './protocol.ts';
 import type { Settings } from './settings.ts';
 import { backgroundFlag } from './protocol.ts';
@@ -255,7 +256,18 @@ async function main(argv: string[]): Promise<number> {
       return 2;
     }
   }
-  const cfg = loadConfig();
+  let cfg: ReturnType<typeof loadConfig>;
+  try {
+    cfg = loadConfig();
+  } catch (e) {
+    // A broken runner.json: say what's wrong with it, not a stack trace.
+    if (!(e instanceof RunnerJsonError)) throw e;
+    console.error(e.message);
+    // tb logs and tb activity only read files, and the log is where to
+    // look while the runner won't start, so they still run.
+    if (cmd !== 'logs' && cmd !== 'activity') return 1;
+    cfg = loadConfig(process.env, { readOnly: true });
+  }
   if (cmd === 'logs') return logsCommand(cfg, values);
   // The app's activity log is files on this Mac: no runner needed.
   if (cmd === 'activity') return activityCommand(cfg, values);
@@ -575,7 +587,7 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
         const note = a.note ? `  (${a.note})` : '';
         // The provider has its own column, so not "Codex · " again.
         const who = a.email ?? a.title.replace(/^Codex · /, '');
-        console.log(`${a.id === r.defaults.accountId ? '*' : ' '} ${a.id.padEnd(12)} ${(a.provider === 'codex' ? 'Codex' : 'Claude').padEnd(7)}${who}${note}`);
+        console.log(`${a.id === r.defaults.accountId ? '*' : ' '} ${a.id.padEnd(12)} ${providerName(a.provider).padEnd(9)}${who}${note}`);
       }
       return 0;
     }

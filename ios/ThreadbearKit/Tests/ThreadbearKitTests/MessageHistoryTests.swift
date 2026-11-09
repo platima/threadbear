@@ -10,111 +10,98 @@ import Testing
                     images: images.map { MessageImage(seq: $0, url: "https://x/\($0).png") })
     }
 
-    /// Under the server's most, a full page grows the live query, as before.
-    @Test func aFullLivePageGrows() {
+    /// The live page never grows: "Load earlier" reads a chunk before it,
+    /// once, rather than asking the live query for more rows to read again
+    /// on every new message (37.6 MB of Convex I/O on 8 Nov).
+    @Test func loadEarlierAsksForAChunkNotABiggerLivePage() {
         var h = MessageHistory()
-        h.takeLive(page(921...1000, hasMore: true), limit: 80)
-        #expect(h.next(limit: 80, step: 200) == .grow(limit: 280))
-        // While the bigger page is on its way, nothing more.
-        #expect(h.next(limit: 280, step: 200) == .none)
-    }
-
-    /// At the server's most (2,000 rows) the live page can't grow: the 8 Nov
-    /// bug, stuck on "Loading…" for good. Older rows come as a chunk instead.
-    @Test func atTheServersMostItAsksForAnOlderChunk() {
-        var h = MessageHistory()
-        h.takeLive(page(5501...7500, hasMore: true), limit: 2000)
-        #expect(h.next(limit: 2000, step: 200) == .older(before: 5501))
-        // Asked for 2,080 by an older build: the server still sends 2,000.
-        var asked = MessageHistory()
-        asked.takeLive(page(5501...7500, hasMore: true), limit: 2080)
-        #expect(asked.next(limit: 2080, step: 200) == .older(before: 5501))
-    }
-
-    /// Big rows stop a page short of its limit (8 MB a query), with more to come.
-    @Test func aPageCutShortByItsSizeAsksForAChunk() {
-        var h = MessageHistory()
-        h.takeLive(page(901...1000, hasMore: true), limit: 280)
-        #expect(h.next(limit: 280, step: 200) == .older(before: 901))
+        #expect(h.nextBefore == nil)
+        h.takeLive(page(921...1000, hasMore: true))
+        #expect(h.nextBefore == 921)
+        var all = MessageHistory()
+        all.takeLive(page(1...80, hasMore: false))
+        #expect(all.nextBefore == nil)
     }
 
     @Test func chunksGoAboveTheLivePageUntilTheStart() {
         var h = MessageHistory()
-        h.takeLive(page(5501...7500, hasMore: true), limit: 2000)
-        h.startChunks()
-        let took1 = h.takeOlder(page(5301...5500, hasMore: true, images: [5310]), before: 5501)
+        h.takeLive(page(7421...7500, hasMore: true))
+        let took1 = h.takeOlder(page(7221...7420, hasMore: true, images: [7310]), before: 7421)
         #expect(took1)
-        #expect(h.messages.map(\.seq) == Array(5301...7500))
-        #expect(h.next(limit: 2000, step: 200) == .older(before: 5301))
-        let took2 = h.takeOlder(page(1...5300, hasMore: false), before: 5301)
+        #expect(h.messages.map(\.seq) == Array(7221...7500))
+        #expect(h.nextBefore == 7221)
+        let took2 = h.takeOlder(page(1...7220, hasMore: false), before: 7221)
         #expect(took2)
         #expect(h.messages.count == 7500)
         #expect(!h.hasMore)
-        #expect(h.next(limit: 2000, step: 200) == .none)
-        #expect(h.images.map(\.seq) == [5310])
+        #expect(h.nextBefore == nil)
+        #expect(h.images.map(\.seq) == [7310])
     }
 
-    /// New messages slide the oldest off a live page of fixed size. Once
-    /// chunks are in, those rows stay, or there'd be a hole above the live ones.
+    /// New messages slide the oldest off the live page. Those rows stay, or
+    /// there'd be a hole above the live ones, before any chunk too: you may be
+    /// reading them.
     @Test func rowsThatSlideOffTheLivePageStay() {
         var h = MessageHistory()
-        h.takeLive(page(5501...7500, hasMore: true, images: [5502]), limit: 2000)
-        h.startChunks()
-        // Two new messages while the chunk was on its way.
-        h.takeLive(page(5503...7502, hasMore: true), limit: 2000)
-        #expect(h.firstSeq == 5501)
-        let took3 = h.takeOlder(page(5301...5500, hasMore: true), before: 5501)
-        #expect(took3)
-        #expect(h.messages.map(\.seq) == Array(5301...7502))
-        #expect(h.images.map(\.seq) == [5502])
+        h.takeLive(page(921...1000, hasMore: true, images: [921]))
+        h.takeLive(page(922...1001, hasMore: true))
+        #expect(h.messages.map(\.seq) == Array(921...1001))
+        // Two more while a chunk was on its way.
+        h.takeLive(page(924...1003, hasMore: true))
+        #expect(h.firstSeq == 921)
+        let took = h.takeOlder(page(721...920, hasMore: true), before: 921)
+        #expect(took)
+        #expect(h.messages.map(\.seq) == Array(721...1003))
+        #expect(h.images.map(\.seq) == [921])
         // And again, after the chunk.
-        h.takeLive(page(5504...7503, hasMore: true), limit: 2000)
-        #expect(h.messages.map(\.seq) == Array(5301...7503))
-    }
-
-    /// Before any chunk, a sliding page just moves: nothing is stitched on.
-    @Test func withoutChunksTheLivePageIsAllThereIs() {
-        var h = MessageHistory()
-        h.takeLive(page(921...1000, hasMore: true), limit: 80)
-        h.takeLive(page(922...1001, hasMore: true), limit: 80)
-        #expect(h.messages.map(\.seq) == Array(922...1001))
+        h.takeLive(page(925...1004, hasMore: true))
+        #expect(h.messages.map(\.seq) == Array(721...1004))
     }
 
     /// A chunk asked for before rows that are no longer the first is dropped.
     @Test func aLateChunkIsDropped() {
         var h = MessageHistory()
-        h.takeLive(page(5501...7500, hasMore: true), limit: 2000)
-        h.startChunks()
-        let took4 = h.takeOlder(page(5301...5500, hasMore: true), before: 5501)
+        h.takeLive(page(921...1000, hasMore: true))
+        let took4 = h.takeOlder(page(721...920, hasMore: true), before: 921)
         #expect(took4)
-        let took5 = h.takeOlder(page(5301...5500, hasMore: true), before: 5501)
+        let took5 = h.takeOlder(page(721...920, hasMore: true), before: 921)
         #expect(!took5)
-        #expect(h.messages.count == 2200)
+        #expect(h.messages.count == 280)
     }
 
     /// Away long enough for a whole page of new messages: what came between
     /// is unknown, so it starts again from the newest rather than show a hole.
     @Test func noOverlapWithThePageBeforeStartsAgain() {
         var h = MessageHistory()
-        h.takeLive(page(5501...7500, hasMore: true), limit: 2000)
-        h.startChunks()
-        let took = h.takeOlder(page(5301...5500, hasMore: true), before: 5501)
+        h.takeLive(page(921...1000, hasMore: true))
+        let took = h.takeOlder(page(721...920, hasMore: true), before: 921)
         #expect(took)
-        h.takeLive(page(9601...11600, hasMore: true), limit: 2000)
-        #expect(h.messages.map(\.seq) == Array(9601...11600))
-        #expect(!h.chunked)
-        #expect(h.next(limit: 2000, step: 200) == .older(before: 9601))
+        h.takeLive(page(1101...1180, hasMore: true))
+        #expect(h.messages.map(\.seq) == Array(1101...1180))
+        #expect(h.nextBefore == 1101)
     }
 
     /// The live page's top moving back up (big rows that got smaller) takes
     /// its rows back from the chunks: nothing shows twice.
     @Test func aLivePageReachingFurtherBackTakesItsRowsBack() {
         var h = MessageHistory()
-        h.takeLive(page(5501...7500, hasMore: true, images: [5505]), limit: 2000)
-        h.startChunks()
-        h.takeLive(page(5511...7510, hasMore: true), limit: 2000)
-        h.takeLive(page(5490...7510, hasMore: true, images: [5505]), limit: 2000)
-        #expect(h.messages.map(\.seq) == Array(5490...7510))
-        #expect(h.images.map(\.seq) == [5505])
+        h.takeLive(page(921...1000, hasMore: true, images: [925]))
+        h.takeLive(page(931...1010, hasMore: true))
+        h.takeLive(page(910...1010, hasMore: true, images: [925]))
+        #expect(h.messages.map(\.seq) == Array(910...1010))
+        #expect(h.images.map(\.seq) == [925])
+    }
+
+    /// A picture that finishes uploading after its row slid off the live
+    /// page (or came in a chunk) arrives only from phone:images: it shows, and
+    /// pictures for rows not shown don't.
+    @Test func latePicturesOfRowsReadOnceShow() {
+        var h = MessageHistory()
+        #expect(h.lateImagesFrom == nil)
+        h.takeLive(page(921...1000, hasMore: true))
+        h.takeLive(page(925...1004, hasMore: true))
+        #expect(h.lateImagesFrom == 921)
+        h.takeLateImages([MessageImage(seq: 922, url: "https://x/922.png"), MessageImage(seq: 900, url: "https://x/900.png"), MessageImage(seq: 1001, url: "https://x/1001.png")])
+        #expect(h.images.map(\.seq).sorted() == [922, 1001])
     }
 }

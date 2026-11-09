@@ -88,7 +88,27 @@ upgrade with an `Authorization` header that's wrong is turned away with HTTP
 ## Types
 
 ```ts
-type Provider = "claude" | "codex"
+// cursor and opencode: ACP agents, only from a runner with the acpAgents
+// experiment on (see "ACP agents")
+type Provider = "claude" | "codex" | "cursor" | "opencode"
+
+// What a provider is called and can do, from `hello`. A client asks this
+// rather than comparing provider names, so a provider it has never heard of
+// still gets the right menus.
+type ProviderInfo = {
+  id: Provider
+  name: string          // "Claude": in notes and menus
+  cliName: string       // "Claude Code": the program, in notes about its versions
+  loginCommand: string  // run in a Terminal to sign a login in ("claude auth login")
+  effort: "claude" | "codex" | "none" // which effort levels it offers: Claude's,
+                        // those plus Codex's ultra, or none of Threadbear's own
+  autoMode: "classifier" | "asks"     // Auto: a classifier judges each action, or
+                        // it behaves like Ask (Codex)
+  sandbox: boolean      // can run a sandboxed thread
+  rewind: boolean       // can go back to an earlier message
+  smallJobs: boolean    // can run small jobs (titles, summaries)
+  usageReadings: boolean // reports how much room a login has
+}
 
 type Account = {
   id: string            // "claude-main", "claude-1", "codex-main", "codex-1", ...
@@ -123,6 +143,7 @@ type ModelChoice = {
   description?: string
   effortLevels?: EffortLevel[] // absent when the model takes no effort level
   defaultEffort?: EffortLevel  // the model's own level, when the CLI says (Codex)
+  fastMode?: true              // it has Claude Code's fast mode (see Fast mode)
 }
 
 type UsageWindow = {
@@ -205,6 +226,8 @@ type ThreadSummary = {
   effort?: EffortLevel  // undefined means the model's own level
   modelInUse?: string   // full id the CLI ran the last turn on, once one has run
   effortInUse?: EffortLevel // the level the CLI reported for the last turn
+  fastMode?: true       // Claude Code's fast mode is on (see Fast mode).
+                        // Absent: standard speed, and always on Codex
   permissionMode: "full" | "ask" | "auto" | "plan"  // "plan": Plan first
   status: ThreadStatus
   live: boolean         // a CLI process is attached right now
@@ -727,8 +750,8 @@ page comes in a folder of its own with the files it names (`src`, `href`,
 50 MB; never anything above its folder, nor other pages it links to. The
 Mac window shows the page the way the side pane does: scripts off, nothing
 loaded from outside, and Open in Browser for a page with scripts. A video
-plays muted and looping, with controls on the stage and side by side with
-the others in the grid. Paths can be absolute, home-relative or
+loops. On the stage it has controls and plays with sound; side by side
+with the others in the grid it's muted. Paths can be absolute, home-relative or
 relative to the thread's folder. An option's shots are `path` then
 `shots`, or `shots` alone; it needs at least one. Limit: 12 options, 8
 shots each and 40 in all, each image at most 25 MB, video 200 MB and page
@@ -947,15 +970,15 @@ the summary and then the reply.
 
 | method | params | result |
 |---|---|---|
-| `hello` | `{ client: string, version: string, build?: { commit, short, tree }, pid?: number }` (`build`: the Mac app's own build, see App restarts; a draining runner's link to the primary says `client: "threadbear-drain"` with its `pid`, for the log) | `{ runnerVersion, protocol: 1, accounts: Account[], pools?: Pool[], defaults: { cwd, accountId, poolId?, model?, models?: { claude?, codex? }, efforts?: { claude?: EffortLevel, codex?: EffortLevel }, permissionMode?: "full" \| "ask" \| "auto" }, clis?: CliStatus[], updates?: RunnerUpdates, experiments?: string[] }`. `experiments` is the ids of the experiments on for this runner (docs/experiments.md), read at each `hello`, so the app shows what belongs to one (the Move to menu for `moveToRunner`) from its next connect. `updates` is under Runner updates; `pools` and `defaults.poolId` under Pools. `defaults.accountId` is the account a `threads.create` with no `accountId` uses: the one with the most room among the last-used account's provider (skipping blocked ones, ones under 10% and ones with a note), worked out again as usage changes; a client keeps its own copy of the rule rather than asking again. `defaults.models[provider]` is the model a new thread on that provider gets when it names none (`runner.json`'s `defaults.models`; a dev runner sets the cheapest); `defaults.model` is the same for Claude, kept for older apps. Absent means the account's own default (`accounts[].defaultModel` names it, when known). `defaults.efforts[provider]` likewise for effort; absent means the model's own level. `defaults.permissionMode` is the mode a `threads.create` with none starts on, and the one the app's new-thread composer starts on and goes back to after each send (`runner.json`'s `defaults.permissionMode`, read at startup; `"plan"` or anything else there is ignored). Absent means `"full"`: setup writes `"auto"` into the `runner.json` it makes for a new install, and an install from before has none. A client that doesn't know the runner's (an older runner, or another runner reached through the backend) starts on `"full"`. `runnerVersion` is `<package version>+<release id>` when the runner runs from a release, else `<package version>+source` |
-| `threads.list` | `{ include?: ("inbox" \| "snoozed" \| "archived")[], ids?: string[] }` (default `["inbox"]`; `ids` keeps only those threads, unknown ones left out; an older runner ignores it, so pick yours out of the answer) | `{ threads: ThreadSummary[] }` newest activity first |
+| `hello` | `{ client: string, version: string, build?: { commit, short, tree }, pid?: number }` (`build`: the Mac app's own build, see App restarts; a draining runner's link to the primary says `client: "threadbear-drain"` with its `pid`, for the log) | `{ runnerVersion, protocol: 1, accounts: Account[], providers?: ProviderInfo[], pools?: Pool[], defaults: { cwd, accountId, poolId?, model?, models?: { claude?, codex? }, efforts?: { claude?: EffortLevel, codex?: EffortLevel }, permissionMode?: "full" \| "ask" \| "auto" }, clis?: CliStatus[], updates?: RunnerUpdates, experiments?: string[] }`. `providers` is what each provider this runner knows is called and can do, in its own order (`ProviderInfo` above; absent from older runners, when a client uses what it knows of Claude and Codex). `experiments` is the ids of the experiments on for this runner (docs/experiments.md), read at each `hello`, so the app shows what belongs to one (the Move to menu for `moveToRunner`) from its next connect. `updates` is under Runner updates; `pools` and `defaults.poolId` under Pools. `defaults.accountId` is the account a `threads.create` with no `accountId` uses: the one with the most room among the last-used account's provider (skipping blocked ones, ones under 10% and ones with a note), worked out again as usage changes; a client keeps its own copy of the rule rather than asking again. `defaults.models[provider]` is the model a new thread on that provider gets when it names none (`runner.json`'s `defaults.models`; a dev runner sets the cheapest); `defaults.model` is the same for Claude, kept for older apps. Absent means the account's own default (`accounts[].defaultModel` names it, when known). `defaults.efforts[provider]` likewise for effort; absent means the model's own level. `defaults.permissionMode` is the mode a `threads.create` with none starts on, and the one the app's new-thread composer starts on and goes back to after each send (`runner.json`'s `defaults.permissionMode`, read at startup; `"plan"` or anything else there is ignored). Absent means `"full"`: setup writes `"auto"` into the `runner.json` it makes for a new install, and an install from before has none. A client that doesn't know the runner's (an older runner, or another runner reached through the backend) starts on `"full"`. `runnerVersion` is `<package version>+<release id>` when the runner runs from a release, else `<package version>+source` |
+| `threads.list` | `{ include?: ("inbox" \| "snoozed" \| "archived")[], ids?: string[] }` (default `["inbox"]`; a value the runner doesn't know is left out; `ids` keeps only those threads, unknown ones left out; an older runner ignores it, so pick yours out of the answer) | `{ threads: ThreadSummary[] }` newest activity first |
 | `threads.search` | `{ query: string, limit?: number }` | `{ threads: ThreadSummary[] }` matches title and preview across all threads, archived included |
-| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, projectIds?: string[] }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. See "Models and effort across providers" |
+| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, fastMode?: boolean, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, projectIds?: string[] }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. See "Models and effort across providers" `fastMode: true` asks for fast mode (see Fast mode) |
 | `threads.samples` | `{ cwd: string, remove?: boolean }` | `{ threads: ThreadSummary[] }`. The app's first-run tour's sample threads (`runner/src/samples.ts`): made up exchanges written as finished turns with no CLI, in `cwd` (the app's `~/ThreadbearThreads/Welcome`, where it writes an example patch), with `sample: true`; the first needs you, with a card of asks, and one is left unread. Asking again deletes any there are and makes them afresh (writing the patch again if it's gone, and trusting it as written). `remove: true` deletes them all, archived and hibernating ones too, and returns none. `threads.send` to a sample is `-32602` |
 | `threads.send` | `{ threadId, text, images?: ImageRef[], answers?: AskAnswer[], origin?: "phone" }` | `{ turnId }`. `text` can place the `images` among its words with `[Picture N]` markers (Pictures in a message). `origin: "phone"` is only for a phone command the primary passes on to a draining runner (Sync, "Commands"), so the message keeps its origin there; any other `origin` is `-32602`. If a turn is running and its CLI is live, the message goes into that turn straight away (a `user.message` under the running `turnId`, which is returned): the agent takes it at its next step, or right after its reply if that was already finishing, and the turn doesn't complete until it has been answered. If the thread was moved to another login (usually another provider) during the running turn, a message from Mike (or the phone) doesn't steer into the old CLI: the turn is stopped (`system.note` "Stopped here so <model> can take over.") and the message starts the next turn on the new login, with the handoff, as T3 Code does. If the agent is waiting on a card for its own tool call (an approval or a question, with an `itemId`), a message from Mike declines that card first (`approval.resolved` with `deny` and a `message` telling the agent he wrote instead), as the CLI reads nothing else until the card is answered; a background subagent's card is left open. Otherwise (the CLI is still starting or leaving, messages are already waiting, a move or fresh CLI is due on the next turn, Stop has been pressed, or the turn was opened only for a card) the message is queued and starts its own turn when the running one ends |
 | `threads.interrupt` | `{ threadId }` | `{}` |
 | `threads.edit` | `{ threadId, seq, text, images?: ImageRef[], stopBackground?: boolean }` | `{ turnId, rewound: { seq, fromSeq, toSeq, files } }`. Replaces the message at `seq` and carries on from there (see Editing a message): stops any turn, cuts the conversation back to just before it, undoes the agent's file changes since, and sends `text` as a new turn. Answers once the new turn has started, which can take a few seconds. `-32602` with the reason when the message can't be edited; `-32020` while another edit of the thread is under way or the runner is handing over; `-32050` while the thread has background work running and `stopBackground` isn't `true` (see Editing a message) |
-| `threads.update` | `{ threadId, title?, titleBy?: "mike" \| "agent", cwd?, accountId?, poolId?: string \| null, model?: string \| null, effort?: EffortLevel \| null, permissionMode?, snoozedUntil?: string \| null, archived?: boolean, archivedBy?: "mike" \| "agent" \| "threadbear", verdict?: "worked" \| "didntWork" \| "notNeeded", starred?: boolean }` | `{ thread: ThreadSummary }`. `archivedBy` and `verdict` go with `archived: true`; see "Who archived a thread". `starred` sets or clears `starredAt`; starring a thread that's already starred keeps its place, and neither stops a turn. A `title` is Mike's unless `titleBy` is `"agent"` (the `update_thread` tool, unless the agent says Mike asked for it). Once Mike has named a thread, an agent's different title is `-32602` and nothing in the call changes, and no model title replaces it. `snoozedUntil` is an ISO time, or `"restart"` for until the runner next starts (any start: a planned restart, a crash, a reboot), when the thread wakes before the restart's resume is sent, so a thread put away while its own restart waited is still carried on. `"release"` is the same but only a start (or taking it over from a draining runner) on another release than this runner's wakes it, so a crash or a restart on the same build leaves it asleep (`snoozedUntilRelease`); a runner from a source checkout has no release to tell apart, so there it is `"restart"`. `update_thread`, `end_turn`'s `snooze` and `tb snooze` take it too. Snoozing or archiving releases the CLI (and archives a Codex thread in Codex too). Changing account or cwd takes effect on the next turn; an account change during a turn says so in a `system.note` ("<model> takes over from your next message, which stops this turn."), see `threads.send`. A model or effort change reaches a live Claude CLI straight away (`null` goes back to the default); on Codex it applies from the next turn, with a `system.note` if a turn is running. A folder change on the same Claude account copies the native session's transcript to the new folder and resumes it; on the same Codex account the session carries on in the new folder from the next turn. Otherwise (or if that fails) it starts a new native session with a handoff note: the thread so far under a 16,000-character budget (runner/src/handoff-history.ts, after T3 Code's): messages, tool calls with a little of their output, edited files and errors; the last user message, the last reply and the first message first, then newest to oldest, with gaps marked and a pointer to `read_thread` for the rest. An account of the other provider switches `provider`, resets `model` and `effort` to that provider's defaults unless the same call sets them, and clears the thread's "Always allow" rules. `model` and `effort` are checked as in "Models and effort across providers". `accountId` pins the thread to that login (clearing `poolId`). `poolId: null` pins it to its current login; a pool id puts it in that pool, and moves it onto one of the pool's logins at once (from the next turn) if its current one isn't in it; an unknown one is `-32602`. A move from one Claude login to another copies the session's transcript into the new login's config folder and resumes it there, as a folder move does |
+| `threads.update` | `{ threadId, title?, titleBy?: "mike" \| "agent", cwd?, accountId?, poolId?: string \| null, model?: string \| null, effort?: EffortLevel \| null, fastMode?: boolean \| null, permissionMode?, snoozedUntil?: string \| null, archived?: boolean, archivedBy?: "mike" \| "agent" \| "threadbear", verdict?: "worked" \| "didntWork" \| "notNeeded", starred?: boolean }` | `{ thread: ThreadSummary }`. `archivedBy` and `verdict` go with `archived: true`; see "Who archived a thread". `starred` sets or clears `starredAt`; starring a thread that's already starred keeps its place, and neither stops a turn. A `title` is Mike's unless `titleBy` is `"agent"` (the `update_thread` tool, unless the agent says Mike asked for it). Once Mike has named a thread, an agent's different title is `-32602` and nothing in the call changes, and no model title replaces it. `snoozedUntil` is an ISO time, or `"restart"` for until the runner next starts (any start: a planned restart, a crash, a reboot), when the thread wakes before the restart's resume is sent, so a thread put away while its own restart waited is still carried on. `"release"` is the same but only a start (or taking it over from a draining runner) on another release than this runner's wakes it, so a crash or a restart on the same build leaves it asleep (`snoozedUntilRelease`); a runner from a source checkout has no release to tell apart, so there it is `"restart"`. `update_thread`, `end_turn`'s `snooze` and `tb snooze` take it too. Snoozing or archiving releases the CLI (and archives a Codex thread in Codex too). Changing account or cwd takes effect on the next turn; an account change during a turn says so in a `system.note` ("<model> takes over from your next message, which stops this turn."), see `threads.send`. A model, effort or `fastMode` change reaches a live Claude CLI straight away (`null` goes back to the default; for `fastMode`, off); on Codex it applies from the next turn, with a `system.note` if a turn is running. A folder change on the same Claude account copies the native session's transcript to the new folder and resumes it; on the same Codex account the session carries on in the new folder from the next turn. Otherwise (or if that fails) it starts a new native session with a handoff note: the thread so far under a 16,000-character budget (runner/src/handoff-history.ts, after T3 Code's): messages, tool calls with a little of their output, edited files and errors; the last user message, the last reply and the first message first, then newest to oldest, with gaps marked and a pointer to `read_thread` for the rest. An account of the other provider switches `provider`, resets `model` and `effort` to that provider's defaults unless the same call sets them, and clears the thread's "Always allow" rules. `model` and `effort` are checked as in "Models and effort across providers". `accountId` pins the thread to that login (clearing `poolId`). `poolId: null` pins it to its current login; a pool id puts it in that pool, and moves it onto one of the pool's logins at once (from the next turn) if its current one isn't in it; an unknown one is `-32602`. A move from one Claude login to another copies the session's transcript into the new login's config folder and resumes it there, as a folder move does |
 | `threads.retitle` | `{ dryRun?: boolean, threadIds?: string[] }` | `{ threads: { threadId, from: string, to?: string, reason?: string }[] }`. Gives a model title to every thread, archived and snoozed included, whose title is still its first message's first line and that nobody has named (`titleSet`); see "Titles" under "Settings and models". One entry per such thread: `to` when it was renamed, `reason` when it wasn't (no key, private folder, over budget, renamed meanwhile). With `threadIds`, those threads whatever their title (a poor model title can be asked for again), still never one named by hand. The model also gets the start of the thread's first reply. `dryRun` lists them without asking the model (`tb retitle`) |
 | `threads.delete` | `{ threadId }` | `{}`. Stops the thread's CLI and moves its folder to `trash/` in the data dir (a Codex thread is archived in Codex too). Every client gets `thread.deleted` |
 | `threads.events` | `{ threadId, afterSeq?: number, beforeSeq?: number, limit?: number }` (default: the newest 500) | `{ events: Event[], firstSeq, lastSeq, inProgress: { itemId, type: "assistant.text" \| "reasoning", text }[] }` |
@@ -1060,6 +1083,77 @@ still `-32602`.)
   GPT-6.1-Sol").
 - An effort the model doesn't list in `effortLevels` (when known) is dropped
   with a note. `ultra` on a Claude thread always is.
+- An ACP agent's model counts only if that account's `models` lists it, never
+  by its name, and a Claude or Codex id goes to them first. These have no
+  effort levels (`ProviderInfo.effort` is `"none"`): an `effort` is dropped.
+
+## ACP agents
+
+An experiment (`acpAgents`, runner/src/adapters/acp/), off by default. Agents
+that speak the [Agent Client Protocol](https://agentclientprotocol.com) run as
+one process per live thread, over stdio. With it off no account, pool or
+`hello.providers` row of theirs appears. `runner.json`'s `cursorPath` and
+`opencodePath` set a binary by hand; otherwise each is found where it installs.
+
+- **One login each**, per machine, ids `opencode-main` and `cursor-main`. No
+  usage readings, so a pool can't move a thread by room.
+- **Which program.** The process must say it's that agent in `initialize`, or
+  the thread doesn't start. `agent` is a generic name: a file only counts as
+  Cursor's by where it really lives (`~/.local/share/cursor-agent/...`).
+- **Asking.** Every tool comes to the runner first. OpenCode gets `*: ask` as
+  inline config, with `OPENCODE_DISABLE_PROJECT_CONFIG=1` and `--pure`: a
+  folder's `opencode.json` outranks inline config, and its plugins run when a
+  session opens. Each request is answered from the thread's mode when it comes
+  (Full: allow; otherwise the card). Only the once options are ever chosen, as
+  an agent remembers "always" past the thread; "Always allow" is the runner's
+  rule (`acp:edit`, or the exact plain command). An edit of a file that runs as
+  code asks every time. Auto acts like Ask.
+- **Cursor** can't be told to always ask (its allow-list and a folder's
+  `.cursor/cli.json` can approve things), so Ask, Auto and Plan first run in its
+  read-only `ask` and `plan` modes; a thread that can't be put in one doesn't start.
+- **Plan first** uses the agent's plan mode, and the last reply of a turn is
+  proposed as the plan.
+- **The threadbear tools** reach the agent as an MCP server over HTTP on
+  `127.0.0.1` (a port per live session), with a random bearer token in a
+  header; loopback `Host` and no `Origin` required. They go through the same
+  gate as a Codex thread's, so `delete_thread` always asks.
+- **Not offered:** the sandbox (a confined thread is refused), rewind, steering
+  (a message sent during a turn runs next).
+
+### Fast mode
+
+An experiment (`fastMode`, off by default): while it's off the runner drops
+`fastMode` without a note, starts no CLI in fast mode, leaves it off
+`ThreadSummary` and `/fast` out of the command list, and clients show no
+control (`hello`'s `experiments`).
+
+Claude Code's fast mode runs the same model with faster output, at a
+higher price (on a subscription it draws from usage credits). It's per
+thread, like model and effort: `threads.create` and `threads.update` take
+`fastMode`, and `ThreadSummary.fastMode` is `true` while it's on (absent
+means standard speed, so an older client that never sends it leaves
+threads at standard speed).
+
+- Only Claude threads have it. On a Codex thread `fastMode: true` is
+  dropped without a note, and a move to a Codex login turns it off.
+- A model whose `ModelChoice` lacks `fastMode` (once the account's list is
+  known) doesn't have it: asking for it there, or picking such a model or
+  moving to a login where the model lacks it, turns it off with a
+  `system.note` ("Sonnet 5.5 doesn't have fast mode, so this thread runs at
+  standard speed."). A model the list doesn't know, or before the list is
+  known, is left to the CLI. Clients show the control only where the
+  thread's model has `fastMode`.
+- The runner starts the CLI with `fastMode: true` in its flag settings
+  (the Agent SDK's opt-in) and changes a live CLI with
+  `apply_flag_settings` (`{ fastMode: true }`, or `null` for off).
+- The CLI says on each turn's result whether it ran in fast mode. One that
+  ran at standard speed on a thread that asked for fast mode, for a reason
+  that won't pass by itself (no usage credits, the organization turned it
+  off), gets a `system.note` saying why, once until the reason changes or
+  fast mode is turned on again. A cooldown after a rate limit says nothing.
+- `/fast [on|off]` on a Claude thread is `threads.update` of `fastMode`
+  (on its own it toggles); on Codex it's a note that Codex has none.
+- Schedules don't carry it yet.
 
 ## Notifications (runner to app)
 
@@ -2028,7 +2122,8 @@ slash command; `/Users/mike` isn't one. The text in `user.message` is what
 was typed, and the runner decides (`runner/src/slash-commands.ts`):
 
 - **Threadbear's own, both providers.** `/model [model]` and `/effort
-  [level|default]` are `threads.update` of the thread's model or effort,
+  [level|default]` (and on Claude, `/fast [on|off]`, see Fast mode) are
+  `threads.update` of the thread's model or effort,
   so the change outlives the CLI. A model is matched by picker id, full
   id or title (and for Claude, its aliases). With no argument, or one that
   doesn't match, a `system.note` says what the thread is on and the
@@ -2163,6 +2258,9 @@ idea why it exists. `ThreadSummary.startedBy` says who did; his own threads
 | `schedule` | "Schedule" | a schedule; `ThreadSummary.schedule` has the details |
 | `librarian` | "Librarian" | the librarian's fix threads, which it no longer starts (see No fix threads); older threads keep it. `threadId` and `threadTitle` name the thread Mike said it in |
 | `runner` | "Threadbear" | a notice from the runner itself, such as a dialog left on a Mac's screen |
+
+A `kind` the runner doesn't know (from a newer caller) starts the thread with
+no `startedBy` rather than refusing it.
 
 The row marks such a thread with the kind's symbol (the tool's `icon`) before
 its project or folder, which every row names, and the symbol's tooltip says
@@ -3340,7 +3438,9 @@ could be from npm or from the zip), a link the repo commits under
 `node_modules`, a committed native addon (`.node`), or more than 100
 committed files under `node_modules`, the patch isn't loaded at all
 (`error`). git runs with `core.fsmonitor` off, so a folder's own
-`.git/config` can't make that run anything. A cached hash holds only while every file it was
+`.git/config` can't make that run anything; so does every other git the
+runner runs in a thread's folder (the Claude settings check's listing of
+skills, worktrees, moves), all through `runner/src/safe-git.ts`. A cached hash holds only while every file it was
 made from has the same inode, size, mode, mtime and ctime (a write
 can't put ctime back), every path to one still leads to the same real
 file, and nothing that was missing has turned up. A hook or `setup`
@@ -3370,7 +3470,9 @@ a pull) is a version nobody trusted, so it doesn't run, and a
 and `teardown` and its hooks run without anyone pressing anything, so the hash has to
 cover what they run, and it can only see a path written in the patch.
 So each must be one script and plain words: a `./` or `../` path from
-the folder holding `.threadbear/`, to an existing file inside the repo
+the folder holding `.threadbear/` (for a patch file that's a link into
+another folder, the one holding the link, where its commands run, and
+where what its scripts run is followed from too), to an existing file inside the repo
 (the git toplevel) that the hash covered, then arguments made only of
 letters, digits and `_ @ % + = : , . / -`. Anything a shell would work
 out first (`cd scripts && ./setup.sh`, `FOO=1 ./x`, `sh -c`, `bash x.sh`,
@@ -4047,9 +4149,11 @@ It never pushes. `--dry-run` stops before main moves.
 When the thread is archived or deleted, `teardown` runs first in the
 worktree's root, whether or not the branch landed (an `action.run` with
 `trigger: "worktree.teardown"`, outside any turn; for a deleted thread only
-a notice if it didn't run or failed). It has the action timeout, and a
-failure is shown but doesn't stop the cleanup. It runs once per archive,
-and only while the folder is still a checkout of the thread's branch. Then a
+a notice if it didn't run or failed). It has the action timeout, past
+which it's ended (SIGKILL if SIGTERM doesn't do it), and a failure is
+shown but doesn't stop the cleanup. It runs once per archive, and only
+while the folder is still the thread's own worktree on its branch, not a
+link to somewhere else. Then a
 worktree whose branch is on main
 (or has nothing of its own) is removed with its branch; otherwise both stay,
 with a `system.note` saying how to land or drop them. A thread whose
@@ -5148,7 +5252,15 @@ the mirror back as state. The Mac app doesn't use it.
   (`inputSummary` is one line: the command, the path, or the first string
   in the input, at most 200 characters, never the whole input). A card that
   line can't show all of (a command over 160 characters or on more than one
-  line, in another folder or asking for the network, one scrubbing changed,
+  line, a command, path or address with anything but printable ASCII in
+  it, as anything else can draw differently from how a shell reads it
+  (U+2028, bidi and zero-width characters, Hebrew or Arabic letters, a
+  no-break space, wide characters: `REMOTE_LINE` in runner/src/tools.ts;
+  the Mac's own card writes controls and format characters out by name, as
+  `⟨U+2028⟩`), a path or address over 160 characters or with spaces at its
+  ends, a Codex patch to more than one file or asking to write under a
+  folder, in another folder or asking for the network, one scrubbing
+  changed (checked again as the row goes up, after any value found since),
   an MCP tool with more than one short thing to read, an edit of a file that
   runs as code, a threadbear tool's own card, Codex asking for more access) has
   only its non-allow options there, and its title says it can only be
@@ -6019,6 +6131,7 @@ runner's threads only.
 | `THREADBEAR_RUNNER_HOME` | the runner's data dir too, which agents never change: the scripts' guards against restarting the runner a thread runs on go by it |
 | `THREADBEAR_RUNNER_VERSION` | the runner's version, as in `hello` |
 | `THREADBEAR_MEDIA_DIR` | the thread's media folder (`<data dir>/threads/<id>/media`): the only place a shared page's pictures come from (see "Sharing") |
+| `THREADBEAR_NODE` | the Node binary the runner runs on, so the repo's scripts a thread runs (`check.sh`, `tb land`, `deploy-runner.sh`, a worktree's setup) use the same one (`runner/scripts/find-node.sh`) |
 
 The runner also puts its own `bin/` (the release's, or the checkout's for a
 runner run from source) at the front of `PATH`, so a bare `tb` in a thread
@@ -6028,6 +6141,11 @@ is the `tb` that matches the runner.
 
 Either side may be upgraded first, so each tolerates the other:
 
+- An app that doesn't know an ACP agent reads `provider: "opencode"` as a
+  plain string and shows it under its fallback heading.
+- An app older than `hello.providers` ignores it. A newer app talking to a
+  runner older than it falls back to what it knows of Claude and Codex, and
+  gives a provider it doesn't know no capabilities.
 - An app older than Codex support reads `provider: "codex"` as a plain
   string, an unknown tool `kind` (`image`) as `other` and `ultra` as text;
   lists Codex models under its fallback heading; and may still send a

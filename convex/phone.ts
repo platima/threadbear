@@ -39,8 +39,9 @@ const MESSAGES_SHOWN = 20;
 const THREAD_SCAN = 400;
 // phone:messages page sizes.
 const PAGE_DEFAULT = 50;
-// The website asks for more as you scroll back by raising limit, so one
-// live query covers everything it shows.
+// The website and iPhone keep their live page small and read older rows with
+// beforeSeq, once each. iPhone builds before 1.0.5 still raise limit as you
+// scroll back, and have no other way back, so this stays until they're gone.
 const PAGE_MAX = 2000;
 // Without tools: true, how many tool rows a page may look past for its text
 // messages. Most rows are one-line tool rows, so a page stops at this many

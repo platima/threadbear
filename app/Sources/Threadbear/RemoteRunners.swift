@@ -403,6 +403,7 @@ extension AppModel {
                 newThreadRunnerProblem = nil
                 newThreadCwd = nil
                 newThreadPermissionPick = nil
+                newThreadFastMode = false
                 newThreadAccount = nil
                 newThreadPool = nil
                 newThreadProvider = nil

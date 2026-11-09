@@ -66,6 +66,9 @@ extension AppModel {
                 // Other runners' threads aren't this runner's to list.
                 for (id, thread) in threads where thread.isRemote && fresh[id] == nil { fresh[id] = thread }
                 threads = fresh
+                // A thread deleted while the app wasn't connected never
+                // reached forget(), so its Terminal shell would run on.
+                Terminals.shared.stopAll(except: list.map(\.id))
                 threadsLoaded = true
                 onThreadsLoaded?()
                 threadCountMayHaveChanged()
@@ -293,6 +296,7 @@ extension AppModel {
         let panel = WindowDock.threadPanel(threadId)
         if dock.layout.contains(panel) { dock.close(panel) }
         threads[threadId] = nil
+        Terminals.shared.stop(threadId: threadId)
         drafts[threadId] = nil
         if let session = sessions.removeValue(forKey: threadId) { session.unsubscribe() }
         if selection == threadId { selection = nil }

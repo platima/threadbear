@@ -803,6 +803,16 @@ function threadView(t: Pick<ThreadSummary, 'archivedAt' | 'snoozedUntil' | 'star
 
 // `scrub`: the sync's scrubber, for what's made here from longer text and cut
 // (the wake note), which is scrubbed whole before it's cut.
+// A thread row whose approval card offers Allow off the Mac, with that
+// option taken away when scrubbing would change the card's line: what the
+// phone shows then isn't all of what Allow allows.
+export function holdAllowIfScrubbed(doc: ThreadDoc, scrub: (text: string) => string): ThreadDoc {
+  const p = doc.pendingApproval;
+  if (!p || p.kind !== 'approval' || p.inputSummary === undefined || !p.options.some((o) => o === 'allow' || o === 'allowAlways')) return doc;
+  if (scrub(p.inputSummary) === p.inputSummary) return doc;
+  return { ...doc, pendingApproval: { ...p, title: `${p.title}. ${REMOTE_ALLOW_REFUSED}`, options: p.options.filter((o) => o !== 'allow' && o !== 'allowAlways') } };
+}
+
 export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pending?: PendingApproval, earliestSeq?: number, next?: string[], scrub?: (text: string) => string): ThreadDoc {
   const doc: ThreadDoc = {
     threadId: t.id,
@@ -1327,6 +1337,22 @@ export class ConvexSync {
           safe = undefined;
         }
         return send(kind, fn, { ...this.scrubber.doc(rest), ...(safe !== undefined ? { result: safe } : {}) });
+      }
+      // A card whose line was whole when it was made can lose words to a
+      // value found since (a .env read late): then it can't be allowed
+      // from there any more (Codex review, 9 Nov 2026).
+      if (fn === 'sync:upsertThreads' && Array.isArray(args.threads)) {
+        args = {
+          ...args,
+          threads: (args.threads as ThreadDoc[]).map((t) => {
+            const held = holdAllowIfScrubbed(t, this.scrubber.safeText);
+            // And the card an answer from there is checked against, so an
+            // allow sent anyway is refused (the respond command, below).
+            const card = held.pendingApproval;
+            if (held !== t && card) this.replaceCard(t.threadId, card);
+            return held;
+          }),
+        };
       }
       return send(kind, fn, this.scrubber.doc(args));
     };
@@ -2134,6 +2160,14 @@ export class ConvexSync {
     const shown = this.pending.get(threadId);
     if (shown) this.cardsBehind.set(threadId, [...(this.cardsBehind.get(threadId) ?? []), shown]);
     this.pending.set(threadId, card);
+  }
+
+  // The thread's card with this one's approvalId, shown or waiting behind
+  // another, now as `card` says.
+  private replaceCard(threadId: string, card: PendingApproval): void {
+    if (this.pending.get(threadId)?.approvalId === card.approvalId) this.pending.set(threadId, card);
+    const behind = this.cardsBehind.get(threadId);
+    if (behind?.some((c) => c.approvalId === card.approvalId)) this.cardsBehind.set(threadId, behind.map((c) => (c.approvalId === card.approvalId ? card : c)));
   }
 
   private closeCard(threadId: string, approvalId: string): void {
@@ -3882,8 +3916,10 @@ export class ConvexSync {
         // Only what the card that went up offered, whoever sends it. A
         // request for a thread elsewhere (START_CARD) goes up with no options
         // and is answered by the main Mac's runner, which checks it itself.
-        const card = this.pending.get(needThread());
-        if (card?.kind === 'approval' && card.approvalId === String(a.approvalId) && card.name !== START_CARD && !card.options.includes(decision as ApprovalOption)) {
+        // The card it names, shown or waiting behind another (Codex review,
+        // 9 Nov 2026: one behind was never checked).
+        const card = [this.pending.get(needThread()), ...(this.cardsBehind.get(needThread()) ?? [])].find((c) => c?.approvalId === String(a.approvalId));
+        if (card?.kind === 'approval' && card.name !== START_CARD && !card.options.includes(decision as ApprovalOption)) {
           throw new Error(REMOTE_ALLOW_REFUSED);
         }
         await host.respondApproval({

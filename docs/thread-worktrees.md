@@ -87,6 +87,9 @@ crash; the empty lock file stays. Separate repos do not block one another.
    docs/bringing-in-updates.md) is never rebased, since that would flatten
    the merge and rewrite Mike's commits: if main has moved, main is merged
    into it instead, with the same undo-and-name-the-files on a conflict.
+   Then it refuses a commit whose `Important:` line git doesn't read as a
+   trailer (not in the last paragraph with `Co-Authored-By`), as a release
+   would not flag it and forks wouldn't hear.
 3. Reads the patch's `check` after rebasing, and runs it in the worktree,
    if there is one. A patch load error or failing check stops here, with
    the last lines of its output. Changing the branch or leaving changed
@@ -123,9 +126,10 @@ changed on the branch needs trusting like any other patch change. Its
 output goes in the transcript as an `action.run` event (`trigger:
 "worktree.teardown"`); a deleted thread has no transcript, so it gets a
 notice only if the teardown didn't run or failed. It has the action
-timeout, and a failure is shown but never stops the cleanup. It only runs
-while the folder is still a checkout of the thread's branch (see below on
-reused slots).
+timeout (SIGTERM to everything it started, then SIGKILL two seconds on,
+as for setup and hooks), and a failure is shown but never stops the
+cleanup. It only runs while the folder is still a checkout of the
+thread's branch (see below on reused slots).
 
 It's part of the cleanup, so everything that waits for the cleanup (a
 handover, a message sent meanwhile, an action pressed) waits for it too. It
@@ -156,7 +160,16 @@ cleanup (`cleanupOwed` in the worktree's record). Deleting a thread doesn't
 wait: nothing is left to report a hook's result to.
 
 The folder is only removed while it's still a checkout of the thread's own
-branch: slot folders are reused, and a record can miss hearing its worktree
+branch, and the worktree git made there itself: not a link to somewhere
+else (git's own list follows one, so a link to the main checkout passed
+for the worktree, Codex's review, 9 Nov), and its own `.git` names the
+repo's record of it, which names it back, checked again just before
+each git that reads or changes the folder and just before the teardown
+starts, which then runs by the path checked, on the thread's branch (or,
+for the removal, the commit the cleanup itself detached it at), never
+another. Every git the cleanup runs is killed after five minutes and counts
+as failed, which stops the cleanup rather than reading as an answer (a
+branch that isn't there, say); `tb land` stops the same way. Slot folders are reused, and a record can miss hearing its worktree
 went (THREADBEAR-16, 6 Nov: a handover saved it while the cleanup ran; a
 handover now keeps that thread until the cleanup is done, for up to ten
 minutes, while the rest move across). A folder that's

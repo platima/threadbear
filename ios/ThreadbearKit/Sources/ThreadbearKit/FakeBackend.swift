@@ -463,6 +463,10 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         return MessagePage(messages: page, hasMore: before.count > limit, images: images)
     }
 
+    public func images(_ threadId: String, from: Int) -> AsyncThrowingStream<[MessageImage], Error> {
+        watch { [unowned self] in lock.withLock { (imagesById[threadId] ?? []).filter { $0.seq >= from } } }
+    }
+
     public func messages(_ threadId: String, limit: Int) -> AsyncThrowingStream<MessagePage, Error> {
         let page = watch { [unowned self] in
             let all = lock.withLock { messagesById[threadId] ?? [] }
