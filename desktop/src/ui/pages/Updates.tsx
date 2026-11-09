@@ -16,9 +16,14 @@ function UpdatesPage({ store, snap }: PageProps) {
   const check = async () => {
     setBusy(true);
     setSaid(undefined);
-    const found = await runUpdateCheck(true);
-    setBusy(false);
-    setSaid(found ? `Version ${found.version} is out.` : "You're on the newest release, or GitHub couldn't be reached.");
+    try {
+      const found = await runUpdateCheck(true);
+      setSaid(found ? `Version ${found.version} is out.` : "You're on the newest release, or GitHub couldn't be reached.");
+    } catch {
+      setSaid("The check didn't finish. Try again in a moment.");
+    } finally {
+      setBusy(false);
+    }
   };
   const updates = snap.hello?.updates;
   const following = followingWords(updates);
