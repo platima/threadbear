@@ -67,6 +67,36 @@ final class PendingSendTests: XCTestCase {
         XCTAssertFalse(SendLift.rises(row(nil)), "history doesn't rise")
     }
 
+    /// A held message's row grows a line for its note, and the note sits
+    /// under the bubble inside it, with no spinner or clock beside it.
+    func testAHeldMessageShowsItsNoteUnderTheBubble() throws {
+        let width: CGFloat = 700
+        func row(_ pending: UserMessage.Pending?) -> TranscriptRow {
+            TranscriptRow(id: "p:1", seq: 1, content: .user(UserMessage(text: "If the runner is restarting, could it just queue this up?", pending: pending)))
+        }
+        let sending = RowRenderer.render(row(.sending), expanded: false, tableWidth: width, measurer: TextMeasurer())
+        let held = RowRenderer.render(row(.waitingForRunner), expanded: false, tableWidth: width, measurer: TextMeasurer())
+        XCTAssertEqual(held.height, sending.height + RowMetrics.waitingNoteGap + RowMetrics.waitingNoteHeight)
+        let cell = TextRowCell()
+        cell.appearance = NSAppearance(named: .darkAqua)
+        cell.frame = NSRect(x: 0, y: 0, width: width, height: held.height)
+        cell.configure(row: row(.waitingForRunner), render: held, tableWidth: width, expanded: false)
+        let note = try XCTUnwrap(cell.subviews.compactMap { $0 as? NSTextField }.first { $0.stringValue == TextRowCell.waitingNoteText && !$0.isHidden })
+        XCTAssertGreaterThanOrEqual(note.frame.minY, cell.box.frame.maxY)
+        XCTAssertLessThanOrEqual(note.frame.maxY, held.height - RowMetrics.userBottom + 0.5)
+        XCTAssertTrue(cell.pendingMark.isHidden, "the note says it; no mark as well")
+        if let out = ProcessInfo.processInfo.environment["WAITING_SHOT"], let rep = cell.bitmapImageRepForCachingDisplay(in: cell.bounds) {
+            cell.wantsLayer = true
+            cell.layer?.backgroundColor = NSColor(white: 0.12, alpha: 1).cgColor
+            cell.appearance!.performAsCurrentDrawingAppearance { cell.cacheDisplay(in: cell.bounds, to: rep) }
+            try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
+        }
+        // Once it's going, the note goes and the spinner's back.
+        cell.configure(row: row(.sending), render: sending, tableWidth: width, expanded: false)
+        XCTAssertTrue(note.isHidden)
+        XCTAssertFalse(cell.pendingMark.isHidden)
+    }
+
     /// Well under a fifth of a second, or it reads as latency, and it's on
     /// the layer rather than stepped from the main thread.
     func testTheLiftIsQuickAndOnTheLayer() throws {
@@ -394,6 +424,84 @@ final class PendingSendTests: XCTestCase {
         XCTAssertNil(app.drafts["th1"])
     }
 
+    /// Sent while the runner is down for a restart, it waits in the
+    /// transcript with a note under it, rather than bouncing back into
+    /// the box, and goes once the new runner is up (Mike, 9 Nov).
+    func testAMessageSentWhileTheRunnerRestartsWaitsForTheNewOne() async throws {
+        let (app, old) = try await connected()
+        let session = app.session(for: "th1")
+        _ = app.restart(notice: "The runner is restarting onto a new release.")
+        app.connectionLostForTesting()
+        session.connectionLost()
+        app.drafts["th1"] = Draft(text: "go on")
+        app.send(threadId: "th1")
+        XCTAssertNil(app.drafts["th1"], "the box empties")
+        XCTAssertNil(app.errorMessage, "no warning: it's waiting, not lost")
+        XCTAssertEqual(session.pending.map(\.text), ["go on"])
+        XCTAssertEqual(session.pending.first?.waitingForRunner, true)
+        XCTAssertEqual(session.pending.first?.row.content, .user(UserMessage(text: "go on", pending: .waitingForRunner)))
+        session.connectionLost()
+        XCTAssertEqual(session.pending.map(\.text), ["go on"], "another drop doesn't take it away")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(old.count("threads.send"), 0)
+        let new = try await newRunner(app)
+        try await until { new.waiting("threads.send") }
+        XCTAssertEqual(new.params("threads.send")?["text"] as? String, "go on")
+        XCTAssertEqual(session.pending.first?.waitingForRunner, false, "the note goes once it's on its way")
+        new.answer("threads.send", ["turnId": "turn_1"])
+        try await until { session.pending.first?.queued == true }
+        XCTAssertNil(app.errorMessage)
+    }
+
+    /// Two sent while it's down go in the order they were sent.
+    func testMessagesHeldForARestartGoInOrder() async throws {
+        let (app, _) = try await connected()
+        let session = app.session(for: "th1")
+        _ = app.restart(notice: "The runner is restarting onto a new release.")
+        app.connectionLostForTesting()
+        app.drafts["th1"] = Draft(text: "first")
+        app.send(threadId: "th1")
+        app.drafts["th1"] = Draft(text: "second")
+        app.send(threadId: "th1")
+        XCTAssertEqual(session.pending.map(\.text), ["first", "second"])
+        let new = try await newRunner(app)
+        try await until { new.waiting("threads.send") }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(new.count("threads.send"), 1, "the second waits for the first")
+        XCTAssertEqual(new.params("threads.send")?["text"] as? String, "first")
+        new.answer("threads.send", ["turnId": "turn_1"])
+        try await until { new.count("threads.send") == 2 }
+        XCTAssertEqual(new.params("threads.send")?["text"] as? String, "second")
+    }
+
+    /// A runner that doesn't come back: the words go back in the box.
+    func testAHeldMessageGoesBackInTheBoxIfTheRunnerDoesntComeBack() async throws {
+        let wait = AppModel.restartHoldWait
+        AppModel.restartHoldWait = .milliseconds(300)
+        defer { AppModel.restartHoldWait = wait }
+        let (app, _) = try await connected()
+        let session = app.session(for: "th1")
+        _ = app.restart(notice: "The runner is restarting onto a new release.")
+        app.connectionLostForTesting()
+        app.drafts["th1"] = Draft(text: "go on")
+        app.send(threadId: "th1")
+        try await until { app.drafts["th1"] != nil }
+        XCTAssertEqual(app.drafts["th1"]?.text, "go on")
+        XCTAssertTrue(session.pending.isEmpty)
+        XCTAssertEqual(app.errorMessage, "Not connected to the runner, so that wasn't sent. It's still in the box.")
+    }
+
+    /// With no restart on, a dropped connection still says it wasn't sent.
+    func testASendWhileDisconnectedWithNoRestartStaysInTheBox() async throws {
+        let (app, _) = try await connected()
+        app.connectionLostForTesting()
+        app.drafts["th1"] = Draft(text: "go on")
+        app.send(threadId: "th1")
+        XCTAssertEqual(app.drafts["th1"]?.text, "go on")
+        XCTAssertTrue(app.session(for: "th1").pending.isEmpty)
+        XCTAssertEqual(app.errorMessage, "Not connected to the runner, so that wasn't sent. It's still in the box.")
+    }
+
     /// Archive turned away by a restart goes again too, rather than coming
     /// back with an error (Codex's review, 7 Nov).
     func testAnArchiveTurnedAwayByARestartGoesAgain() async throws {
@@ -411,6 +519,31 @@ final class PendingSendTests: XCTestCase {
         try await until { app.threads["th1"]?.isArchived == true }
         XCTAssertEqual(app.threads["th1"]?.isArchived, true)
         XCTAssertNil(app.errorMessage)
+    }
+
+    /// The new-thread toggle is for the thread it was picked for: fast mode
+    /// costs more, so the next new thread starts on Standard again.
+    func testFastModeOnANewThreadIsForThatThreadOnly() async throws {
+        let (app, transport) = try await connected()
+        app.newThreadFastMode = true
+        app.drafts["new"] = Draft(text: "Start something")
+        app.send(threadId: nil)
+        try await until { transport.waiting("threads.create") }
+        transport.answer("threads.create", ["thread": ["id": "th_new", "title": "Start something"]])
+        try await until { app.selection == "th_new" }
+        XCTAssertFalse(app.newThreadFastMode)
+    }
+
+    /// Fast mode shows on at once, and goes back off if the runner says no.
+    func testFastModeShowsAtOnceAndRollsBack() async throws {
+        let (app, transport) = try await connected()
+        app.setFastMode("th1", true)
+        XCTAssertEqual(app.threads["th1"]?.fastMode, true, "before the runner answers")
+        try await until { transport.waiting("threads.update") }
+        XCTAssertEqual(transport.params("threads.update")?["fastMode"] as? Bool, true)
+        transport.fail("threads.update", code: -32602, message: "No")
+        try await until { app.errorMessage != nil }
+        XCTAssertEqual(app.threads["th1"]?.fastMode, false)
     }
 
     /// With no restart on, "Thread not found" for a pick is shown, and the
@@ -442,6 +575,8 @@ final class PendingSendTests: XCTestCase {
         XCTAssertEqual(ThreadUpdate(permissionMode: .ask).applied(to: thread).permissionMode, .ask)
         XCTAssertEqual(ThreadUpdate(model: .some("haiku")).applied(to: thread).model, "haiku")
         XCTAssertNil(ThreadUpdate(model: .some(nil)).applied(to: thread).model, "back to the default")
+        XCTAssertTrue(ThreadUpdate(fastMode: true).applied(to: thread).fastMode)
+        XCTAssertFalse(ThreadUpdate(fastMode: false).applied(to: ThreadUpdate(fastMode: true).applied(to: thread)).fastMode)
         XCTAssertEqual(ThreadUpdate(accountId: "codex-main", model: .some("gpt")).applied(to: thread), thread)
         XCTAssertEqual(ThreadUpdate(cwd: "/tmp").applied(to: thread), thread)
     }

@@ -15,6 +15,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
+import { providerName } from '../providers.ts';
 import { paths } from '../config.ts';
 import { isDirectory } from '../fsutil.ts';
 import { readTree, writeTree, type PackEntry } from '../move-pack.ts';
@@ -171,7 +172,7 @@ export const movesPart = {
       accounts.find((a) => a.provider === info.provider && a.email && info.email && a.email.toLowerCase() === info.email.toLowerCase()) ??
       accounts.find((a) => a.id === this.defaultAccountId() && a.provider === info.provider) ??
       accounts.find((a) => a.provider === info.provider);
-    if (!account) return { problem: `${here} has no ${info.provider === 'codex' ? 'Codex' : 'Claude'} login.` };
+    if (!account) return { problem: `${here} has no ${providerName(info.provider)} login.` };
     const leftBehind: string[] = [];
     const subdir = info.subdir ?? '';
     const into = (top: string) => (subdir ? path.join(top, ...subdir.split('/')) : top);

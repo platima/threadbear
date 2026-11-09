@@ -9,14 +9,16 @@ import type { Account, EffortLevel, ImageRef, MessageOrigin, PermissionMode, Thr
 import { ErrorCode, LIMITS, RpcError } from '../protocol.ts';
 import type { Schedule } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
-import { expandHome, readRunnerJson } from '../config.ts';
+import { expandHome, peekRunnerJson } from '../config.ts';
+import { experimentOn } from '../experiments.ts';
 import { isDirectory } from '../fsutil.ts';
 import { ASK_CODEX_MODEL, HAIKU } from '../models/index.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { ThreadState } from '../runner.ts';
-import { checkImages, effortTitle, isClaudeModel, modelRow, modelTitle, newRuntime, oneLine, providerName, titleFrom, userMessage } from '../runner.ts';
+import { checkImages, effortTitle, isClaudeModel, modelRow, modelTitle, newRuntime, oneLine, titleFrom, userMessage } from '../runner.ts';
+import { providerInfo, providerName } from '../providers.ts';
 import { cutSafely } from '../safe-cut.ts';
 
 export const newThreadsPart = {
@@ -28,6 +30,7 @@ export const newThreadsPart = {
     poolId?: string;
     model?: string;
     effort?: EffortLevel;
+    fastMode?: boolean;
     permissionMode?: PermissionMode;
     title?: string;
     origin?: MessageOrigin;
@@ -161,6 +164,7 @@ export const newThreadsPart = {
     poolId?: string;
     model?: string;
     effort?: EffortLevel;
+    fastMode?: boolean;
     permissionMode?: PermissionMode;
     title?: string;
     origin?: MessageOrigin;
@@ -179,7 +183,7 @@ export const newThreadsPart = {
     // keepAccount pins new threads to its own account.
     let poolId: string | undefined;
     let accountId = params.accountId;
-    if (accountId === undefined && (params.poolId !== undefined || !readRunnerJson(this.cfg.home).defaults?.keepAccount)) {
+    if (accountId === undefined && (params.poolId !== undefined || !peekRunnerJson(this.cfg.home).defaults?.keepAccount)) {
       const picked = this.pickForNew({ poolId: params.poolId, cwd, model: params.model });
       if (picked) ({ poolId, accountId } = picked);
     }
@@ -191,9 +195,10 @@ export const newThreadsPart = {
     // In a sandbox folder a Claude thread is shut in it from the start. One
     // asked for that which can't be (a Codex login, a folder outside) is
     // refused rather than started outside (sandbox.ts).
-    const sandboxed = account.provider === 'claude' && this.sandboxed(cwd);
+    const canSandbox = providerInfo(account.provider).sandbox;
+    const sandboxed = canSandbox && this.sandboxed(cwd);
     if (params.confined && !sandboxed) {
-      throw new RpcError(ErrorCode.badParams, account.provider === 'claude' ? `${cwd} isn't in a sandbox folder, and a sandboxed thread can only start threads in one without asking.` : "A sandboxed thread can only start Claude threads, as Codex doesn't run in the sandbox.");
+      throw new RpcError(ErrorCode.badParams, canSandbox ? `${cwd} isn't in a sandbox folder, and a sandboxed thread can only start threads in one without asking.` : `A sandboxed thread can only start Claude threads, as ${providerName(account.provider)} doesn't run in the sandbox.`);
     }
     const now = this.isoNow();
     const id = crypto.randomUUID();
@@ -224,6 +229,12 @@ export const newThreadsPart = {
     const checked = this.checkSettings(account, params.model || this.defaultModelFor(account.provider), params.effort ?? this.defaultEffortFor(account.provider));
     if (checked.model) rec.model = checked.model;
     if (checked.effort) rec.effort = checked.effort;
+    const notes = checked.notes;
+    if (params.fastMode) {
+      const fast = this.checkFastMode(account, rec.model);
+      if (fast.ok) rec.fastMode = true;
+      else if (fast.note) notes.push(fast.note);
+    }
     // Whether the first turn should look for a worktree patch. Reading the
     // patch files is async, so it happens there; a folder with no patch
     // files at all (most of them) starts its CLI straight away as before.
@@ -245,7 +256,7 @@ export const newThreadsPart = {
       /* keep the last pick */
     } else if (!poolId) this.rememberAccount(accountId);
     else if (params.poolId !== undefined) this.rememberPool(poolId);
-    return { st, notes: checked.notes };
+    return { st, notes };
   },
 
   // An account whose CLI this runner can't drive (a Codex login found
@@ -273,13 +284,16 @@ export const newThreadsPart = {
       notes.push(`${model} isn't a ${providerName(provider)} model, so this thread uses ${uses}.`);
       model = fallback;
     }
+    // No effort levels of ours on this provider (providers.ts).
+    if (effort && providerInfo(provider).effort === 'none') effort = undefined;
     if (effort) {
       const row = modelRow(account, model ?? account.defaultModel);
-      const offered = (e: EffortLevel) => !(provider === 'claude' && e === 'ultra') && (!row?.effortLevels || row.effortLevels.includes(e));
+      const noUltra = providerInfo(provider).effort === 'claude';
+      const offered = (e: EffortLevel) => !(noUltra && e === 'ultra') && (!row?.effortLevels || row.effortLevels.includes(e));
       if (!offered(effort)) {
         const fallback = this.defaultEffortFor(provider);
         const next = fallback && fallback !== effort && offered(fallback) ? fallback : undefined;
-        const why = provider === 'claude' && effort === 'ultra' ? `${effortTitle(effort)} effort is Codex only` : `${row ? row.title : 'This model'} doesn't offer ${effortTitle(effort)} effort`;
+        const why = noUltra && effort === 'ultra' ? `${effortTitle(effort)} effort is Codex only` : `${row ? row.title : 'This model'} doesn't offer ${effortTitle(effort)} effort`;
         notes.push(`${why}, so this thread uses ${next ? `${effortTitle(next)} effort` : "the model's own level"}.`);
         effort = next;
       }
@@ -287,15 +301,30 @@ export const newThreadsPart = {
     return { ...(model ? { model } : {}), ...(effort ? { effort } : {}), notes };
   },
 
+  // Whether a thread on this account and model can have fast mode: Claude
+  // only (silently: nothing offers it on Codex), and not on a model the
+  // CLI's list says doesn't have it. Before the list is known, or for a
+  // model it doesn't list, the CLI decides (Runner's 'fastMode' output).
+  checkFastMode(this: Runner, account: Account, model: string | undefined): { ok: boolean; note?: string } {
+    // Off with no note, as nothing offers it while the experiment is off.
+    if (account.provider !== 'claude' || !experimentOn(this.cfg.home, 'fastMode')) return { ok: false };
+    const row = modelRow(account, model ?? account.defaultModel);
+    if (row && !row.fastMode) return { ok: false, note: `${row.title} doesn't have fast mode, so this thread runs at standard speed.` };
+    return { ok: true };
+  },
+
   // Whether a thread on this account can run this model id. Codex: one the
   // account lists, or before the list is known anything starting gpt-.
-  // Claude: anything but a Codex id, unless the account itself lists it.
+  // Claude: anything but another provider's id, unless the account itself
+  // lists it.
   modelFits(this: Runner, account: Account, model: string): boolean {
     if (modelRow(account, model)) return true;
     if (account.provider === 'codex') return !account.models?.length && model.startsWith('gpt-');
+    // An ACP agent runs what it lists, and nothing can be told from the name.
+    if (account.provider !== 'claude') return false;
     if (isClaudeModel(model)) return true;
-    const codexIds = this.safeAccounts().filter((a) => a.provider === 'codex').some((a) => modelRow(a, model));
-    return !model.startsWith('gpt-') && !codexIds;
+    const elsewhere = this.safeAccounts().filter((a) => a.provider !== 'claude').some((a) => modelRow(a, model));
+    return !model.startsWith('gpt-') && !elsewhere;
   },
 };
 

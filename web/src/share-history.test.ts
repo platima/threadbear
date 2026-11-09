@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { empty, firstSeq, hasMore, next, pictures, rows, startChunks, takeLive, takeOlder, type History } from './share-history.ts';
+import { empty, firstSeq, hasMore, nextBefore, pictures, rows, takeLive, takeOlder, type History } from './share-history.ts';
 
 type R = { seq: number };
 type P = { seq: number; url: string };
@@ -12,65 +12,55 @@ const page = (a: number, b: number, more: boolean, pics: number[] = []) => ({
 });
 const seqs = (h: History<R, P>) => rows(h).map((m) => m.seq);
 
-test('a full live page under the most grows, and waits while the bigger one comes', () => {
-  const h = takeLive(empty<R, P>(), page(601, 1000, true), 400);
-  assert.deepEqual(next(h, 400, 200), { grow: 600 });
-  assert.equal(next(h, 600, 200), null);
-});
-
-test('at the most a share sends (2,000) it reads an older chunk instead', () => {
-  const h = takeLive(empty<R, P>(), page(5501, 7500, true), 2000);
-  assert.deepEqual(next(h, 2000, 200), { older: 5501 });
-  // A page cut short by its size (8 MB a query) does the same.
-  const big = takeLive(empty<R, P>(), page(901, 1000, true), 600);
-  assert.deepEqual(next(big, 600, 200), { older: 901 });
+// The live page never grows: a bigger one would be read again on every new
+// row (37.6 MB of Convex I/O in a day on the phone, 8 Nov).
+test('load earlier reads a chunk before the shown rows, never a bigger live page', () => {
+  assert.equal(nextBefore(empty<R, P>()), undefined);
+  assert.equal(nextBefore(takeLive(empty<R, P>(), page(601, 1000, true))), 601);
+  assert.equal(nextBefore(takeLive(empty<R, P>(), page(1, 400, false))), undefined);
 });
 
 test('chunks go above the live page until the start', () => {
-  let h = startChunks(takeLive(empty<R, P>(), page(5501, 7500, true), 2000));
-  h = takeOlder(h, page(5301, 5500, true, [5310]), 5501)!;
-  assert.deepEqual(seqs(h), range(5301, 7500));
-  assert.deepEqual(next(h, 2000, 200), { older: 5301 });
-  h = takeOlder(h, page(1, 5300, false), 5301)!;
+  let h = takeLive(empty<R, P>(), page(7101, 7500, true));
+  h = takeOlder(h, page(6901, 7100, true, [6910]), 7101)!;
+  assert.deepEqual(seqs(h), range(6901, 7500));
+  assert.equal(nextBefore(h), 6901);
+  h = takeOlder(h, page(1, 6900, false), 6901)!;
   assert.equal(rows(h).length, 7500);
   assert.equal(hasMore(h), false);
-  assert.equal(next(h, 2000, 200), null);
-  assert.deepEqual(pictures(h).map((p) => p.seq), [5310]);
+  assert.equal(nextBefore(h), undefined);
+  assert.deepEqual(pictures(h).map((p) => p.seq), [6910]);
 });
 
-test('rows that slide off the live page stay once chunks are in', () => {
-  let h = startChunks(takeLive(empty<R, P>(), page(5501, 7500, true, [5502]), 2000));
-  h = takeLive(h, page(5503, 7502, true), 2000);
-  assert.equal(firstSeq(h), 5501);
-  h = takeOlder(h, page(5301, 5500, true), 5501)!;
-  assert.deepEqual(seqs(h), range(5301, 7502));
-  assert.deepEqual(pictures(h).map((p) => p.seq), [5502]);
-});
-
-test('without chunks a sliding live page is all there is', () => {
-  let h = takeLive(empty<R, P>(), page(601, 1000, true), 400);
-  h = takeLive(h, page(602, 1001, true), 400);
-  assert.deepEqual(seqs(h), range(602, 1001));
+test('rows that slide off the live page stay, before and after a chunk', () => {
+  let h = takeLive(empty<R, P>(), page(601, 1000, true, [601]));
+  h = takeLive(h, page(603, 1002, true));
+  assert.equal(firstSeq(h), 601);
+  assert.deepEqual(seqs(h), range(601, 1002));
+  h = takeOlder(h, page(401, 600, true), 601)!;
+  h = takeLive(h, page(604, 1003, true));
+  assert.deepEqual(seqs(h), range(401, 1003));
+  assert.deepEqual(pictures(h).map((p) => p.seq), [601]);
 });
 
 test('no overlap with the answer before starts again from the newest', () => {
-  let h = startChunks(takeLive(empty<R, P>(), page(5501, 7500, true), 2000));
-  h = takeOlder(h, page(5301, 5500, true), 5501)!;
-  h = takeLive(h, page(9601, 11600, true), 2000);
-  assert.deepEqual(seqs(h), range(9601, 11600));
-  assert.equal(h.chunked, false);
+  let h = takeLive(empty<R, P>(), page(601, 1000, true));
+  h = takeOlder(h, page(401, 600, true), 601)!;
+  h = takeLive(h, page(1101, 1500, true));
+  assert.deepEqual(seqs(h), range(1101, 1500));
+  assert.equal(nextBefore(h), 1101);
 });
 
 test('a live page reaching further back takes its rows back from the chunks', () => {
-  let h = startChunks(takeLive(empty<R, P>(), page(5501, 7500, true, [5505]), 2000));
-  h = takeLive(h, page(5511, 7510, true), 2000);
-  h = takeLive(h, page(5490, 7510, true, [5505]), 2000);
-  assert.deepEqual(seqs(h), range(5490, 7510));
-  assert.deepEqual(pictures(h).map((p) => p.seq), [5505]);
+  let h = takeLive(empty<R, P>(), page(601, 1000, true, [605]));
+  h = takeLive(h, page(611, 1010, true));
+  h = takeLive(h, page(590, 1010, true, [605]));
+  assert.deepEqual(seqs(h), range(590, 1010));
+  assert.deepEqual(pictures(h).map((p) => p.seq), [605]);
 });
 
 test('a chunk that comes too late is dropped', () => {
-  let h = startChunks(takeLive(empty<R, P>(), page(5501, 7500, true), 2000));
-  h = takeOlder(h, page(5301, 5500, true), 5501)!;
-  assert.equal(takeOlder(h, page(5301, 5500, true), 5501), undefined);
+  let h = takeLive(empty<R, P>(), page(601, 1000, true));
+  h = takeOlder(h, page(401, 600, true), 601)!;
+  assert.equal(takeOlder(h, page(401, 600, true), 601), undefined);
 });

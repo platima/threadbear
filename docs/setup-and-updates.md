@@ -15,8 +15,8 @@ Mike, since it's his app first and other people patch their own copy.
 How it works today (file references are in the research notes at the bottom):
 
 - **Install** is two hand-run scripts: `app/install.sh` builds the Mac app, and
-  `runner/scripts/install-runner.sh` installs the runner's LaunchAgent. Node is pinned
-  to Mike's nvm path, and some defaults are his (`~/dev/me/misc`, `claude-2` for
+  `runner/scripts/install-runner.sh` installs the runner's LaunchAgent. Node was pinned
+  to Mike's nvm path (since 9 Nov, the node on PATH or nvm's newest), and some defaults are his (`~/dev/me/misc`, `claude-2` for
   Convex work, Token Stats for account limits).
 - **Updates** follow the local `main` branch of the checkout. The runner and the Mac app
   both notice when `main` moves and rebuild themselves, and the runner rolls back to its
@@ -298,7 +298,7 @@ How things work today, from a read of the repo on 28 Oct:
 
 - Install: `app/install.sh` (checks swift and python3, runs `setup_mac.sh`, which runs
   `build-app.sh`); `runner/scripts/install-runner.sh` (main's tip only, not from inside a
-  thread, Node 24 at the nvm path, writes the LaunchAgent, first release through
+  thread, Node 24 or newer from `scripts/find-node.sh`, writes the LaunchAgent, first release through
   `deploy.mjs`). Since 28 Oct the LaunchAgent's program is `~/Applications/Threadbear
   Runner.app` (`runner/launcher/`), which runs `node launch.mjs` as its child, so macOS's
   privacy prompts name Threadbear Runner rather than node (seen on Tinker Desk's first

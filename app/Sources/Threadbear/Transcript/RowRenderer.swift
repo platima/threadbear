@@ -16,6 +16,10 @@ enum RowMetrics {
     /// right on top of the reply, closer than the gaps inside a turn; T3
     /// and Codex leave a clear pause there.
     static var userBottom: CGFloat { zoomed(22) }
+    /// The line under a message held for a restarting runner ("Sends when
+    /// the runner's back"), and the gap above it.
+    static var waitingNoteGap: CGFloat { zoomed(4) }
+    static var waitingNoteHeight: CGFloat { zoomed(16) }
     /// One line of work: a group summary, a tool call, a thinking block.
     static var workHeight: CGFloat { zoomed(32) }
     static var workingHeight: CGFloat { zoomed(34) }
@@ -119,6 +123,9 @@ final class RowRender: @unchecked Sendable {
     let imageAreaHeight: CGFloat
     /// Measured heights of a question card's question texts.
     let lineHeights: [CGFloat]
+    /// A question card's option descriptions, measured: per question, one
+    /// height per option that has a description, in order.
+    let noteHeights: [[CGFloat]]
     /// A changes card's files.
     let parts: [Part]
 
@@ -131,7 +138,7 @@ final class RowRender: @unchecked Sendable {
     }
 
     init(height: CGFloat, text: NSAttributedString? = nil, textSize: NSSize = .zero, detail: NSAttributedString? = nil, detailSize: NSSize = .zero,
-         blocks: [String] = [], blockStarts: [Int] = [], imageFrames: [NSRect] = [], imageAreaHeight: CGFloat = 0, lineHeights: [CGFloat] = [], parts: [Part] = []) {
+         blocks: [String] = [], blockStarts: [Int] = [], imageFrames: [NSRect] = [], imageAreaHeight: CGFloat = 0, lineHeights: [CGFloat] = [], noteHeights: [[CGFloat]] = [], parts: [Part] = []) {
         self.height = height
         self.text = text
         self.textSize = textSize
@@ -142,6 +149,7 @@ final class RowRender: @unchecked Sendable {
         self.imageFrames = imageFrames
         self.imageAreaHeight = imageAreaHeight
         self.lineHeights = lineHeights
+        self.noteHeights = noteHeights
         self.parts = parts
     }
 }
@@ -362,7 +370,8 @@ enum RowRenderer {
             let showText = !message.text.isEmpty || message.images.isEmpty
             let imageBlock = message.images.isEmpty ? 0 : area + (showText ? RowMetrics.imageGap : 0)
             let bubble = showText ? size.height + RowMetrics.bubblePadV * 2 : 0
-            return RowRender(height: RowMetrics.userTop + imageBlock + bubble + RowMetrics.userBottom,
+            let note = message.pending == .waitingForRunner ? RowMetrics.waitingNoteGap + RowMetrics.waitingNoteHeight : 0
+            return RowRender(height: RowMetrics.userTop + imageBlock + bubble + note + RowMetrics.userBottom,
                              text: showText ? text : nil, textSize: size, imageFrames: frames, imageAreaHeight: area)
 
         case .assistant(let item):
@@ -443,15 +452,22 @@ enum RowRenderer {
             let inner = width - RowMetrics.cardPad * 2 - RowMetrics.accentBar
             var total = RowMetrics.cardPad * 2
             var textHeights: [CGFloat] = []
+            var noteHeights: [[CGFloat]] = []
             let answered = item.resolution != nil
             for question in item.request.questions {
                 let textHeight = measurer.measure(questionText(question.question, answered: answered), width: inner).height
                 textHeights.append(textHeight)
-                total += answered ? textHeight + RowMetrics.answeredGap : questionHeight(question, textHeight: textHeight)
+                if answered {
+                    total += textHeight + RowMetrics.answeredGap
+                    continue
+                }
+                let notes = optionNoteHeights(question, width: inner, measurer: measurer)
+                noteHeights.append(notes)
+                total += questionHeight(question, textHeight: textHeight, noteHeights: notes)
             }
             guard let resolution = item.resolution else {
                 total += RowMetrics.otherFieldHeight + zoomed(2) + zoomed(12) + RowMetrics.buttonHeight
-                return RowRender(height: vertical + zoomed(4) + total, lineHeights: textHeights)
+                return RowRender(height: vertical + zoomed(4) + total, lineHeights: textHeights, noteHeights: noteHeights)
             }
             // Answered: the question and the answer, not every option
             // greyed out with none of them ticked.
@@ -1088,13 +1104,13 @@ enum RowRenderer {
                 // smaller run sits on its baseline.
                 attributes[.font] = Theme.detailFont
                 attributes[.foregroundColor] = Theme.faintText
-                output.append(NSAttributedString(string: "  " + folder, attributes: attributes))
+                output.append(NSAttributedString(string: "  " + ApprovalText.shown(folder), attributes: attributes))
             }
         }
         // Codex says why it's asking, in the model's own words ("Allow
         // creating b.txt in the current directory?").
         if let reason = item.request.input["reason"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty {
-            output.append(NSAttributedString(string: "\n" + reason, attributes: Theme.text(Theme.detailFont, color: Theme.quietText, line: TypeScale.scaled(19))))
+            output.append(NSAttributedString(string: "\n" + ApprovalText.shown(reason), attributes: Theme.text(Theme.detailFont, color: Theme.quietText, line: TypeScale.scaled(19))))
         }
         return output
     }
@@ -1110,8 +1126,10 @@ enum RowRenderer {
         if let command = input["command"]?.stringValue {
             // Where it runs and any network it asks for (a Codex card's)
             // are part of what Allow allows; a reason or description isn't.
-            let output = NSMutableAttributedString(attributedString: mono(command, .labelColor))
-            let extra = ToolPresentation.fields(input, whole: true).filter { !["command", "description", "reason"].contains($0.key) }
+            // Characters that hide, break or reorder text are named, not
+            // drawn: the card shows what the shell will read (ApprovalText.shown).
+            let output = NSMutableAttributedString(attributedString: mono(ApprovalText.shown(command), .labelColor))
+            let extra = ApprovalText.shown(ToolPresentation.fields(input, whole: true).filter { !["command", "description", "reason"].contains($0.key) })
             if !extra.isEmpty {
                 output.append(mono("\n", .labelColor))
                 output.append(fieldsText(extra))
@@ -1123,19 +1141,26 @@ enum RowRenderer {
         if !request.name.hasPrefix("mcp__"), ApprovalText.filePath(request) != nil {
             let call = ToolCall(itemId: request.approvalId, name: request.name, kind: request.name == "Write" ? .write : .edit,
                                 title: request.title, input: input)
-            if let diff = DiffBuilder.diff(forTool: call), !diff.hunks.isEmpty {
+            if var diff = DiffBuilder.diff(forTool: call), !diff.hunks.isEmpty {
+                // What it writes, with any character that hides, breaks or
+                // reorders a line named, as for a command.
+                diff.hunks = diff.hunks.map { hunk in
+                    var hunk = hunk
+                    hunk.lines = hunk.lines.map(ApprovalText.shown)
+                    return hunk
+                }
                 // A file Threadbear runs as code, or can't rule out, shows
                 // every line it writes: a hook past the eighth line is still a hook.
                 let code = request.title.contains("Threadbear runs this file as code")
                     || request.title.contains("Threadbear can't tell whether this file runs as code")
                 return diffText([diff], maxLines: code ? 1_000_000 : 8, inset: 0).0
             }
-            return mono(ToolPresentation.shortTitle(ApprovalText.filePath(request) ?? "", limit: 300), Theme.quietText)
+            return mono(ApprovalText.shown(ToolPresentation.shortTitle(ApprovalText.filePath(request) ?? "", limit: 300)), Theme.quietText)
         }
         if !request.name.hasPrefix("mcp__"), let url = input["url"]?.stringValue {
-            return mono(url, .labelColor)
+            return mono(ApprovalText.shown(url), .labelColor)
         }
-        let fields = ToolPresentation.fields(input, whole: true)
+        let fields = ApprovalText.shown(ToolPresentation.fields(input, whole: true))
         if fields.isEmpty { return mono(request.title, .labelColor) }
         return fieldsText(fields)
     }
@@ -1241,14 +1266,39 @@ enum RowRenderer {
         return output
     }
 
-    static func questionHeight(_ question: Question, textHeight: CGFloat) -> CGFloat {
+    static func questionHeight(_ question: Question, textHeight: CGFloat, noteHeights: [CGFloat] = []) -> CGFloat {
         // The question's short `header` isn't shown: it would read as an eyebrow label.
         var height: CGFloat = textHeight + zoomed(8)
+        var noteIndex = 0
         for option in question.options {
             height += RowMetrics.optionHeight
-            if let description = option.description, !description.isEmpty { height += RowMetrics.optionDescription }
+            if let description = option.description, !description.isEmpty {
+                height += noteIndex < noteHeights.count ? noteHeights[noteIndex] : RowMetrics.optionDescription
+                noteIndex += 1
+            }
         }
         return height + zoomed(12)
+    }
+
+    /// An option's description under its radio button. It wraps: cut to
+    /// one line, the part that said what the option does was lost (Wayne,
+    /// 7 Nov).
+    static func optionNoteText(_ description: String) -> NSAttributedString {
+        NSAttributedString(string: description, attributes: Theme.text(Theme.labelFont, color: .secondaryLabelColor, line: RowMetrics.optionDescription))
+    }
+
+    /// Where an option's description sits: in from the card's text by the
+    /// radio button's width.
+    static var optionNoteIndent: CGFloat { zoomed(20) }
+
+    /// The heights of a question's option descriptions, in order, each at
+    /// least a line.
+    static func optionNoteHeights(_ question: Question, width: CGFloat, measurer: TextMeasurer) -> [CGFloat] {
+        question.options.compactMap { option in
+            guard let description = option.description, !description.isEmpty else { return nil }
+            let height = measurer.measure(optionNoteText(description), width: width - optionNoteIndent).height
+            return max(RowMetrics.optionDescription, ceil(height))
+        }
     }
 
     /// "2 of 5 steps done", then the steps. Every card starts with a
@@ -1831,8 +1881,9 @@ enum RowRenderer {
         }
     }
 
-    /// "12s · $0.04" for Claude, "12s" for Codex, which reports no cost
-    /// (its tokens are in "Copy debug info" instead).
+    /// "12s · 1.7k out · 381k in" (`TurnTokens`), the same for Claude and
+    /// Codex. A turn with no token counts (from an older runner) shows its
+    /// cost instead, as it used to.
     static func footerText(_ completion: TurnCompletion) -> NSAttributedString {
         // "Done" is the done card's now, under this line.
         var parts: [String] = []
@@ -1841,7 +1892,11 @@ enum RowRenderer {
         case .interrupted: parts.append("Stopped after \(RelativeTime.duration(milliseconds: completion.durationMs))")
         case .failed: parts.append("Failed after \(RelativeTime.duration(milliseconds: completion.durationMs))")
         }
-        if let cost = CostText.format(completion.costUsd) { parts.append(cost) }
+        if let tokens = TurnTokens(usage: completion.usage) {
+            parts.append(tokens.footer)
+        } else if let cost = CostText.format(completion.costUsd) {
+            parts.append(cost)
+        }
         var text = parts.joined(separator: " · ")
         // A failure the runner knows the cause of has its error row just
         // above, with the same words and what to do; saying them a third

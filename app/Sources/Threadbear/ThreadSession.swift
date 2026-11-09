@@ -303,8 +303,22 @@ final class ThreadSession {
     /// restart turned them away; a dropped connection keeps them showing.
     @ObservationIgnored private var resending: Set<String> = []
 
+    /// Held for the new runner: it stays through a dropped connection, and
+    /// its bubble says it goes when the runner's back.
     func holdForResend(_ id: String) {
-        if hasPending(id) { resending.insert(id) }
+        guard hasPending(id) else { return }
+        resending.insert(id)
+        updatePending { list in
+            if let index = list.firstIndex(where: { $0.id == id }) { list[index].waitingForRunner = true }
+        }
+    }
+
+    /// The new runner is up and it's going now: the spinner again, and
+    /// the note goes.
+    func sendingAgain(_ id: String) {
+        updatePending { list in
+            if let index = list.firstIndex(where: { $0.id == id }), list[index].waitingForRunner { list[index].waitingForRunner = false }
+        }
     }
 
     /// Reads the thread again from scratch, when the way it's reached has

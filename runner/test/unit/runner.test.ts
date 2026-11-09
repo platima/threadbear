@@ -2066,6 +2066,22 @@ test('needs you: end_turn with archive archives the thread once its turn is over
   assert.deepEqual(checkSequence(h.events(thread.id)), []);
 });
 
+test('needs you: end_turn with archive leaves the thread where it is while a card still waits', async () => {
+  const h = makeHarness();
+  const { thread } = create(h);
+  const s = h.adapter.last;
+  s.init();
+  // A subagent's card (no tool call of the agent's), which outlives the turn.
+  const answer = s.sink.requestApproval({ toolUseId: undefined, name: 'Bash', title: 'Run', input: { command: 'npm test' }, canAlwaysAllow: true, signal: new AbortController().signal });
+  endTurnCall(s, 't1', { needs: 'nothing', archive: true });
+  s.result('completed');
+  assert.equal(h.runner.get(thread.id).archivedAt, undefined, 'not archived with the card waiting');
+  const evs = h.events(thread.id);
+  assert.ok(evs.some((e) => e.type === 'approval.requested'), 'the card was shown');
+  assert.ok(!evs.some((e) => e.type === 'approval.resolved'), 'and still waits for Mike');
+  void answer;
+});
+
 test('needs you: an interrupted turn, or one without archive, leaves the thread where it is', () => {
   const h = makeHarness();
   const { thread } = create(h);

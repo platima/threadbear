@@ -484,11 +484,40 @@ test('a run that builds no Swift needs less room than one that does', () => {
   assert.equal(swift.status, 1, swift.stdout + swift.stderr);
   assert.match(swift.stderr, /h1 has 3\.0 GiB free, and it wants 8 GiB/);
 
+  // And touching app/ or dock/ builds the Mac app in release, even with --quick.
+  for (const dir of ['app', 'dock']) {
+    const mac = setup({ h1: { state: 'free', df: room } });
+    fs.mkdirSync(path.join(mac.repo, dir));
+    fs.writeFileSync(path.join(mac.repo, dir, 'x.swift'), '\n');
+    const built = mac.run('h1', 3600);
+    assert.equal(built.status, 1, `${dir}: ${built.stdout}${built.stderr}`);
+    assert.match(built.stderr, /h1 has 3\.0 GiB free, and it wants 8 GiB/, dir);
+  }
+
   const low = setup({ h1: { state: 'free', df: macDf(1.5 * GiB) } });
   changedSomething(low);
   const r = low.run('h1', 3600);
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /h1 has 1\.5 GiB free, and it wants 2 GiB/);
+});
+
+test('a --quick run that touches the Mac app goes past a Linux host to a Mac', () => {
+  // check.sh --quick builds the app in release when app/ or dock/ changed,
+  // and swift can't build an AppKit app on Linux.
+  for (const dir of ['app', 'dock']) {
+    const s = setup({ h1: { state: 'free', os: 'Linux' }, h2: { state: 'free' } });
+    fs.mkdirSync(path.join(s.repo, dir));
+    fs.writeFileSync(path.join(s.repo, dir, 'x.swift'), '\n');
+    const r = s.run('h1,h2', 3600);
+    assert.equal(r.status, 0, `${dir}: ${r.stdout}${r.stderr}`);
+    assert.deepEqual(r.copies, ['h2'], dir);
+  }
+  // Anything else still goes to the Linux host first.
+  const s = setup({ h1: { state: 'free', os: 'Linux' }, h2: { state: 'free' } });
+  changedSomething(s);
+  const r = s.run('h1,h2', 3600);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(r.copies, ['h1']);
 });
 
 test('a Linux host that could not run it anyway is not named as short of room', () => {
@@ -544,6 +573,24 @@ test('a copy that fails on a host short of room says so, and ends as no room rat
   assert.match(r.stderr, /Couldn't copy this checkout to h1 \(it has 0\.2 GiB free, and this check wants 8 GiB\); trying the others\./);
   assert.match(r.stderr, /No check host has room for this check: h1 has 0\.2 GiB free, and it wants 8 GiB\./);
   assert.deepEqual(r.left('h1'), []);
+});
+
+// The runner's self-update tells the hosts' trouble from a failed check by
+// this exit (deploy-steps.mjs, remoteChecks); a run that went over its time
+// while checking stays 1, as a hung test is the check's own failure.
+test('with THREADBEAR_CHECK_BUSY_EXIT, no room exits with it, and a run over time while checking does not', () => {
+  const low = setup({ h1: { state: 'free', dfAfter: macDf(0.2 * GiB) } });
+  const r = low.run('h1', 3600, '', { RSYNC_FAILS_ON: 'h1', THREADBEAR_CHECK_BUSY_EXIT: '69' });
+  assert.equal(r.status, 69, r.stdout + r.stderr);
+  assert.match(r.stderr, /No check host has room for this check/);
+  const limits = { THREADBEAR_CHECK_PING_SECS: '1', THREADBEAR_CHECK_MAX_SECS: '3', THREADBEAR_CHECK_BUSY_EXIT: '69' };
+  // Started: --on-host has moved its copy out of runs/ (the fake ssh doesn't
+  // run --on-host, so the peek does the move's part), then a step hangs.
+  const hung = setup({ h1: { state: 'free' } }).run('h1', 3600, 'rm -rf "$PWD"; sleep 30', limits);
+  assert.equal(hung.status, 1, hung.stdout + hung.stderr);
+  // Still waiting for the host's lock: its copy is where it was sent.
+  const queued = setup({ h1: { state: 'free' } }).run('h1', 3600, 'sleep 30', limits);
+  assert.equal(queued.status, 69, queued.stdout + queued.stderr);
 });
 
 test('a copy that fails on a host short of room still goes on to one with room', () => {
@@ -606,7 +653,8 @@ test('a failure is judged by the disk as it failed, not after its temp files wen
 
 // The host's side for real: a scratch copy whose check.sh fails, with temp
 // files that are gone by the end, and a df that sits in the folder --on-host
-// puts first on PATH (the pinned Node's).
+// puts first on PATH (the Node's). As over ssh, nothing on PATH and no
+// THREADBEAR_NODE: find-node.sh finds the Node nvm installed in its home.
 function onHost(checkExit: number, df: string, opts: { hang?: boolean; env?: Record<string, string> } = {}) {
   const home = shortHome();
   const base = path.join(home, '.cache', 'threadbear-check');
@@ -614,12 +662,19 @@ function onHost(checkExit: number, df: string, opts: { hang?: boolean; env?: Rec
   fs.mkdirSync(path.join(copy, 'scripts'), { recursive: true });
   fs.copyFileSync(SCRIPT, path.join(copy, 'scripts', 'check-remote.sh'));
   fs.copyFileSync(path.join(path.dirname(SCRIPT), 'limit-step.mjs'), path.join(copy, 'scripts', 'limit-step.mjs'));
+  fs.mkdirSync(path.join(copy, 'runner', 'scripts'), { recursive: true });
+  fs.copyFileSync(path.join(path.dirname(SCRIPT), '..', 'runner', 'scripts', 'find-node.sh'), path.join(copy, 'runner', 'scripts', 'find-node.sh'));
   fs.writeFileSync(path.join(copy, 'check.sh'), `#!/bin/bash\necho made >"$TMPDIR/big"\n${opts.hang ? 'sleep 60\n' : ''}exit ${checkExit}\n`, { mode: 0o755 });
-  const nodeBin = path.join(home, '.nvm', 'versions', 'node', 'v24.22.1', 'bin');
+  const nodeBin = path.join(home, '.nvm', 'versions', 'node', 'v24.0.0', 'bin');
   fs.mkdirSync(nodeBin, { recursive: true });
   fs.symlinkSync(process.execPath, path.join(nodeBin, 'node'));
   fs.writeFileSync(path.join(nodeBin, 'df'), `#!/bin/bash\n[ "$*" = "-Pk ." ] || exit 9\ncat <<'END'\n${df}END\n`, { mode: 0o755 });
-  const r = spawnSync('bash', [path.join(copy, 'scripts', 'check-remote.sh'), '--on-host', '1-1-0'], { encoding: 'utf8', env: { ...process.env, HOME: home, ...opts.env } });
+  const empty = path.join(home, 'empty-bin');
+  fs.mkdirSync(empty, { recursive: true });
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home, PATH: empty, ...opts.env };
+  delete env.THREADBEAR_NODE;
+  delete env.NVM_DIR;
+  const r = spawnSync('/bin/bash', [path.join(copy, 'scripts', 'check-remote.sh'), '--on-host', '1-1-0'], { encoding: 'utf8', env });
   return { r, base, kept: path.join(base, 'kept-1-1-0', 'free-kb') };
 }
 

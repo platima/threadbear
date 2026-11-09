@@ -100,12 +100,12 @@ function firstMessage(f: UpdateFailure, home: string): string {
     : `The runner builds main again within seconds of it moving. If nothing needed landing (it was a one-off), remove "${path.join(home, 'runner', 'update.json')}" and it tries again within 5 minutes.`;
   return `${what(f)}. The whole output is in ${f.logFile}.
 
-Threadbear started this thread in the background in place of a banner. Fix it without me if you can:
+Threadbear started this thread in the background in place of a banner, on this install's default mode. Fix it without me if you can. If that mode asks before some steps (Ask before edits, or Auto's check stopping one), those wait on a card for me: carry on with what you can meanwhile.
 
 1. Read the output and work out why. Fetch main first: if a commit since ${f.short} already fixes it, or another thread is on it, don't do it twice.
 2. Fix the cause. A test that failed because the Mac was busy, or that flakes, gets made to hold up under load rather than just run again. Land the fix on main the usual way (AGENTS.md).
 3. ${retry} Watch \`tb status\` until its "Following main" line no longer says failed (a release built and waiting to start, or up to date).
-4. Once it's through, call end_turn with needs "nothing" and archive: true, so this never reaches my inbox. Only leave it for me if it needs a decision only I can make, you can't push from this machine, or it still fails after a real attempt. Then tell me in a few lines what's wrong and what you tried.`;
+4. Once it's through, call end_turn with needs "nothing" and archive: true, so this never reaches my inbox. Only leave it for me if it needs a decision only I can make, a step is waiting on my yes, you can't push from this machine, or it still fails after a real attempt. Then tell me in a few lines what's wrong and what you tried.`;
 }
 
 function followUp(f: UpdateFailure): string {

@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { realPath } from './platform.ts';
+import { untrustedGitArgs } from './safe-git.ts';
 
 export type GitMeta = {
   branch: string; // as it was, "HEAD" when detached
@@ -29,12 +30,13 @@ const MOVE_REFS = 'refs/threadbear/move/';
 
 type Run = { ok: boolean; stdout: string; stderr: string };
 
-// git in `cwd`, with only the variables we give it pointing it anywhere.
+// git in `cwd`, with only the variables we give it pointing it anywhere,
+// and no fsmonitor program from the repo's own config (safe-git.ts).
 function run(cwd: string, args: string[], env: Record<string, string> = {}): Promise<Run> {
   const base: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX']) delete base[k];
   return new Promise((resolve) => {
-    execFile('git', ['-C', cwd, ...args], { env: { ...base, ...env }, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('git', untrustedGitArgs(cwd, args), { env: { ...base, ...env }, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
       resolve({ ok: !err, stdout: String(stdout), stderr: String(stderr) });
     });
   });

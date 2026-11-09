@@ -85,7 +85,11 @@ struct ActivityBar: View {
         .frame(width: Self.width)
         .frame(maxHeight: .infinity)
         .overlay(alignment: .trailing) {
+            // Starts under the title bar strip: the traffic lights are wider
+            // than the bar, so a full-height line cut between the yellow and
+            // green dots (Mike, 9 Nov).
             Rectangle().fill(.separator).frame(width: 0.5)
+                .padding(.top, RootView.options.headerHeight)
         }
     }
 }

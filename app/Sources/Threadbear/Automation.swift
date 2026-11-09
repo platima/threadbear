@@ -1089,6 +1089,11 @@ enum Automation {
                 guard let review = app.reviewWindows.values.first(where: { $0.session.review.id == id })?.window else { return "error that review isn't open" }
                 window = review
             }
+            // {"settings": true}: the Settings window (open it with `settings`).
+            if c["settings"] as? Bool == true {
+                guard let settings = SettingsWindow.current, settings.isVisible else { return "error the Settings window isn't open" }
+                window = settings
+            }
             window.setContentSize(NSSize(width: number(c["w"]) ?? 1240, height: number(c["h"]) ?? 820))
             let size = AppDump.contentSize(window)
             return "ok \(Int(size.width))x\(Int(size.height))"
@@ -1391,6 +1396,18 @@ enum Automation {
             return "ok"
         case "waitFor":
             return await waitFor(c, app: app)
+        case "terminal":
+            // The Terminal panel: {"toggle": true} is ⌘J, {"type": "ls\r"}
+            // types into the showing thread's shell; each says whether it's
+            // showing and every shell's folder. SwiftTerm doesn't take in
+            // output while the window is behind others, so look with `shot`
+            // after `front` (ask Mike first).
+            if c["toggle"] as? Bool == true { app.toggleTerminal() }
+            let target = TerminalTarget.for(app.selectedThread) { app.runnerName(of: $0) }
+            if let text = c["type"] as? String { Terminals.shared.open(target).type(text) }
+            if let ms = c["wait"] as? Int { try? await Task.sleep(for: .milliseconds(ms)) }
+            let focused = (NSApp.mainWindow?.firstResponder as? NSView).map { String(describing: type(of: $0)) } ?? "none"
+            return "ok shown=\(app.terminalShown) focus=\(focused) cwd=\(target.cwd) shells=\(Terminals.shared.debugSummary)"
         case "menu":
             return menu(c, app: app)
         case "composer-menu":

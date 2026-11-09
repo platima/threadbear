@@ -161,8 +161,10 @@ Hetzner cloud server with 8 GB. Do this as an ordinary user with sudo, not root.
    commands run in the account's own shell, else bash. Set the account's full name, which agents are told:
    `sudo chfn -f "Their Name" $USER`. And a git identity, as on any machine
    that commits: `git config --global user.name` and `user.email`.
-2. **Node 24 with nvm**, at the path the scripts expect:
-   `nvm install 24.22.1` (else pass `--node` to the install script).
+2. **Node 24 or newer**, from nvm (`nvm install 24`), your package manager or
+   nodejs.org. The scripts take the `node` on PATH, else nvm's newest, so an
+   ssh session without nvm on its PATH still finds it; `--node` on the install
+   script, or `THREADBEAR_NODE`, picks one yourself.
 3. **The CLIs, logged in on this server:** Claude Code with its native
    installer (`curl -fsSL https://claude.ai/install.sh | bash`, which puts
    it in `~/.local/bin/claude`, where the runner looks), then

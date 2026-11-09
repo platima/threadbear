@@ -8,11 +8,12 @@ import type { Account, Pool, Provider } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
 import { cutOut } from '../store.ts';
 import { resetTime } from '../usage.ts';
-import { DEFAULT_POOL_FOLDERS, readRunnerJson, writeRunnerJson } from '../config.ts';
+import { DEFAULT_POOL_FOLDERS, peekRunnerJson, readRunnerJson, writeRunnerJson } from '../config.ts';
 import { WAIT_SLACK_MS, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from '../pools.ts';
 import { historyItems, selectHistory } from '../handoff-history.ts';
 import type { ThreadState } from '../runner.ts';
-import { CARRY_ON_BACK, CARRY_ON_MOVED, isClaudeModel, modelRow, modelTitle, providerName } from '../runner.ts';
+import { CARRY_ON_BACK, CARRY_ON_MOVED, isClaudeModel, modelRow, modelTitle } from '../runner.ts';
+import { providerName } from '../providers.ts';
 
 export const poolsPart = {
   // The pools in force: runner.json's, else the built-in ones from the
@@ -107,7 +108,7 @@ export const poolsPart = {
   // runner can use.
   defaultPoolId(this: Runner, pools: Pool[], usable: Account[], defaultAccount?: string): string | undefined {
     const live = pools.filter((p) => poolAccounts(p, usable).length);
-    const saved = readRunnerJson(this.cfg.home).defaults?.poolId ?? this.cfg.defaults.poolId;
+    const saved = peekRunnerJson(this.cfg.home).defaults?.poolId ?? this.cfg.defaults.poolId;
     if (saved && live.some((p) => p.id === saved)) return saved;
     const account = defaultAccount ?? this.defaultAccountId();
     return (live.find((p) => p.accountIds.includes(account)) ?? live[0])?.id;
@@ -119,7 +120,9 @@ export const poolsPart = {
     const accounts = this.safeAccounts();
     if (model.startsWith('gpt-') || accounts.some((a) => a.provider === 'codex' && modelRow(a, model))) return 'codex';
     if (accounts.some((a) => a.provider === 'claude' && modelRow(a, model))) return 'claude';
-    return undefined;
+    // Last, as an ACP agent's list can name Claude's and Codex's models too:
+    // only an id nothing else claims means that agent.
+    return accounts.find((a) => modelRow(a, model))?.provider;
   },
 
   // The pool and login for a new thread with no accountId: the pool named,
@@ -149,7 +152,7 @@ export const poolsPart = {
     const provider = wanted && providers.includes(wanted) ? wanted : providers[0];
     // The last login used wins a tie, or when nothing says another has
     // more room, as pickAccount has it.
-    const json = readRunnerJson(this.cfg.home).defaults;
+    const json = peekRunnerJson(this.cfg.home).defaults;
     let accountId = pickInPool(pool, accounts, { provider, prefer: json?.accountId ?? this.cfg.defaults.accountId });
     if (!accountId) {
       const next = nextLogin(pool, accounts, { accountId: '', provider }, this.clock.now());

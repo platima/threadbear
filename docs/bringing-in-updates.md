@@ -5,7 +5,12 @@ panel, From Mike), by the runner on its timer (`runner/src/bring-in.ts`:
 every 5 days by default, or straight away for an important release), or
 someone asked you to bring in Mike's latest release. A thread the runner
 started does the merge and the checks before it asks, so the person
-reading it has one decision: land it or not. If they say they don't want
+reading it has one decision at the end: land it or not. It runs on the
+install's default mode (`defaults.permissionMode` in `runner.json`, full
+access when it isn't set), so on Ask before edits, on Codex's Auto (which
+asks before edits and runs commands in a read-only sandbox), or when
+Claude's Auto check stops a step, that step waits for them on a card
+first: carry on with what you can and say what's waiting. If they say they don't want
 these threads, or want them less often, change `releases.bringIn` in
 `runner.json` (a number of days, `"important"` or `"off"`).
 A thread started by Let's Discuss uses section 1 to talk the release

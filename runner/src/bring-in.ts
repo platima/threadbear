@@ -155,7 +155,7 @@ function firstMessage(r: UpstreamRelease, fresh: { why: string }[], setting: Bri
   const how = setting === 'important'
     ? 'This runner only starts these for releases Mike marks important'
     : `This runner starts one of these every ${setting} day${setting === 1 ? '' : 's'} when there's a release waiting`;
-  return `Mike's release ${r.tag} has ${changes(r)} this copy doesn't have yet. ${why}Bring it in: follow docs/bringing-in-updates.md, merge its commit ${r.commit} (the one its signature was checked for) in this thread's worktree and run the checks, then tell me in a few lines what it brings, anything of mine you had to rework, and ask before landing. If it clashes in a way you can't settle, ask me which I'd rather have.
+  return `Mike's release ${r.tag} has ${changes(r)} this copy doesn't have yet. ${why}Bring it in: follow docs/bringing-in-updates.md, merge its commit ${r.commit} (the one its signature was checked for) in this thread's worktree and run the checks, then tell me in a few lines what it brings, anything of mine you had to rework, and ask before landing. This thread runs on this install's default mode, so a step that mode asks about waits for my yes on a card. If it clashes in a way you can't settle, ask me which I'd rather have.
 
 ${how} (runner.json \`releases.bringIn\`, or Settings › General › Updates from Mike). If I say I don't want these, change that setting for me.`;
 }

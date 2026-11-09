@@ -157,8 +157,11 @@ public struct ApprovalRequest: Sendable, Hashable, Decodable {
         title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? name
         input = (try? c.decodeIfPresent(JSONValue.self, forKey: .input)) ?? .object([:])
         // Unknown option strings are dropped rather than failing the event.
+        // A card left with none (a newer runner's names only) still gets
+        // Allow and Deny, which every runner takes, rather than no buttons.
         let raw = (try? c.decodeIfPresent(LossyArray<String>.self, forKey: .options))??.elements ?? ["allow", "deny"]
-        options = raw.compactMap(ApprovalOption.init(rawValue:))
+        let known = raw.compactMap(ApprovalOption.init(rawValue:))
+        options = known.isEmpty ? [.allow, .deny] : known
     }
 
     enum CodingKeys: String, CodingKey { case approvalId, itemId, name, title, input, options }

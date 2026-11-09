@@ -67,9 +67,11 @@ final class MockRunnerTests: XCTestCase {
     }
 
     private static func findNode() -> String? {
-        let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-            + [NSHomeDirectory() + "/.nvm/versions/node/v24.22.1/bin", "/opt/homebrew/bin", "/usr/local/bin"]
-        return paths.map { $0 + "/node" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+        // check.sh's Node (THREADBEAR_NODE) first, then PATH and Homebrew's.
+        let env = ProcessInfo.processInfo.environment
+        let nodes = [env["THREADBEAR_NODE"]].compactMap { $0 }
+            + ((env["PATH"] ?? "").split(separator: ":").map(String.init) + ["/opt/homebrew/bin", "/usr/local/bin"]).map { $0 + "/node" }
+        return nodes.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     private func connect() async throws -> RPCClient {

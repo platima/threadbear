@@ -7,7 +7,7 @@ import { tmpDir } from '../helpers/fakes.ts';
 import { FakeClock } from '../../src/clock.ts';
 import type { UpdateFailure } from '../../src/fix-update.ts';
 import { nullLogger } from '../../src/log.ts';
-import { cloneArgs, CHECK_INTERVAL_MS, FIRST_CHECK_MS, MAX_SLEPT_TRIES, SOON_MS, RunnerUpdater, runDeploy, launcherDiffers, launchAgentBehind, launcherSourcesHash, appOfExecutable, updateDir, watchMainRef, decideUpdate, failedAlready, releaseTreeAt, syncClone, updateFilePath, type UpdateDeps } from '../../src/update.ts';
+import { cloneArgs, CHECK_INTERVAL_MS, FIRST_CHECK_MS, MAX_SLEPT_TRIES, SOON_MS, RunnerUpdater, runDeploy, launcherDiffers, launchAgentBehind, launcherSourcesHash, appOfExecutable, updateDir, watchMainRef, decideUpdate, failedAlready, releaseTreeAt, syncClone, updateFilePath, buildTreeAt, type UpdateDeps } from '../../src/update.ts';
 import type { ReleaseJson } from '../../src/release.ts';
 import { patiently } from '../helpers/patience.ts';
 import { IS_WINDOWS, SHELL, shPath, skipOnWindows } from '../helpers/platform.ts';
@@ -133,7 +133,7 @@ type Harness = {
   deploys: number;
   follows: string[];
   main: { commit: string; short: string; subject: string; tree: string; buildTree?: string };
-  deployResult: { ok: true; id: string } | { ok: false; error: string; transient?: boolean; slept?: boolean };
+  deployResult: { ok: true; id: string } | { ok: false; error: string; transient?: boolean; slept?: boolean; unavailable?: boolean };
   backendDeploys: string[];
   backendResult: { ok: boolean; error?: string };
   pending: boolean;
@@ -470,7 +470,7 @@ test('launchAgentBehind: launch.mjs, a plist that runs node, and an app built fr
 
 test('appOfExecutable: only the launcher app\'s executable', () => {
   assert.equal(appOfExecutable('/Users/m/Applications/Threadbear Runner.app/Contents/MacOS/Threadbear Runner'), '/Users/m/Applications/Threadbear Runner.app');
-  assert.equal(appOfExecutable('/Users/m/.nvm/versions/node/v24.22.1/bin/node'), undefined);
+  assert.equal(appOfExecutable('/Users/m/.nvm/versions/node/v24.0.0/bin/node'), undefined);
   assert.equal(appOfExecutable('/Applications/Threadbear.app/Contents/MacOS/Threadbear'), undefined);
   assert.equal(appOfExecutable(''), undefined);
 });
@@ -536,6 +536,30 @@ test('a build that failed while the Mac slept is tried again later, and words in
   assert.equal(!broken.ok && broken.transient, false);
 });
 
+// deploy.mjs's exit when no check step failed on the check host (ChecksUnavailable):
+// the host's trouble, tried again later, and given up on after the same few tries.
+test('a build whose check host could not run the checks is tried again, then marked failed', async () => {
+  const root = tmpDir();
+  fs.mkdirSync(path.join(root, 'scripts'));
+  const stepsUrl = new URL('../../scripts/deploy-steps.mjs', import.meta.url).href;
+  fs.writeFileSync(path.join(root, 'scripts', 'deploy.mjs'), `import { UNAVAILABLE_EXIT } from ${JSON.stringify(stepsUrl)};\nconsole.error('No check host has room'); process.exit(UNAVAILABLE_EXIT);\n`);
+  const result = await runDeploy(root, root, path.join(root, 'build.log'), root);
+  assert.equal(!result.ok && result.transient && result.unavailable && !result.slept, true);
+
+  const failures: UpdateFailure[] = [];
+  const h = harness({}, { onFailed: (f) => (failures.push(f), true) });
+  h.deployResult = { ok: false, error: 'No check host has room', transient: true, unavailable: true };
+  h.u.start();
+  h.main = { ...h.main, buildTree: 'B1' };
+  for (let i = 1; i < MAX_SLEPT_TRIES; i++) {
+    await h.u.check();
+    assert.equal(h.u.status().state, 'idle', `try ${i}`);
+  }
+  await h.u.check();
+  assert.equal(h.u.status().state, 'failed');
+  assert.match(failures[0]!.error, /no check host could run the checks in all 3 tries/);
+});
+
 test('a commit the Mac slept through every build of is marked failed after a few tries', async () => {
   const failures: UpdateFailure[] = [];
   const h = harness({}, { onFailed: (f) => (failures.push(f), true) });
@@ -555,4 +579,34 @@ test('a commit the Mac slept through every build of is marked failed after a few
   assert.equal(h.u.status().state, 'failed');
   assert.equal(failures.length, 1);
   assert.match(failures[0]!.error, /slept through all 3 tries at this commit/);
+});
+
+// A failure is keyed by runner/ and, in a repo that has them, check.sh and
+// scripts/, as the self-update's checks run through those (Codex, 9 Nov).
+test('buildTreeAt changes with check.sh or scripts/, not with other files', async () => {
+  const dir = tmpDir();
+  const g = (...a: string[]) => spawnSync('git', ['-C', dir, ...a], { encoding: 'utf8' });
+  g('init', '-q');
+  g('config', 'user.email', 't@t'); g('config', 'user.name', 't');
+  fs.mkdirSync(path.join(dir, 'runner', 'src'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'scripts'));
+  fs.writeFileSync(path.join(dir, 'runner', 'src', 'a.ts'), '1');
+  fs.writeFileSync(path.join(dir, 'check.sh'), '1');
+  fs.writeFileSync(path.join(dir, 'scripts', 'check-remote.sh'), '1');
+  fs.writeFileSync(path.join(dir, 'README.md'), '1');
+  const commit = () => (g('add', '-A'), g('commit', '-qm', 'x'));
+  commit();
+  const first = await buildTreeAt(dir, 'runner/');
+  fs.writeFileSync(path.join(dir, 'README.md'), '2');
+  commit();
+  assert.equal(await buildTreeAt(dir, 'runner/'), first);
+  fs.writeFileSync(path.join(dir, 'check.sh'), '2');
+  commit();
+  const second = await buildTreeAt(dir, 'runner/');
+  assert.notEqual(second, first);
+  fs.writeFileSync(path.join(dir, 'scripts', 'check-remote.sh'), '2');
+  commit();
+  assert.notEqual(await buildTreeAt(dir, 'runner/'), second);
+  // A runner that is the repo itself (no prefix): just its tree.
+  assert.equal(await buildTreeAt(dir, ''), g('rev-parse', 'HEAD:').stdout.trim());
 });

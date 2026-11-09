@@ -23,7 +23,7 @@ import type { Account, Hunk, PermissionMode, Provider } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
 import { experimentOn } from '../experiments.ts';
 import { pickInPool, poolAccounts, poolForFolder } from '../pools.ts';
-import { providerName } from '../runner.ts';
+import { providerName } from '../providers.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
 
 export const LAB_REVIEW_ROUNDS = 2;

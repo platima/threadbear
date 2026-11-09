@@ -235,9 +235,19 @@ export function gitAsync(cwd: string, args: string[], opts: GitOptions = {}): Pr
 // (git-remote-https, ssh, upload-pack), with a cap on what it may print.
 // GIT_TERMINAL_PROMPT=0: a fetch that wants a password fails rather than
 // hanging the runner on a prompt nobody sees.
+// A bare repo (the check's own staging folder) is named with --git-dir
+// rather than found by looking from inside it: git refuses one it finds under
+// safe.bareRepository=explicit, which Claude's desktop terminal sets in
+// GIT_CONFIG_PARAMETERS, so every release check failed there (a fork's
+// commit, 8 Nov 2026).
+export function bareRepoArgs(cwd: string): string[] {
+  const at = (name: string) => fs.existsSync(path.join(cwd, name));
+  return !at('.git') && at('HEAD') && at('objects') && at('refs') ? ['--git-dir', path.resolve(cwd)] : [];
+}
+
 function runGit(cwd: string, args: string[], opts: GitOptions): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['-C', cwd, ...args], {
+    const child = spawn('git', ['-C', cwd, ...bareRepoArgs(cwd), ...args], {
       stdio: [opts.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       detached: !IS_WINDOWS,
       windowsHide: true,

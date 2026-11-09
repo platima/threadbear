@@ -15,7 +15,10 @@ import type { Config } from '../config.ts';
 import type { Logger } from '../log.ts';
 import { paths } from '../config.ts';
 import type { CliPolicy, CliStatus, Provider } from '../protocol.ts';
-import { PROVIDERS } from '../protocol.ts';
+import type { Provider as AnyProvider } from '../protocol.ts';
+
+// What this updates. An ACP agent's CLI isn't touched by Threadbear.
+const MANAGED: readonly AnyProvider[] = ['claude', 'codex'];
 import { claudeChannel, claudeInstalledVersion, claudeLatestVersion, runClaudeUpdate } from './claude.ts';
 import { CodexCopies, NPM_LATEST, codexPackageVersion, type CodexResolver, type SurfaceCheck } from './codex.ts';
 import { VERSION_RE, compareVersions, defaultExec, defaultFetchText, type Exec, type FetchText } from './exec.ts';
@@ -101,7 +104,7 @@ export class CliUpdates {
     });
     // A previous update that was running when the runner stopped didn't
     // finish; say so rather than show it running forever.
-    for (const p of PROVIDERS) {
+    for (const p of MANAGED) {
       const u = this.st[p]?.update;
       if (u && (u.state === 'running' || u.state === 'waiting')) this.st[p]!.update = { ...u, state: 'failed', message: 'The runner stopped before this finished.' };
     }
@@ -137,15 +140,16 @@ export class CliUpdates {
   }
 
   list(): CliStatus[] {
-    return PROVIDERS.map((p) => this.status(p));
+    return MANAGED.map((p) => this.status(p));
   }
 
   check(p?: Provider): CliStatus[] {
-    for (const prov of p ? [p] : PROVIDERS) this.track(prov, this.runCheck(prov, true));
+    for (const prov of p ? [p] : MANAGED) this.track(prov, this.runCheck(prov, true));
     return this.list();
   }
 
   update(p: Provider, o: { version?: string; force?: boolean } = {}): CliStatus[] {
+    if (!MANAGED.includes(p)) return this.list();
     this.startUpdate(p, o);
     return this.list();
   }
@@ -229,7 +233,7 @@ export class CliUpdates {
   private policy(p: Provider): CliPolicy {
     if (this.configOff(p)) return 'off';
     if (p === 'codex' && this.cfg.codexPath) return 'off';
-    return this.st[p]?.policy ?? this.cfg.cliUpdates[p];
+    return this.st[p]?.policy ?? this.cfg.cliUpdates[p] ?? 'off';
   }
 
   private configOff(p: Provider): boolean {
@@ -264,7 +268,7 @@ export class CliUpdates {
       this.d.clock.setTimeout(() => {
         this.timers.delete(name);
         if (name === 'check') {
-          for (const p of PROVIDERS) this.track(p, this.runCheck(p, false));
+          for (const p of MANAGED) this.track(p, this.runCheck(p, false));
           const jitter = Math.floor((this.d.random ?? Math.random)() * CHECK_JITTER_MS);
           this.schedule('check', this.cfg.cliUpdates.checkMinutes * 60_000 + jitter);
         } else if (name.startsWith('retry:')) {

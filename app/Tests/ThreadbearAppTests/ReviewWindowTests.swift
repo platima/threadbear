@@ -1,4 +1,5 @@
 import AppKit
+import AVKit
 import SwiftUI
 import XCTest
 @testable import Threadbear
@@ -373,6 +374,62 @@ final class ReviewWindowTests: XCTestCase {
         pump()
         XCTAssertEqual(session.mode, .single, "Esc comes out of the zoom first")
         XCTAssertTrue(image.isFittedForTests)
+    }
+
+    func testASmallImageFitsAnyStageWithoutAppKitThrowing() {
+        let tiny = DesignReview(id: "review", title: "Page", options: [
+            ReviewOption(id: "A", title: "Option A", image: ImageRef(path: Self.images + "A.png", mediaType: "image/png", width: 40, height: 40)),
+        ])
+        let (session, host, window) = make(tiny)
+        defer { window.close() }
+        session.enlarge(0)
+        pump()
+        let image = stage(in: host)
+        XCTAssertGreaterThan(image.minMagnification, 4, "past AppKit's starting maximum")
+        // And back down: the minimum has to give way before the maximum does.
+        window.setContentSize(NSSize(width: 800, height: 660))
+        pump()
+        XCTAssertLessThanOrEqual(image.minMagnification, image.maxMagnification)
+    }
+
+    func testAClipHasItsSoundOnOnTheStageAndIsMutedAmongTheOthers() {
+        let (stage, stageWindow, _) = video(controls: true)
+        defer { stageWindow.close() }
+        XCTAssertEqual(stage.player?.isMuted, false, "enlarged, a clip plays with its sound")
+        let (cell, cellWindow, _) = video(controls: false)
+        defer { cellWindow.close() }
+        XCTAssertEqual(cell.player?.isMuted, true, "in the grid they all play at once")
+    }
+
+    func testTheNextClipKeepsTheMuteAndVolumeJustSet() {
+        let (view, window, host) = video(controls: true)
+        defer { window.close() }
+        view.player?.isMuted = true
+        view.player?.volume = 0.3
+        let first = view.player
+        host.rootView = ReviewVideo(url: URL(fileURLWithPath: "/tmp/next.mp4"), controls: true)
+        pump()
+        XCTAssertFalse(view.player === first, "it's a new player for the next clip")
+        XCTAssertEqual(view.player?.isMuted, true)
+        XCTAssertEqual(view.player?.volume, 0.3)
+    }
+
+    func testClosingTheWindowStopsAClip() throws {
+        let (view, window, host) = video(controls: true)
+        defer { window.close() }
+        let player = try XCTUnwrap(view.player)
+        XCTAssertGreaterThan(player.rate, 0, "it starts by itself")
+        ReviewWindowController.stopVideos(in: host)
+        XCTAssertEqual(player.rate, 0)
+    }
+
+    private func video(controls: Bool) -> (AVPlayerView, NSWindow, NSHostingView<ReviewVideo>) {
+        let host = NSHostingView(rootView: ReviewVideo(url: URL(fileURLWithPath: "/tmp/first.mp4"), controls: controls))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        pump()
+        return (Automation.all(AVPlayerView.self, in: host)[0], window, host)
     }
 
     /// A page as long as the phone shots that prompted zooming, with today's

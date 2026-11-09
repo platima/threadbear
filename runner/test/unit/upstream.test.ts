@@ -7,7 +7,7 @@ import path from 'node:path';
 import { tmpDir } from '../helpers/fakes.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { type CiRun, ciVerdict, gitAsync, FETCH_INTERVAL_MS, FIRST_LOOK_MS, SETTLE_MS, Upstream, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
+import { type CiRun, bareRepoArgs, ciVerdict, gitAsync, FETCH_INTERVAL_MS, FIRST_LOOK_MS, SETTLE_MS, Upstream, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
 import { IS_WINDOWS, shPath } from '../helpers/platform.ts';
 
@@ -123,6 +123,36 @@ test('a fork sees a newer signed release from Mike, with what main is missing', 
   s = await up.check();
   assert.equal(s.state, 'idle');
   assert.equal(s.release?.changes, 0);
+});
+
+// Claude's desktop terminal sets safe.bareRepository=explicit in
+// GIT_CONFIG_PARAMETERS, and git then refuses a bare repo it finds by
+// looking from inside it, as the check's staging folder was (a fork's
+// commit, 8 Nov 2026: every check failed there).
+test('the check works under safe.bareRepository=explicit, as in Claude\'s desktop terminal', async () => {
+  const w = world();
+  commit(w.mike, 'b.txt', 'Second');
+  const third = commit(w.mike, 'c.txt', 'Third');
+  signedTag(w.mike, 'release/2026-10-30', w.mikeKey.priv);
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  const before = process.env.GIT_CONFIG_PARAMETERS;
+  process.env.GIT_CONFIG_PARAMETERS = "'safe.bareRepository'='explicit'";
+  try {
+    // The setting really is on: git refuses a bare repo found from inside.
+    const bare = path.join(w.home, 'a-bare-repo');
+    git(w.home, 'init', '-q', '--bare', bare);
+    assert.notEqual(spawnSync('git', ['-C', bare, 'rev-parse', '--git-dir'], { encoding: 'utf8' }).status, 0);
+    assert.deepEqual(bareRepoArgs(bare), ['--git-dir', path.resolve(bare)]);
+    assert.deepEqual(bareRepoArgs(w.theirs), [], 'a checkout is found as usual');
+
+    const s = await upstreamFor(w.theirs, w.home).check();
+    assert.equal(s.state, 'available', s.reason ?? '');
+    assert.equal(s.release?.tag, 'release/2026-10-30');
+    assert.equal(s.release?.commit, third);
+  } finally {
+    if (before === undefined) delete process.env.GIT_CONFIG_PARAMETERS;
+    else process.env.GIT_CONFIG_PARAMETERS = before;
+  }
 });
 
 test('commits Mike marks Important: come with the release, and lead his tag message', async () => {
