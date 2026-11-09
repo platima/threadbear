@@ -116,7 +116,7 @@ export function App({ store }: { store: AppStore }) {
   const offline = snap.conn !== 'open';
   return (
     <div className="app" style={{ ['--side' as string]: `${page && !page.Sidebar ? 0 : width}px` }}>
-      <Rail route={page ? route : 'threads'} go={go} conn={snap.conn} help={() => setHelp(true)} />
+      <Rail route={page ? route : 'threads'} go={go} conn={snap.conn} help={() => setHelp(true)} snap={snap} />
       {page ? page.Sidebar ? <aside className="side"><page.Sidebar {...pageProps} /></aside> : <div /> : <Sidebar store={store} snap={snap} />}
       <div className="grip" onPointerDown={drag} />
       {help && <Shortcuts onClose={() => setHelp(false)} onTour={() => { setHelp(false); setTour(true); }} />}

@@ -44,5 +44,5 @@ function SettingsPage({ store, snap }: PageProps) {
   );
 }
 
-const page: PageDef = { id: 'settings', title: 'Settings', hint: "The runner's defaults, your logins and pools, pairing a phone or browser, and this app's own options", icon: '⚙\uFE0E', order: 100, Main: SettingsPage };
+const page: PageDef = { id: 'settings', title: 'Settings', hint: "The runner's defaults, your logins and pools, pairing a phone or browser, and this app's own options", icon: '⚙\uFE0E', foot: true, order: 100, Main: SettingsPage };
 export default page;

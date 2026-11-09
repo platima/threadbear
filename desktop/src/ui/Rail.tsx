@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import type { Snapshot } from '../core/store.ts';
 import { PAGES, tip } from './registry.ts';
-import { APP_VERSION, useAvailableUpdate } from './update-state.ts';
+import { useAvailableUpdate } from './update-state.ts';
 
 type Theme = 'auto' | 'dark' | 'light';
 const THEME_KEY = 'threadbear.theme';
@@ -18,8 +19,13 @@ const readTheme = (): Theme => {
 };
 apply(readTheme());
 
-// The strip down the left edge: Threads, then each page.
-export function Rail({ route, go, conn, help }: { route: string; go: (route: string) => void; conn: string; help: () => void }) {
+type Item = { id: string; title: string; hint?: string; icon: ReactNode; foot?: boolean; dot?: 'accent' | 'quiet'; news?: string };
+
+// The strip down the left edge, as the Mac app's activity bar is: Threads and the pages about
+// threads at the top, then at the foot Connectors, Runners, Updates, Usage and Settings, then this
+// window's own buttons. The Updates button carries a dot, and says so in its tooltip, while a newer
+// release is out; Usage is a honey pot filled to the room left.
+export function Rail({ route, go, conn, help, snap }: { route: string; go: (route: string) => void; conn: string; help: () => void; snap: Snapshot }) {
   const [theme, setTheme] = useState<Theme>(readTheme);
   const update = useAvailableUpdate();
   const cycle = () => {
@@ -32,34 +38,33 @@ export function Rail({ route, go, conn, help }: { route: string; go: (route: str
       // not kept
     }
   };
-  const items = [{ id: 'threads', title: 'Threads', hint: 'Your threads: the inbox, what is running, and what is hibernating or archived', icon: '☰' }, ...PAGES.map((p) => ({ id: p.id, title: p.title, hint: p.hint, icon: p.icon }))];
+  const items: Item[] = [
+    { id: 'threads', title: 'Threads', hint: 'Your threads: the inbox, what is running, and what is hibernating or archived', icon: '☰' },
+    ...PAGES.filter((p) => p.available?.(snap) ?? true).map((p): Item => {
+      // Updates: a dot while a newer release is out. Others say it themselves (Connectors, Usage).
+      const signal = p.id === 'updates' && update ? { dot: 'accent' as const, tip: `Version ${update.version} is out.` } : p.signal?.(snap);
+      return { id: p.id, title: p.title, hint: p.hint, icon: p.renderIcon?.(snap) ?? p.icon, foot: p.foot, dot: signal?.dot, news: signal?.tip };
+    }),
+  ];
+  const button = (p: Item) => (
+    <button
+      key={p.id}
+      className={`ghost${route === p.id ? ' on' : ''}`}
+      title={tip(p.title, p.news ? `${p.news} ${p.hint ?? ''}`.trim() : p.hint)}
+      aria-label={p.news ? `${p.title}: ${p.news}` : p.title}
+      onClick={() => go(p.id)}
+    >
+      {p.icon}
+      {p.dot && <span className={`railBadge${p.dot === 'quiet' ? ' quiet' : ''}`} aria-hidden="true" />}
+    </button>
+  );
   return (
     <nav className="rail">
-      {items.map((p) => (
-        <button key={p.id} className={`ghost${route === p.id ? ' on' : ''}`} title={tip(p.title, p.hint)} aria-label={p.title} onClick={() => go(p.id)}>
-          {p.icon}
-        </button>
-      ))}
+      {items.filter((p) => !p.foot).map(button)}
       <span className="grow" />
-      {update ? (
-        <a className="ghost railUpdate" href={update.page} target="_blank" rel="noopener noreferrer" title={`Version ${update.version} is out. Open its page in your browser.`} aria-label={`Version ${update.version} is out`}>
-          {'⬇\uFE0E'}
-        </a>
-      ) : (
-        <button
-          className="ghost"
-          title={`Updates: this is version ${APP_VERSION}, and no newer release is known. This button turns into a link to the new release's page when one is out. Settings, This app can check now.`}
-          aria-label="Updates"
-          onClick={() => {
-            go('settings');
-            history.replaceState(null, '', '#/settings/app');
-          }}
-        >
-          {'⬇︎'}
-        </button>
-      )}
+      {items.filter((p) => p.foot).map(button)}
       <button className="ghost" title={`Appearance: ${theme === 'auto' ? "follows your system's light or dark setting" : theme}. Click to go round: system, dark, light.`} aria-label="Appearance" onClick={cycle}>
-        {theme === 'dark' ? '☾' : theme === 'light' ? '☀\uFE0E' : '◐'}
+        {theme === 'dark' ? '☾' : theme === 'light' ? '☀︎' : '◐'}
       </button>
       <button className="ghost" title="Keyboard shortcuts, and a replay of the tour of the app" aria-label="Keyboard shortcuts" onClick={help}>
         ?

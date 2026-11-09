@@ -265,5 +265,5 @@ function RunnersPage({ store, snap }: PageProps) {
   );
 }
 
-const page: PageDef = { id: 'runners', title: 'Runners', hint: 'The machines that run Threadbear for you, whether each is connected, and what is on each', icon: '▣', order: 60, Main: RunnersPage };
+const page: PageDef = { id: 'runners', title: 'Runners', hint: 'The machines that run Threadbear for you, whether each is connected, and what is on each', icon: '▣', foot: true, order: 61, Main: RunnersPage };
 export default page;

@@ -27,6 +27,9 @@ release stops before anything is published if it is missing.
 ### Added
 
 - The desktop app: threads, the transcript, the composer with pictures, asks and review cards, Projects, Schedules, Usage, Runners and Settings pages, Highlights, Actions, Agents and Files panes, a first-run tour, and the shortcuts sheet.
+- The rail is laid out as the Mac app's is: Threads, Projects and Scheduled at the top, and Connectors, Runners, Updates, Usage and Settings together at the foot. Usage is a honey pot filled to the room left on the login with the most room, and its tooltip says how much.
+- An Updates page, as the Mac app has an Updates panel: this app's version and whether a newer release is out, how the runner updates and whether threads are still finishing on a previous version, and Claude Code's updates, in one place.
+- A Connectors page, for a runner that has a Connectors gateway set up: the services your agents get from it, which need signing in, and buttons that open each sign-in page in your browser. The button is left out of the rail for a runner with no gateway, and gets a dot when a service needs you. The window never talks to the gateway; the runner does.
 - `Threadbear.exe --runner [--status | --start | --installed | --stop | --uninstall | --dry-run]` and `--quit`, for installers and for people who like a terminal. Their answers print to the terminal that ran them.
 - A launch key on the bridge between the window and the runner, so no other program on the PC can use it. The bridge keeps the same address between launches, so the app remembers its settings, and sends a content security policy, so a remote picture in a message shows as its description.
 - A check once a day for a newer release of the fork, shown as a link in the rail. It downloads nothing, and Settings, "This app", turns it off.
@@ -34,7 +37,7 @@ release stops before anything is published if it is missing.
 - Licence notices for everything in the package (`THIRD-PARTY-NOTICES.txt`) and a `README-WINDOWS.txt` in the zip.
 - A second kind of runner, started with `--runner --on-demand` or from the offer, tray menu or the connection banner's Start the runner button: no sign-in trigger, started by the app when it opens and stopped when it quits. `--runner --mode` says which kind is set up. The same on Linux, as a systemd user service that is not enabled.
 - Exit on close (Settings, "This app", Windows only). On Linux closing the window always ends the app.
-- An Updates button in the rail, always there: a link to the new release's page when one is out, otherwise a way to Settings, "This app". A copy that is itself a pre-release (every release so far) is now told about newer pre-releases, which the check never did before.
+- An Updates button in the rail, always there, with a dot while a newer release is out (it opens the Updates page, below). A copy that is itself a pre-release (every release so far) is now told about newer pre-releases, which the check never did before.
 - Tooltips that say what a control is for (pages and panes carry a hint), and a test that keeps every control's tooltip from being only its label.
 
 ### Fixed

@@ -6,7 +6,7 @@ import { RpcClient, RpcError, bridgeKey, type ConnState } from './rpc.ts';
 import { APP_VERSION } from './version.ts';
 import { notifyTransition } from './native.ts';
 import { TranscriptModel, type Streaming } from './model.ts';
-import type { Account, AnyEvent, ApprovalDecision, AskAnswer, DesignReview, EffortLevel, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, QueuedAnswers, ReviewDraft, ThreadSummary } from './types.ts';
+import type { Account, AnyEvent, ApprovalDecision, AskAnswer, DesignReview, EffortLevel, HelloResult, ImageRef, PermissionMode, PersistedEvent, Pool, QueuedAnswers, ReviewDraft, RunnerUpdates, ThreadSummary, ConnectorsStatus } from './types.ts';
 
 // What to show a person when a request fails: a runner that doesn't have the
 // method (-32601) is too old for it, not broken.
@@ -21,6 +21,9 @@ export type Snapshot = {
   conn: ConnState;
   connWhy?: string;
   hello?: HelloResult;
+  // The Connectors gateway's services, once the runner has answered connectors.status; none
+  // from a runner that predates it (the page is then left out).
+  connectors?: ConnectorsStatus;
   accounts: Account[];
   pools: Pool[];
   threads: Map<string, ThreadSummary>;
@@ -69,6 +72,12 @@ export class AppStore {
     });
     rpc.on('accounts.updated', (p: { accounts: Account[] }) => this.set({ accounts: p.accounts }));
     rpc.on('pools.updated', (p: { pools: Pool[] }) => this.set({ pools: p.pools }));
+    rpc.on('connectors.updated', (p: { connectors: ConnectorsStatus }) => this.set({ connectors: p.connectors }));
+    // The runner's own update state changed: it replaces the one hello carried.
+    rpc.on('runner.updates', (p: { updates: RunnerUpdates }) => {
+      const hello = this.snap.hello;
+      if (hello) this.set({ hello: { ...hello, updates: p.updates } });
+    });
     rpc.on('runner.notice', (p: Notice) => this.notify(p.level, p.message));
   }
 
@@ -100,7 +109,20 @@ export class AppStore {
 
   // ---- connection ---------------------------------------------------------
 
+  // The Connectors gateway's status (the runner looks every few minutes by itself; `refresh`
+  // asks it to look now, as the page does when it opens). A runner from before Connectors
+  // answers -32601 and has none, so the page is left out; any other failure keeps what was known.
+  async loadConnectors(refresh = false): Promise<void> {
+    try {
+      const { connectors } = await this.rpc.request<{ connectors: ConnectorsStatus }>('connectors.status', refresh ? { refresh: true } : {});
+      this.set({ connectors });
+    } catch (e) {
+      if (e instanceof RpcError && e.code === -32601) this.set({ connectors: undefined });
+    }
+  }
+
   private async onOpen(): Promise<void> {
+    void this.loadConnectors();
     try {
       const { threads } = await this.rpc.request<{ threads: ThreadSummary[] }>('threads.list', { include: ['inbox', 'snoozed'] });
       const map = new Map<string, ThreadSummary>();
