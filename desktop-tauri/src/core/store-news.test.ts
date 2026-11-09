@@ -1,6 +1,6 @@
 // What the runner tells the window about itself, besides threads: the Connectors
 // gateway's services (connectors.status, connectors.updated) and its own updates
-// (hello's `updates`, runner.updates). node --test desktop/src/core/store-news.test.ts
+// (hello's `updates`, runner.updates). node --test desktop-tauri/src/core/store-news.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fake } from './fake-transport.ts';

@@ -219,13 +219,13 @@ if [ -s "$tmp/unexpected" ]; then
 fi
 
 # The app finds its download by matching the END of each release asset name
-# (see desktop/src/core/updates.ts) against these suffixes. Read them straight
+# (see desktop-tauri/src/core/updates.ts) against these suffixes. Read them straight
 # from the source so this cannot drift: renaming assets without updating the
 # check, or the reverse, fails here, loudly, instead of silently stranding
 # every copy already installed. npad hit that once, in v0.17.x.
-suffixes=$(grep -o '"-setup-win-[^"]*"' desktop/src/core/updates.ts | tr -d '"' | sort -u || true)
+suffixes=$(grep -o '"-setup-win-[^"]*"' desktop-tauri/src/core/updates.ts | tr -d '"' | sort -u || true)
 if [ -z "$suffixes" ]; then
-	fail "could not read the update check's asset suffixes from desktop/src/core/updates.ts"
+	fail "could not read the update check's asset suffixes from desktop-tauri/src/core/updates.ts"
 fi
 names=$(ls "$dir")
 for sfx in $suffixes; do

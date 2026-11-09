@@ -1,4 +1,4 @@
-// node --test desktop/src/ui/thread/text.test.ts
+// node --test desktop-tauri/src/ui/thread/text.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { answerMessage, choices, dropMarker, insertMarker, splitMarkers } from './text.ts';

@@ -1,4 +1,4 @@
-// node --test desktop/src/core/rpc.test.ts
+// node --test desktop-tauri/src/core/rpc.test.ts
 import assert from 'node:assert/strict';
 import { after, describe, test } from 'node:test';
 import { freePort, scratch, startBridge, stubRunner, wsTransport } from '../../bridge/testkit.ts';

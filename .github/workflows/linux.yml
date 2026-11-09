@@ -13,7 +13,7 @@ name: linux
 on:
   push:
     branches: [main, 'linux/**']
-    paths: ['desktop/**', 'runner/**', 'installer/linux/**', 'installer/node.json', 'installer/make-notices.mjs', 'docs/guide.md', 'docs/protocol.md', 'docs/on-your-mac.md', '.github/workflows/linux.yml']
+    paths: ['desktop-tauri/**', 'runner/**', 'installer/linux/**', 'installer/node.json', 'installer/make-notices.mjs', 'docs/guide.md', 'docs/protocol.md', 'docs/on-your-mac.md', '.github/workflows/linux.yml']
   workflow_dispatch:
   workflow_call:
 
@@ -46,7 +46,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             runner/package-lock.json
-            desktop/package-lock.json
+            desktop-tauri/package-lock.json
       - name: System libraries the shell is built from
         run: |
           sudo apt-get update
@@ -54,22 +54,22 @@ jobs:
       - name: Dependencies
         run: |
           npm ci --prefix runner
-          npm ci --prefix desktop
+          npm ci --prefix desktop-tauri
       - name: The runner's checks that matter here
         working-directory: runner
         run: |
           npm run typecheck
           node --test test/unit/install-linux.test.ts test/unit/agent-sdk.test.ts test/unit/platform.test.ts
       - name: The desktop UI's checks
-        working-directory: desktop
+        working-directory: desktop-tauri
         run: |
           npm run typecheck
           npm test
       - name: Build the shell
-        working-directory: desktop
+        working-directory: desktop-tauri
         run: npx tauri build --no-bundle
       - name: Package
-        run: node installer/linux/stage.mjs --arch ${{ matrix.arch }} --shell desktop/src-tauri/target/release/threadbear-desktop
+        run: node installer/linux/stage.mjs --arch ${{ matrix.arch }} --shell desktop-tauri/src-tauri/target/release/threadbear-desktop
       - name: The .deb
         run: node installer/linux/deb.mjs --arch ${{ matrix.arch }}
       - name: What was made

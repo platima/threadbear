@@ -26,7 +26,7 @@ name: Installers
 # A pull request or a push to main that touches the packaging builds the x64
 # packages unsigned, so a broken installer is caught before a release does.
 #
-# The shell (desktop/src-tauri) is compiled natively for x64 and cross-compiled
+# The shell (desktop-tauri/src-tauri) is compiled natively for x64 and cross-compiled
 # for arm64 (the runner has the MSVC arm64 tools). The runner's packages are
 # fetched for the target (npm's --os and --cpu), and Node comes from a pinned,
 # checksum-verified download (installer/node.json), so an arm64 package is
@@ -82,10 +82,10 @@ on:
     branches: [main]
     paths:
       - "installer/**"
-      - "desktop/src-tauri/**"
-      - "desktop/bridge/**"
-      - "desktop/package.json"
-      - "desktop/package-lock.json"
+      - "desktop-tauri/src-tauri/**"
+      - "desktop-tauri/bridge/**"
+      - "desktop-tauri/package.json"
+      - "desktop-tauri/package-lock.json"
       - "runner/package.json"
       - "runner/package-lock.json"
       - ".github/workflows/installers.yml"
@@ -94,10 +94,10 @@ on:
     branches: [main]
     paths:
       - "installer/**"
-      - "desktop/src-tauri/**"
-      - "desktop/bridge/**"
-      - "desktop/package.json"
-      - "desktop/package-lock.json"
+      - "desktop-tauri/src-tauri/**"
+      - "desktop-tauri/bridge/**"
+      - "desktop-tauri/package.json"
+      - "desktop-tauri/package-lock.json"
       - "runner/package.json"
       - "runner/package-lock.json"
       - ".github/workflows/installers.yml"
@@ -157,8 +157,8 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
           set -eu
-          node desktop/scripts/version.mjs --check
-          version=$(node desktop/scripts/version.mjs --print)
+          node desktop-tauri/scripts/version.mjs --check
+          version=$(node desktop-tauri/scripts/version.mjs --print)
 
           # A pull request checks the x64 packages; everything else builds both
           if [ "$EVENT" = pull_request ]; then archs='["x64"]'; else archs='["x64","arm64"]'; fi
@@ -232,7 +232,7 @@ jobs:
 
       - name: Install the UI's packages and build it
         shell: pwsh
-        working-directory: desktop
+        working-directory: desktop-tauri
         run: |
           npm ci
           if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
@@ -241,7 +241,7 @@ jobs:
 
       - name: Build the shell (Threadbear.exe)
         shell: pwsh
-        working-directory: desktop
+        working-directory: desktop-tauri
         # --no-bundle: the installers are made by installer/, not Tauri's
         # bundler. The windows workflow has already checked Cargo.lock (cargo
         # check --locked).

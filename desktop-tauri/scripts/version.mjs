@@ -1,19 +1,19 @@
-// The Windows app's version. One number, in desktop/package.json, and the
+// The Windows app's version. One number, in desktop-tauri/package.json, and the
 // places that repeat it have to agree with it:
 //
-//   desktop/src-tauri/Cargo.toml        [package] version
-//   desktop/src-tauri/Cargo.lock        the threadbear-desktop entry
-//   desktop/src-tauri/tauri.conf.json   "version"
+//   desktop-tauri/src-tauri/Cargo.toml        [package] version
+//   desktop-tauri/src-tauri/Cargo.lock        the threadbear-desktop entry
+//   desktop-tauri/src-tauri/tauri.conf.json   "version"
 //
-//   node desktop/scripts/version.mjs --print        the version
-//   node desktop/scripts/version.mjs --check        fail if any file disagrees
-//   node desktop/scripts/version.mjs --set 0.2.0    change all of them
-//   node desktop/scripts/version.mjs --valid 0.2.0  exit 0 if it is a version we accept
+//   node desktop-tauri/scripts/version.mjs --print        the version
+//   node desktop-tauri/scripts/version.mjs --check        fail if any file disagrees
+//   node desktop-tauri/scripts/version.mjs --set 0.2.0    change all of them
+//   node desktop-tauri/scripts/version.mjs --valid 0.2.0  exit 0 if it is a version we accept
 //
 // Semantic versioning: while the major is 0, a minor bump is a round of
 // features (or anything that changes how the app behaves), a patch bump is
 // fixes only. Bump it once per release, measured from the latest release tag,
-// and open a heading for it in desktop/CHANGELOG.md. The runner has its own
+// and open a heading for it in desktop-tauri/CHANGELOG.md. The runner has its own
 // version (runner/package.json) and is not tied to this one.
 //
 // What is accepted is strict semver 2.0 without build metadata: no leading
@@ -52,25 +52,25 @@ const problem = (v) => {
 // Each place: how to read its version, and how to write a new one.
 const places = [
   {
-    name: 'desktop/package.json',
+    name: 'desktop-tauri/package.json',
     file: file('package.json'),
     get: (t) => JSON.parse(t).version,
     set: (t, v) => t.replace(/("version"\s*:\s*")[^"]*(")/, `$1${v}$2`),
   },
   {
-    name: 'desktop/src-tauri/Cargo.toml',
+    name: 'desktop-tauri/src-tauri/Cargo.toml',
     file: file('src-tauri', 'Cargo.toml'),
     get: (t) => /^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m.exec(t)?.[1],
     set: (t, v) => t.replace(/(^\[package\][\s\S]*?^version\s*=\s*")[^"]+(")/m, `$1${v}$2`),
   },
   {
-    name: 'desktop/src-tauri/Cargo.lock',
+    name: 'desktop-tauri/src-tauri/Cargo.lock',
     file: file('src-tauri', 'Cargo.lock'),
     get: (t) => /name = "threadbear-desktop"\r?\nversion = "([^"]+)"/.exec(t)?.[1],
     set: (t, v) => t.replace(/(name = "threadbear-desktop"\r?\nversion = ")[^"]+(")/, `$1${v}$2`),
   },
   {
-    name: 'desktop/src-tauri/tauri.conf.json',
+    name: 'desktop-tauri/src-tauri/tauri.conf.json',
     file: file('src-tauri', 'tauri.conf.json'),
     get: (t) => JSON.parse(t).version,
     set: (t, v) => t.replace(/("version"\s*:\s*")[^"]*(")/, `$1${v}$2`),
@@ -109,7 +109,7 @@ if (mode === '--print') {
 } else if (mode === '--set') {
   if (!arg || problem(arg)) {
     if (arg) console.error(problem(arg));
-    console.error('Usage: node desktop/scripts/version.mjs --set 1.2.3');
+    console.error('Usage: node desktop-tauri/scripts/version.mjs --set 1.2.3');
     process.exit(2);
   }
   for (const p of places) {
@@ -121,8 +121,8 @@ if (mode === '--print') {
     }
     if (after !== before) fs.writeFileSync(p.file, after);
   }
-  console.log(`Set ${arg} in ${places.length} files. Add a heading for it to desktop/CHANGELOG.md.`);
+  console.log(`Set ${arg} in ${places.length} files. Add a heading for it to desktop-tauri/CHANGELOG.md.`);
 } else {
-  console.error('Usage: node desktop/scripts/version.mjs --print | --check | --valid <version> | --set <version>');
+  console.error('Usage: node desktop-tauri/scripts/version.mjs --print | --check | --valid <version> | --set <version>');
   process.exit(2);
 }

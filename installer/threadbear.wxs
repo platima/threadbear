@@ -58,7 +58,7 @@
                   DowngradeErrorMessage="A newer version of Threadbear is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <Icon Id="ThreadbearIcon" SourceFile="..\desktop\src-tauri\icons\icon.ico" />
+    <Icon Id="ThreadbearIcon" SourceFile="..\desktop-tauri\src-tauri\icons\icon.ico" />
     <Property Id="ARPPRODUCTICON" Value="ThreadbearIcon" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/platima/threadbear" />

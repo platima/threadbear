@@ -1,4 +1,4 @@
-// node --test desktop/src/ui/pages-lib/connectors-text.test.ts
+// node --test desktop-tauri/src/ui/pages-lib/connectors-text.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buttonTitle, emptyLine, host, list, manageUrl, needsYou, quiet, serviceUrl, stateLine, tooltip } from './connectors-text.ts';

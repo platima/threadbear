@@ -1,4 +1,4 @@
-// node --test desktop/src/core/store.test.ts
+// node --test desktop-tauri/src/core/store.test.ts
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { fake } from './fake-transport.ts';

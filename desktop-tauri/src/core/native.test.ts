@@ -1,4 +1,4 @@
-// node --test desktop/src/core/native.test.ts
+// node --test desktop-tauri/src/core/native.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { getExitOnClose, openClaudeLogin, openExternal, setExitOnClose, startRunner } from './native.ts';

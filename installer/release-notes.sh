@@ -1,6 +1,6 @@
 #!/bin/sh
 # Write the GitHub release notes for a tag to stdout: the version's
-# "### ✨ Highlights" from desktop/CHANGELOG.md, the downloads and how to
+# "### ✨ Highlights" from desktop-tauri/CHANGELOG.md, the downloads and how to
 # verify them, and a link to the full changelog entry. Used by release.yml (once,
 # before anything is published, so a release without highlights fails instead of
 # shipping a bare list of files) and, with --check, by release.sh and by the
@@ -47,7 +47,7 @@ version=${tag#v}
 base=${version%%-*} # A pre-release (v0.2.0-rc.1) uses its version's entry
 prerelease=0
 [ "$base" = "$version" ] || prerelease=1
-changelog=desktop/CHANGELOG.md
+changelog=desktop-tauri/CHANGELOG.md
 
 # This version's entry: from its "## [x.y.z]" heading to the next "## ["
 entry=$(awk -v v="$base" '
@@ -97,7 +97,7 @@ fi
 
 cat <<EOF
 
-Every change in this release: [CHANGELOG.md](https://github.com/$repo/blob/$tag/desktop/CHANGELOG.md#$anchor)
+Every change in this release: [CHANGELOG.md](https://github.com/$repo/blob/$tag/desktop-tauri/CHANGELOG.md#$anchor)
 
 ### Downloads
 

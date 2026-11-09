@@ -1,6 +1,6 @@
 // Makes the .deb from the folder installer/linux/stage.mjs staged.
 //
-//   node installer/linux/stage.mjs --arch x64 --shell desktop/src-tauri/target/release/threadbear-desktop
+//   node installer/linux/stage.mjs --arch x64 --shell desktop-tauri/src-tauri/target/release/threadbear-desktop
 //   node installer/linux/deb.mjs --arch x64
 //
 // The package puts that folder in /opt/threadbear, a launcher and an icon where
@@ -13,7 +13,7 @@
 // alone, as that belongs to the user.
 //
 // Options: --arch x64|arm64 (default: this machine's), --version (default:
-// desktop/package.json's), --stage (default: build/linux-<arch>/threadbear-v<version>-linux-<arch>),
+// desktop-tauri/package.json's), --stage (default: build/linux-<arch>/threadbear-v<version>-linux-<arch>),
 // --out (default: the folder above the stage), --maintainer (default: the
 // THREADBEAR_PUBLISHER variable, else Platima).
 
@@ -36,7 +36,7 @@ const ARCHES = { x64: 'amd64', arm64: 'arm64' };
 const arch = arg('arch', os.arch() === 'arm64' ? 'arm64' : 'x64');
 if (!ARCHES[arch]) throw new Error(`--arch is x64 or arm64, not ${arch}`);
 
-const version = arg('version') || execFileSync(process.execPath, [path.join(repo, 'desktop', 'scripts', 'version.mjs'), '--print'], { encoding: 'utf8' }).trim();
+const version = arg('version') || execFileSync(process.execPath, [path.join(repo, 'desktop-tauri', 'scripts', 'version.mjs'), '--print'], { encoding: 'utf8' }).trim();
 // A pre-release has to sort before the release it leads to: Debian does that
 // with ~ where semantic versioning uses -, so 0.1.0-rc.1 becomes 0.1.0~rc.1.
 // Semantic versioning has no + or : or a second - in the part before it, so

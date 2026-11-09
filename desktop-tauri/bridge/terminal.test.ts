@@ -1,4 +1,4 @@
-// node --test desktop/bridge/terminal.test.ts
+// node --test desktop-tauri/bridge/terminal.test.ts
 //
 // The Terminal's shells held in the bridge: starting, attaching again after a
 // reload, stopping, and what a shell is and isn't given. The first half uses a

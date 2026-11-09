@@ -1,6 +1,6 @@
 # Changelog
 
-The Windows app (`desktop/`) and its installers (`installer/`). The runner and
+The Windows app (`desktop-tauri/`) and its installers (`installer/`). The runner and
 the Mac and iPhone apps have their own history in git; this file is only for
 what a person installing the Windows app would notice.
 

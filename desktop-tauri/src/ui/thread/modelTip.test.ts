@@ -1,4 +1,4 @@
-// node --test desktop/src/ui/thread/modelTip.test.ts
+// node --test desktop-tauri/src/ui/thread/modelTip.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { modelMenuTip } from './modelTip.ts';

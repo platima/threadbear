@@ -1,4 +1,4 @@
-// node --test desktop/bridge/bridge.test.ts
+// node --test desktop-tauri/bridge/bridge.test.ts
 //
 // Runs the real bridge in a child process, on free ports, with a throwaway
 // data folder, and a stand-in for the runner. Each case that follows came from

@@ -2,7 +2,7 @@
 // small local server that serves the built UI and passes its WebSocket on to
 // the runner. It holds the runner's token and does the challenge handshake
 // (docs/protocol.md, "Auth"), so the page never sees the token, as it never
-// does in the shell either. Run from desktop/:
+// does in the shell either. Run from desktop-tauri/:
 //
 //   node bridge/bridge.ts                 serves dist/ on 127.0.0.1:5185
 //   THREADBEAR_HOME=... THREADBEAR_PORT=... node bridge/bridge.ts

@@ -1,4 +1,4 @@
-// node --test desktop/src/core/terminals.test.ts
+// node --test desktop-tauri/src/core/terminals.test.ts
 //
 // The window's side of the Terminal: where a thread's shell runs, what state each one is in,
 // what it asks the bridge for and what it does with the answers (bridge/terminal.ts is the

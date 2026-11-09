@@ -418,7 +418,7 @@ said otherwise.
   to read a process's start time and the PATH, and
   `rundll32.exe url.dll,FileProtocolHandler` to open a web page. Every child is
   started with its console window hidden.
-- **The desktop app** (`desktop/src-tauri/`, a Tauri shell) opens a window and
+- **The desktop app** (`desktop-tauri/src-tauri/`, a Tauri shell) opens a window and
   a tray icon (closing the window keeps it in the tray; Quit in the tray menu
   ends it), keeps one copy running, and remembers the window's place (under
   `%APPDATA%\dev.threadbear.desktop`; the page's own storage is under
@@ -427,7 +427,7 @@ said otherwise.
   quitting; if the app is killed, the bridge notices and exits by itself. The
   page it shows may pick a folder, show a toast and open an `http`, `https` or
   `mailto` link in your browser, and nothing else (`capabilities/default.json`).
-- **The desktop bridge** (`desktop/bridge/bridge.ts`) listens on `127.0.0.1`
+- **The desktop bridge** (`desktop-tauri/bridge/bridge.ts`) listens on `127.0.0.1`
   only. The shell gives it one fixed port per Windows user (50000 to 59999,
   chosen from the user name), so the page keeps the same address and its saved
   settings between launches, and a free port instead when that one is taken
@@ -441,7 +441,7 @@ said otherwise.
   shows a remote picture in a message as its description, not as a download.
   Pictures pasted into the composer are saved briefly under
   `%TEMP%\threadbear-uploads` and imported by the runner.
-- **The Terminal** (Ctrl+J, under the thread; `desktop/bridge/terminal.ts` and
+- **The Terminal** (Ctrl+J, under the thread; `desktop-tauri/bridge/terminal.ts` and
   `shells.ts`): the bridge starts a shell of yours in a pseudo-terminal (ConPTY
   on Windows), one per thread you open it on, in that thread's folder, and only
   when you ask for one (Ctrl+J, or Start a shell); looking at threads starts
@@ -472,7 +472,7 @@ said otherwise.
   `node\node.exe` (its SHA-256 is checked at build time, `installer/node.json`),
   the runner's source and its production packages (not the Claude Agent SDK:
   see the next item), the bridge and built UI (with `ws` and the Terminal's
-  `@lydell/node-pty` in `desktop\node_modules`), the
+  `@lydell/node-pty` in `desktop-tauri\node_modules`), the
   guide and a few of the docs the guide points at, `README-WINDOWS.txt` and
   `THIRD-PARTY-NOTICES.txt`. They add a Start menu entry (the setup exe also
   one for the notices, and a desktop shortcut if asked) and an entry in
@@ -534,7 +534,7 @@ said otherwise.
   closing the window always ends the app there, since making a tray indicator
   does not mean the desktop shows it, and a runner set up to run only while the
   app is open stops with it.
-- **The update check** (`desktop/src/core/updates.ts`): the installed app asks
+- **The update check** (`desktop-tauri/src/core/updates.ts`): the installed app asks
   `api.github.com/repos/<the fork>/releases/latest` once a day (a plain
   request, so GitHub sees the PC's address and the app's user agent, and
   nothing else is sent), keeps the answer in the page's local storage, and

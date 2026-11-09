@@ -1,4 +1,4 @@
-// node --test desktop/src/core/updates.test.ts
+// node --test desktop-tauri/src/core/updates.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { checkForUpdate, isNewer, pick, releaseUrl, setUpdateCheck, updateCheckOn } from './updates.ts';

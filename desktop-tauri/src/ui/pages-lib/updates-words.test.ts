@@ -1,4 +1,4 @@
-// node --test desktop/src/ui/pages-lib/updates-words.test.ts
+// node --test desktop-tauri/src/ui/pages-lib/updates-words.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { followingWords, oldRunnerWords, upstreamWords } from './updates-words.ts';

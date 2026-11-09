@@ -24,6 +24,6 @@ function Assert-ShellVersion([string]$Path, [string]$Version) {
     $info = (Get-Item $Path).VersionInfo
     $got = "{0}.{1}.{2}" -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart
     if ($got -ne $core) {
-        throw "$Path says it is version $got but the packages are for $Version. Rebuild the shell (npx tauri build --no-bundle in desktop/) after the version change."
+        throw "$Path says it is version $got but the packages are for $Version. Rebuild the shell (npx tauri build --no-bundle in desktop-tauri/) after the version change."
     }
 }

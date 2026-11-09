@@ -1,4 +1,4 @@
-// node --test desktop/bridge/shells.test.ts
+// node --test desktop-tauri/bridge/shells.test.ts
 //
 // Which shells the Terminal offers, and which it starts when nothing is chosen.
 // Each case stands in a machine, so this runs the same on any PC.

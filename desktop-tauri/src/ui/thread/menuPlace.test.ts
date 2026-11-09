@@ -1,4 +1,4 @@
-// node --test desktop/src/ui/thread/menuPlace.test.ts
+// node --test desktop-tauri/src/ui/thread/menuPlace.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { listPlace } from './menuPlace.ts';

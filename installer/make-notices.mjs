@@ -7,7 +7,7 @@
 //   - the JavaScript packages in the staged runner\node_modules and
 //     desktop\node_modules
 //   - the packages the UI is built from (the production tree of
-//     desktop\package-lock.json, read from desktop\node_modules), since the built
+//     desktop-tauri\package-lock.json, read from desktop-tauri\node_modules), since the built
 //     UI has no licence comments
 //   - the Rust crates linked into Threadbear.exe, from `cargo metadata --locked
 //     --offline` for the target, with the licence files that sit in each crate's
@@ -18,8 +18,8 @@
 // of packages that use it. Nothing in the output is an absolute path, so the
 // staged tree can be moved to another machine.
 //
-//   node installer/make-notices.mjs --stage build/stage-x64 --desktop desktop \
-//     --cargo-manifest desktop/src-tauri/Cargo.toml --triple x86_64-pc-windows-msvc \
+//   node installer/make-notices.mjs --stage build/stage-x64 --desktop desktop-tauri \
+//     --cargo-manifest desktop-tauri/src-tauri/Cargo.toml --triple x86_64-pc-windows-msvc \
 //     --node-version 24.22.2 --out build/stage-x64/THIRD-PARTY-NOTICES.txt
 
 import fs from 'node:fs';

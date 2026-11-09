@@ -1,4 +1,4 @@
-// node --test desktop/src/ui/pages-lib/honey.test.ts
+// node --test desktop-tauri/src/ui/pages-lib/honey.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Account } from '../../core/types.ts';

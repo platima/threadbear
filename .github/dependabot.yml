@@ -1,5 +1,5 @@
 # Dependency updates for what this fork owns: the Windows and Linux desktop app
-# (desktop/), the Android app (android/) and the workflows. Each ecosystem comes
+# (desktop-tauri/), the Android app (android/) and the workflows. Each ecosystem comes
 # as one grouped pull request a week.
 #
 # Not here: the runner, the root package, the relay, the site and the Swift
@@ -14,7 +14,7 @@
 version: 2
 updates:
   - package-ecosystem: npm
-    directory: /desktop
+    directory: /desktop-tauri
     schedule: { interval: weekly, day: monday, time: "06:00", timezone: Australia/Perth }
     cooldown: { default-days: 7 }
     open-pull-requests-limit: 3
@@ -32,7 +32,7 @@ updates:
   # Tauri's crates and its npm CLI move together: a bump to one that the CI
   # (the Windows build, the Android emulator job) does not take is for me to hold.
   - package-ecosystem: cargo
-    directory: /desktop/src-tauri
+    directory: /desktop-tauri/src-tauri
     schedule: { interval: weekly, day: monday, time: "06:00", timezone: Australia/Perth }
     cooldown: { default-days: 7 }
     open-pull-requests-limit: 3

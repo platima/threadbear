@@ -3,7 +3,7 @@
 // Hibernate that says "Hibernate" tells nobody what hibernating does). The Mac
 // app has the same rule (AGENTS.md: every control gets a tooltip).
 //
-// node --test desktop/src/ui/tips.test.ts
+// node --test desktop-tauri/src/ui/tips.test.ts
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
