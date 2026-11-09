@@ -80,12 +80,18 @@
 .picchip { display: inline-block; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; font-size: 12px; margin: 0 2px; }
 
 /* ---- editing the person's own message ---- */
-.bubblewrap { position: relative; }
-.tb-edit { position: absolute; top: -10px; right: 8px; font-size: 12px; padding: 0 8px; opacity: 0; transition: opacity 0.12s; }
+/* The person's own messages sit on the right, as in most chat windows, no wider than most of the column. */
+.bubblewrap { position: relative; display: flex; justify-content: flex-end; }
+.bubblewrap .bubble { max-width: 85%; }
+/* Inside the row's top padding, not above it: the first message's button was cut off by the scroller's edge. */
+.tb-edit { position: absolute; top: -4px; right: 8px; font-size: 12px; padding: 0 8px; opacity: 0; transition: opacity 0.12s; }
 .bubblewrap:hover .tb-edit, .tb-edit:focus-visible { opacity: 1; }
 .tb-editbox { border: 1px solid var(--accent); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--bg); }
 .tb-editbox textarea { width: 100%; resize: vertical; }
 .tb-editbox .btns { display: flex; gap: 8px; align-items: center; }
+/* Under a failed turn whose login ran out: the two sign-in commands as buttons. */
+.auth-help { margin: 4px 0 2px; }
+.auth-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
 .tb-warn { color: var(--warn); }
 .tb-title-edit { font-size: 15px; font-weight: 600; width: 100%; padding: 1px 6px; }
 

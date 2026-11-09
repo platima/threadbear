@@ -64,6 +64,22 @@ export async function setExitOnClose(on: boolean, using: Using = {}): Promise<st
   }
 }
 
+// A terminal window running one of two fixed Claude Code sign-in commands, for a
+// login that ran out: `claude auth login` ('login') or `claude setup-token`
+// ('setup-token'). `configDir` is the login's own folder when it isn't the default one.
+// Gives back what went wrong, or undefined when the window opened. The shell decides
+// what is run; the page only names which.
+export async function openClaudeLogin(kind: 'login' | 'setup-token', configDir?: string, using: Using = {}): Promise<string | undefined> {
+  const call = channel(using);
+  if (!call) return 'Only the installed app can open a terminal.';
+  try {
+    await call('open_claude_login', { kind, ...(configDir ? { configDir } : {}) });
+    return undefined;
+  } catch (e) {
+    return typeof e === 'string' ? e : ((e as Error)?.message ?? 'unknown');
+  }
+}
+
 // Starts the runner if it is set up, or offers to set one up that runs only while
 // the app is open. Gives back whether the shell took the request.
 export async function startRunner(using: Using = {}): Promise<boolean> {

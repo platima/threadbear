@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { errorText, type AppStore, type Snapshot } from '../core/store.ts';
+import { isNative, openClaudeLogin } from '../core/native.ts';
 import type { Row, ToolData } from '../core/model.ts';
 import { sentByAgent, type ImageRef } from '../core/types.ts';
 import { RpcError } from '../core/rpc.ts';
@@ -301,6 +302,56 @@ function EditBox({ row, store, threadId, close }: { row: Row; store: AppStore; t
   );
 }
 
+// A failed turn's error, or a turn's end. When the error was that the login ran
+// out, what to do about it comes with it.
+function ErrorRow({ row, store, threadId }: { row: Row; store: AppStore; threadId: string }) {
+  const failed = row.kind === 'error' || row.outcome === 'failed';
+  return (
+    <>
+      <div className={failed ? 'error' : 'note'}>{row.text}</div>
+      {row.errorKind === 'auth' && <AuthHelp store={store} threadId={threadId} />}
+    </>
+  );
+}
+
+// Under a failed turn whose login ran out: a button for each of the two Claude Code
+// commands that put it right, which opens a terminal window running it (the installed
+// app; the shell decides what is run), or the commands to run by hand in a browser tab.
+// Only for a Claude login: another provider's has its own commands.
+function AuthHelp({ store, threadId }: { store: AppStore; threadId: string }) {
+  const [said, setSaid] = useState<string>();
+  const snap = store.getSnapshot();
+  const account = snap.accounts.find((a) => a.id === snap.threads.get(threadId)?.accountId);
+  if (account && account.provider !== 'claude') return null;
+  const run = async (kind: 'login' | 'setup-token') => {
+    const problem = await openClaudeLogin(kind, account?.configDir);
+    setSaid(
+      problem ??
+        (kind === 'login'
+          ? 'A terminal window opened. Sign in there, then send your message again.'
+          : 'A terminal window opened. It prints a token that lasts. To use it, set CLAUDE_CODE_OAUTH_TOKEN to it where the runner starts, and restart the runner. Signing in again is the simpler fix.'),
+    );
+  };
+  const native = isNative();
+  return (
+    <div className="auth-help">
+      {native && (
+        <div className="auth-actions">
+          <button type="button" title="Open a terminal window and run claude auth login, which signs this login in again" onClick={() => void run('login')}>
+            Run claude auth login
+          </button>
+          <button type="button" className="ghost" title="Open a terminal window and run claude setup-token, which makes a long-lived token for unattended jobs" onClick={() => void run('setup-token')}>
+            Run claude setup-token
+          </button>
+        </div>
+      )}
+      <div className="note">
+        {said ?? (native ? 'These sign this login in again. Then send your message again.' : 'Run `claude auth login` in a terminal to sign this login in again, then send your message again. `claude setup-token` makes a token for unattended jobs.')}
+      </div>
+    </div>
+  );
+}
+
 const Bit = memo(function Bit({ row, open, toggle, store, threadId }: { row: Row; rev: number; open: boolean; toggle: (id: string) => void; store: AppStore; threadId: string }) {
   if (row.kind === 'card') return <Card row={row} store={store} threadId={threadId} />;
   if (row.kind === 'review') {
@@ -313,8 +364,7 @@ const Bit = memo(function Bit({ row, open, toggle, store, threadId }: { row: Row
     );
   }
   if (row.kind === 'note') return <div className="note">{row.text}</div>;
-  if (row.kind === 'error') return <div className="error">{row.text}</div>;
-  if (row.kind === 'turnEnd') return <div className={row.outcome === 'failed' ? 'error' : 'note'}>{row.text}</div>;
+  if (row.kind === 'error' || row.kind === 'turnEnd') return <ErrorRow row={row} store={store} threadId={threadId} />;
   if (row.kind === 'reasoning') {
     return (
       <>

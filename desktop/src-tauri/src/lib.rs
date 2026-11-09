@@ -260,6 +260,63 @@ fn set_exit_on_close(on: bool) -> Result<(), String> {
     }
 }
 
+// The page's sign-in buttons, under a failed turn whose login ran out: a terminal
+// window running one of two fixed Claude Code commands, and nothing else (what is
+// run is chosen here, not by the page). `config_dir` is the login's own folder when
+// it isn't the default one; it goes to the command as CLAUDE_CONFIG_DIR.
+#[tauri::command]
+fn open_claude_login(kind: String, config_dir: Option<String>) -> Result<(), String> {
+    let args: &[&str] = match kind.as_str() {
+        "login" => &["auth", "login"],
+        "setup-token" => &["setup-token"],
+        _ => return Err("That isn't one of the sign-in commands.".to_string()),
+    };
+    let dir = match config_dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        Some(d) if Path::new(d).is_dir() => Some(d.to_string()),
+        Some(_) => return Err("That login's folder isn't there.".to_string()),
+        None => None,
+    };
+    open_in_terminal("claude", args, dir.as_deref())
+}
+
+// A console window of its own, left open (cmd /K) so the person can read what the
+// command says: `claude setup-token` prints a token there.
+#[cfg(windows)]
+fn open_in_terminal(program: &str, args: &[&str], config_dir: Option<&str>) -> Result<(), String> {
+    let mut cmd = Command::new("cmd.exe");
+    cmd.args(["/C", "start", "Threadbear: sign in", "cmd.exe", "/K", program]).args(args);
+    if let Some(d) = config_dir {
+        cmd.env("CLAUDE_CONFIG_DIR", d);
+    }
+    // The cmd that runs `start` stays hidden; `start` opens the visible window.
+    hide_window(&mut cmd);
+    cmd.spawn().map(|_| ()).map_err(|e| format!("Couldn't open a terminal ({e})."))
+}
+
+// Whichever terminal this desktop has, tried in turn, running the command and then
+// waiting for Enter so what it printed can be read.
+#[cfg(not(windows))]
+fn open_in_terminal(program: &str, args: &[&str], config_dir: Option<&str>) -> Result<(), String> {
+    let terminals: [(&str, &[&str]); 5] = [("x-terminal-emulator", &["-e"]), ("gnome-terminal", &["--"]), ("konsole", &["-e"]), ("xfce4-terminal", &["-x"]), ("xterm", &["-e"])];
+    for (terminal, flags) in terminals {
+        let mut cmd = Command::new(terminal);
+        cmd.args(flags)
+            .arg("sh")
+            .arg("-c")
+            .arg("\"$@\"; printf '\\nPress Enter to close this window. '; read _")
+            .arg("sh")
+            .arg(program)
+            .args(args);
+        if let Some(d) = config_dir {
+            cmd.env("CLAUDE_CONFIG_DIR", d);
+        }
+        if cmd.spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    Err(format!("No terminal was found to open. Run it yourself: {} {}", program, args.join(" ")))
+}
+
 // How the runner is set up, by the script's own `--mode`: starting at sign-in,
 // only when something starts it (this app, when it opens), or not at all.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -742,7 +799,7 @@ pub fn run() {
         .manage(TrayReady(AtomicBool::new(false)))
         // What the page may ask of the shell besides the plugins' own commands
         // (capabilities/default.json): the "Exit on close" box and "Start the runner".
-        .invoke_handler(tauri::generate_handler![get_exit_on_close, set_exit_on_close, start_runner])
+        .invoke_handler(tauri::generate_handler![get_exit_on_close, set_exit_on_close, start_runner, open_claude_login])
         .setup(move |app| {
             // --quit with nothing running: there is nothing to end, so do not
             // start. (With a copy running, the plugin hands this launch's

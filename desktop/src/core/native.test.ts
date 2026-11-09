@@ -1,7 +1,7 @@
 // node --test desktop/src/core/native.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { getExitOnClose, openExternal, setExitOnClose, startRunner } from './native.ts';
+import { getExitOnClose, openClaudeLogin, openExternal, setExitOnClose, startRunner } from './native.ts';
 
 test('a link is opened through the shell, as the address given', async () => {
   const calls: { command: string; args?: Record<string, unknown> }[] = [];
@@ -57,6 +57,22 @@ test('starting the runner is a request to the shell, which says whether it took 
   assert.equal(await startRunner({ call: async (c) => { calls.push(c); return undefined as never; } }), true);
   assert.deepEqual(calls, ['start_runner']);
   assert.equal(await startRunner({ call: async () => { throw 'no'; } }), false);
+});
+
+test('a sign-in terminal is asked for by name, with the login\'s folder only when it has one, and a refusal comes back as words', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = [];
+  const on = async (command: string, args?: Record<string, unknown>) => {
+    calls.push({ command, args });
+    return undefined as never;
+  };
+  assert.equal(await openClaudeLogin('login', undefined, { call: on }), undefined);
+  assert.equal(await openClaudeLogin('setup-token', 'C:\\Users\\me\\.claude-work', { call: on }), undefined);
+  assert.deepEqual(calls, [
+    { command: 'open_claude_login', args: { kind: 'login' } },
+    { command: 'open_claude_login', args: { kind: 'setup-token', configDir: 'C:\\Users\\me\\.claude-work' } },
+  ]);
+  assert.equal(await openClaudeLogin('login', undefined, { call: async () => { throw "That login's folder isn't there."; } }), "That login's folder isn't there.");
+  assert.match((await openClaudeLogin('login', undefined, { call: null })) ?? '', /installed app/);
 });
 
 test('outside the shell the exit-on-close choice and the runner start do nothing and say what they can', async () => {
