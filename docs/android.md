@@ -53,7 +53,9 @@ It is a release build, signed by `android/scripts/sign-apk.sh`:
   signature, so a phone takes each one as an update of the last. Only a
   release tag, and a rehearsal started by hand from `main`, are signed with
   it: the signing job runs in the repository's `release` environment, which
-  holds the key and lets only those refs in.
+  holds the key and lets only those refs in. For a release that job is in
+  `release.yml` (`sign-android`), not in `android.yml`, because a job of a
+  called workflow does not receive an environment's secrets.
 - **Without it**, with a key made for that run (every push to a branch, and a
   pull request): enough to install it once, but the next build has another
   key, so the phone has to remove the app first. A release (`release.yml`)
