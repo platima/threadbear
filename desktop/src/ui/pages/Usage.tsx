@@ -5,6 +5,8 @@ import { agoWords, compact, untilWords, whenWords } from '../pages-lib/ops-forma
 import { useNow, useRequest } from '../pages-lib/ops-rpc.ts';
 import type { UsageStats } from '../pages-lib/ops-types.ts';
 import { Card, Chip, Meter, Note, Problem, type Tone } from '../pages-lib/ops-ui.tsx';
+import { HoneyPot } from '../pages-lib/HoneyPot.tsx';
+import { potLevel, potTip } from '../pages-lib/honey.ts';
 import { LimitsChart, TokensChart, type HourRow, type LimitSeries } from '../pages-lib/usage-charts.tsx';
 import './usage.css';
 
@@ -169,5 +171,5 @@ function UsagePage({ store, snap }: PageProps) {
   );
 }
 
-const page: PageDef = { id: 'usage', title: 'Usage', hint: "How much of each login's 5-hour and weekly limits is left, and what threads have cost", icon: '◔', order: 50, Main: UsagePage };
+const page: PageDef = { id: 'usage', title: 'Usage', hint: "How much of each login's 5-hour and weekly limits is left, and what threads have cost", icon: '◔', foot: true, order: 63, renderIcon: (snap) => <HoneyPot level={potLevel(snap.accounts)} />, signal: (snap) => ({ tip: potTip(snap.accounts) }), Main: UsagePage };
 export default page;

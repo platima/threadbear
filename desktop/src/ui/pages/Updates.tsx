@@ -107,7 +107,8 @@ const page: PageDef = {
   title: 'Updates',
   hint: "Whether a newer release of this app is out, how the runner updates, and the Claude Code program's version",
   icon: '⬇︎',
-  order: 55,
+  foot: true,
+  order: 62,
   Main: UpdatesPage,
 };
 export default page;

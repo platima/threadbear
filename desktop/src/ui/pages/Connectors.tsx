@@ -83,7 +83,8 @@ const page: PageDef = {
   title: 'Connectors',
   hint: 'The services your agents get from your Connectors gateway, and which need signing in',
   icon: '🔌',
-  order: 58,
+  foot: true,
+  order: 60,
   // Only for a runner that has a gateway: with none, the button would be clutter.
   available: (snap) => !!snap.connectors && snap.connectors.state !== 'off',
   signal: (snap) => (needsYou(snap.connectors) ? { dot: 'accent', tip: tooltip(snap.connectors) } : quiet(snap.connectors) ? { dot: 'quiet', tip: tooltip(snap.connectors) } : undefined),
