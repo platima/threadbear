@@ -41,12 +41,13 @@ async function toast(title: string, body: string): Promise<void> {
 type Using = { call?: Invoke | null };
 const channel = (using: Using): Invoke | undefined => (using.call === undefined ? invoke() : (using.call ?? undefined));
 
-// Whether closing the window ends the app. Undefined outside the shell, or when it won't say.
+// Whether closing the window ends the app. Undefined outside the shell, when it won't
+// say, and on Linux, where closing always ends the app so there is no choice to show.
 export async function getExitOnClose(using: Using = {}): Promise<boolean | undefined> {
   const call = channel(using);
   if (!call) return undefined;
   try {
-    return await call<boolean>('get_exit_on_close');
+    return (await call<boolean | null>('get_exit_on_close')) ?? undefined;
   } catch {
     return undefined;
   }
@@ -81,15 +82,17 @@ export async function openClaudeLogin(kind: 'login' | 'setup-token', configDir?:
 }
 
 // Starts the runner if it is set up, or offers to set one up that runs only while
-// the app is open. Gives back whether the shell took the request.
-export async function startRunner(using: Using = {}): Promise<boolean> {
+// the app is open. It answers when the start is done, or the offer taken or declined,
+// not before (the shell waits), so the page can show it is working until then. Gives
+// back what went wrong, or undefined when it started or was declined.
+export async function startRunner(using: Using = {}): Promise<string | undefined> {
   const call = channel(using);
-  if (!call) return false;
+  if (!call) return 'Only the installed app can start the runner.';
   try {
     await call('start_runner');
-    return true;
-  } catch {
-    return false;
+    return undefined;
+  } catch (e) {
+    return typeof e === 'string' ? e : ((e as Error)?.message ?? 'unknown');
   }
 }
 

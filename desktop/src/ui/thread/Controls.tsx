@@ -5,6 +5,7 @@
 import type { Account, EffortLevel, ModelChoice, PermissionMode, Provider } from '../../core/types.ts';
 import { modelLabel } from '../../../../web/src/format.ts';
 import { Menu } from './Menu.tsx';
+import { modelMenuTip } from './modelTip.ts';
 
 export const MODES: { id: PermissionMode; label: string; note: string }[] = [
   { id: 'ask', label: 'Ask first', note: 'Asks before it changes anything' },
@@ -21,7 +22,7 @@ export function findModel(account: Account | undefined, id?: string, inUse?: str
   return list.find((m) => m.id === id) ?? list.find((m) => m.model === (inUse ?? id) || m.id === inUse);
 }
 
-export function ModelMenu({ account, provider, model, inUse, onPick, disabled }: { account?: Account; provider?: Provider; model?: string; inUse?: string; onPick: (id: string | null) => void; disabled?: boolean }) {
+export function ModelMenu({ account, provider, model, inUse, onPick, disabled, offline }: { account?: Account; provider?: Provider; model?: string; inUse?: string; onPick: (id: string | null) => void; disabled?: boolean; offline?: boolean }) {
   const list = account?.models ?? [];
   const current = findModel(account, model, inUse);
   const shown = inUse ?? model ?? account?.defaultModel;
@@ -30,7 +31,7 @@ export function ModelMenu({ account, provider, model, inUse, onPick, disabled }:
   return (
     <Menu
       label={label}
-      title={disabled ? "Not connected to the runner, so the models can't be listed" : list.length ? 'Choose the model' : "The runner hasn't found a login yet, so there are no models to choose from. Sign in with Claude Code (claude auth login)."}
+      title={modelMenuTip({ offline, models: list.length, hasAccount: !!account })}
       disabled={disabled || !list.length}
       items={[
         { key: '', label: 'Default', note: def ? `Currently ${def.title}` : 'The login’s own choice', on: !model, onPick: () => onPick(null) },

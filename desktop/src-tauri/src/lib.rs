@@ -31,9 +31,16 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 // us if this program is killed or crashes (bridge.ts, THREADBEAR_BRIDGE_WATCH_STDIN).
 struct Bridge(Mutex<Option<Child>>);
 
-// Whether the tray icon was made, so closing the window has somewhere to leave
-// the app running (Linux may have no tray to bring the window back from).
+// Whether closing the window may leave the app running in the tray: on Windows
+// once the tray icon is made. Not on Linux, where making an indicator does not mean
+// the desktop shows it (GNOME shows none without an extension), so there closing the
+// window ends the app, as it always did.
 struct TrayReady(AtomicBool);
+
+// Set once this copy has started its bridge and window, so it is cleaned up when it
+// exits however it exits. (A copy that only gets `--quit` to hand on never sets it,
+// and so leaves a runner alone.)
+struct UiStarted(AtomicBool);
 
 // How long to wait for the bridge to say it is ready.
 const BRIDGE_READY: Duration = Duration::from_secs(20);
@@ -238,9 +245,15 @@ fn exit_on_close_on() -> bool {
 
 // The page's "Exit on close" box (Settings, This app): whether closing the
 // window ends the app, instead of leaving it in the tray. Off unless asked for.
+// None on Linux, where closing the window always ends the app (see TrayReady), so
+// the page has no box to show.
 #[tauri::command]
-fn get_exit_on_close() -> bool {
-    exit_on_close_on()
+fn get_exit_on_close() -> Option<bool> {
+    if cfg!(windows) {
+        Some(exit_on_close_on())
+    } else {
+        None
+    }
 }
 
 #[tauri::command]
@@ -386,7 +399,7 @@ fn on_demand_text() -> String {
         format!(
             "Start the runner only while Threadbear is open instead?\n\n\
              Threadbear does nothing without its runner. This way it starts when you open Threadbear and stops when you quit it; \
-             closing the window leaves it running. Nothing starts when you log in.\n\n\
+             closing the window quits it. Nothing starts when you log in.\n\n\
              This adds a systemd user service for your account (no root), which is not enabled, and puts the tb command in ~/.local/bin. \
              {} --runner --uninstall removes both.",
             program_name()
@@ -468,8 +481,9 @@ fn offer_runner(app: &AppHandle, asked: bool) {
         // The installer stops the task while it upgrades the app, and nothing
         // else brings it back before the next sign-in (or, for a runner that
         // runs only while the app is open, at all), so start it if it isn't running.
-        let _ = runner_script(&["--start".to_string()]);
-        if asked {
+        // A failure is said in a window when someone asked, and only logged otherwise.
+        let started = start_registered(app, asked);
+        if asked && started {
             if mode == RunnerMode::OnDemand {
                 // Only while the app is open now: switch it to sign-in if that is what was asked.
                 offer_sign_in(app, true);
@@ -489,32 +503,76 @@ fn offer_runner(app: &AppHandle, asked: bool) {
     offer_sign_in(app, asked);
 }
 
+// Starts the runner task if it is set up (it also counts as started if it was already
+// running). A failure is said in a window when `tell` (someone asked for the start),
+// and only logged otherwise. Whether it started.
+fn start_registered(app: &AppHandle, tell: bool) -> bool {
+    match runner_script(&["--start".to_string()]) {
+        Ok((0, _)) => true,
+        Ok((_, text)) | Err(text) => {
+            if tell {
+                app.dialog()
+                    .message(format!("The runner could not be started.\n\n{text}"))
+                    .title("Threadbear")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            } else {
+                eprintln!("The runner could not be started: {text}");
+            }
+            false
+        }
+    }
+}
+
 // The tray's "only while Threadbear is open" item.
 fn offer_runner_while_open(app: &AppHandle) {
     if runner_mode() == RunnerMode::OnDemand {
-        let _ = runner_script(&["--start".to_string()]);
-        app.dialog()
-            .message("The runner already starts when Threadbear opens, and stops when you quit it.")
-            .title("Threadbear")
-            .kind(MessageDialogKind::Info)
-            .show(|_| {});
+        if start_registered(app, true) {
+            app.dialog()
+                .message("The runner already starts when Threadbear opens, and stops when you quit it.")
+                .title("Threadbear")
+                .kind(MessageDialogKind::Info)
+                .show(|_| {});
+        }
         return;
     }
     offer_on_demand(app, true);
 }
 
-// The page's "Start the runner" button, for when it can't reach a runner: one
-// that is set up is started, and with none the person is offered the kind that
-// runs only while the app is open.
+// The page's "Start the runner" button, for when it can't reach a runner: one that is
+// set up is started, and with none the person is offered the kind that runs only while
+// the app is open. It answers only when that is done or declined, so the page can show
+// it is working until then and not take a second click; a failure comes back as words
+// for the page.
 #[tauri::command]
-fn start_runner(app: AppHandle) {
-    std::thread::spawn(move || {
-        if runner_mode() == RunnerMode::None {
-            offer_on_demand(&app, true);
-        } else {
-            let _ = runner_script(&["--start".to_string()]);
-        }
-    });
+async fn start_runner(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || start_or_set_up(&app))
+        .await
+        .map_err(|e| format!("The runner could not be started ({e})."))?
+}
+
+fn start_or_set_up(app: &AppHandle) -> Result<(), String> {
+    if runner_mode() != RunnerMode::None {
+        return match runner_script(&["--start".to_string()]) {
+            Ok((0, _)) => Ok(()),
+            Ok((_, text)) | Err(text) => Err(format!("The runner could not be started.\n\n{text}")),
+        };
+    }
+    let yes = app
+        .dialog()
+        .message(on_demand_text())
+        .title("Run the runner while Threadbear is open?")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom("Only while open".into(), "No thanks".into()))
+        .blocking_show();
+    if !yes {
+        return Ok(());
+    }
+    forget_declined();
+    match runner_script(&["--on-demand".to_string()]) {
+        Ok((0, _)) => Ok(()),
+        Ok((_, text)) | Err(text) => Err(format!("The runner could not be set up.\n\n{text}")),
+    }
 }
 
 // The folder with bridge/bridge.ts in it: THREADBEAR_DESKTOP_DIR, or the one
@@ -694,6 +752,7 @@ fn start_ui(app: &mut tauri::App) -> Result<(), String> {
     let desktop = find_desktop_dir().ok_or("Couldn't find the desktop folder with bridge/bridge.ts in it. Set THREADBEAR_DESKTOP_DIR.")?;
     let (child, url) = start_bridge(&desktop)?;
     *app.state::<Bridge>().0.lock().unwrap() = Some(child);
+    app.state::<UiStarted>().0.store(true, Ordering::Relaxed);
     let address: tauri::Url = url.parse().map_err(|e| format!("The bridge gave an address that isn't one ({url}): {e}"))?;
 
     WebviewWindowBuilder::new(app, "main", WebviewUrl::External(address))
@@ -718,7 +777,8 @@ fn start_ui(app: &mut tauri::App) -> Result<(), String> {
     match build_tray(app) {
         Err(why) if cfg!(windows) => return Err(why),
         Err(why) => eprintln!("{why}"),
-        Ok(()) => app.state::<TrayReady>().0.store(true, Ordering::Relaxed),
+        // Only on Windows does a tray icon that was made mean one that is shown (see TrayReady).
+        Ok(()) => app.state::<TrayReady>().0.store(cfg!(windows), Ordering::Relaxed),
     }
 
     // Offer the runner on the first run, or start it if it is set up but
@@ -797,6 +857,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Bridge(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(false)))
+        .manage(UiStarted(AtomicBool::new(false)))
         // What the page may ask of the shell besides the plugins' own commands
         // (capabilities/default.json): the "Exit on close" box and "Start the runner".
         .invoke_handler(tauri::generate_handler![get_exit_on_close, set_exit_on_close, start_runner, open_claude_login])
@@ -815,10 +876,10 @@ pub fn run() {
             }
             Ok(())
         })
-        // Closing the window keeps the app in the tray; Quit in its menu ends it.
-        // Not when the person turned on "Exit on close" (Settings, This app), and not
-        // when there is no tray to bring the window back from (Linux may have none):
-        // then closing it ends the app, and a runner that starts at sign-in goes on as its service.
+        // On Windows, closing the window keeps the app in the tray; Quit in its menu ends it.
+        // Not when the person turned on "Exit on close" (Settings, This app). On Linux closing
+        // it always ends the app (a tray may not be shown), and a runner that starts at login
+        // goes on as its service.
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let tray = window.app_handle().state::<TrayReady>().0.load(Ordering::Relaxed);
@@ -836,9 +897,12 @@ pub fn run() {
             let bridge = app.state::<Bridge>().0.lock().unwrap().take();
             if let Some(mut child) = bridge {
                 let _ = child.kill();
-                // A runner set up to run only while the app is open ends with it. (A
-                // copy that never got as far as a window, `--quit` with nothing running,
-                // has no bridge and leaves the runner alone.)
+            }
+            // A runner set up to run only while the app is open ends with it, whichever way
+            // the app ends (a failed bridge has taken its child already, which is why this
+            // goes by UiStarted). A copy that never got as far as a window, `--quit` with
+            // nothing running, leaves the runner alone.
+            if app.state::<UiStarted>().0.load(Ordering::Relaxed) {
                 stop_runner_if_on_demand();
             }
         }

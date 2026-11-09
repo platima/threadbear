@@ -505,9 +505,10 @@ said otherwise.
 - **Exit on close** (Settings, This app): off by default, so closing the window
   leaves the app in the tray. On, closing it ends the app. The choice is the
   file `%LOCALAPPDATA%\Threadbear\exit-on-close`, which is there when it is on
-  (the shell reads it when the window is closed). On Linux the choice only
-  matters where a tray icon could be made; with none, closing ends the app
-  either way.
+  (the shell reads it when the window is closed). On Linux there is no box:
+  closing the window always ends the app there, since making a tray indicator
+  does not mean the desktop shows it, and a runner set up to run only while the
+  app is open stops with it.
 - **The update check** (`desktop/src/core/updates.ts`): the installed app asks
   `api.github.com/repos/<the fork>/releases/latest` once a day (a plain
   request, so GitHub sees the PC's address and the app's user agent, and

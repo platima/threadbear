@@ -129,6 +129,19 @@ test('--on-demand installs the unit but does not enable it, and starts it; --mod
   assert.equal(w.state.enabled, false);
 });
 
+test('--on-demand does not claim success when the service could not be switched off at login', () => {
+  const w = world();
+  run([], w.d); // a sign-in install first
+  const real = w.d.systemctl;
+  w.d.systemctl = (...args: string[]) => (args.includes('disable') ? { status: 1, stdout: '', stderr: 'Failed to disable unit: Access denied' } : real(...args));
+  const r = run(['--on-demand'], w.d);
+  assert.equal(r.code, 1);
+  assert.match(r.out.join('\n'), /Could not stop the runner starting at login: Failed to disable unit: Access denied/);
+  assert.doesNotMatch(r.out.join('\n'), /does not start at login/);
+  assert.equal(w.state.enabled, true, 'so it is still a sign-in service, and --mode says so');
+  assert.deepEqual(run(['--mode'], w.d).out, ['sign-in']);
+});
+
 test('--mode takes a service whose state systemd will not give as a sign-in one, so it is never stopped by mistake', () => {
   const w = world();
   run([], w.d);

@@ -52,11 +52,17 @@ test('the exit-on-close choice is asked for and set through the shell, and a ref
   assert.equal(await getExitOnClose({ call: async () => { throw 'no'; } }), undefined);
 });
 
-test('starting the runner is a request to the shell, which says whether it took it', async () => {
+test('starting the runner is a request the shell answers when it is done, and a failure comes back as its words', async () => {
   const calls: string[] = [];
-  assert.equal(await startRunner({ call: async (c) => { calls.push(c); return undefined as never; } }), true);
+  assert.equal(await startRunner({ call: async (c) => { calls.push(c); return undefined as never; } }), undefined);
   assert.deepEqual(calls, ['start_runner']);
-  assert.equal(await startRunner({ call: async () => { throw 'no'; } }), false);
+  assert.equal(await startRunner({ call: async () => { throw 'The runner could not be started.\n\nAccess is denied.'; } }), 'The runner could not be started.\n\nAccess is denied.');
+  assert.equal(await startRunner({ call: async () => { throw new Error('gone'); } }), 'gone');
+});
+
+test('on Linux the shell has no exit-on-close choice to give, and that is not "off"', async () => {
+  assert.equal(await getExitOnClose({ call: async () => null as never }), undefined);
+  assert.equal(await getExitOnClose({ call: async () => false as never }), false);
 });
 
 test('a sign-in terminal is asked for by name, with the login\'s folder only when it has one, and a refusal comes back as words', async () => {
@@ -78,7 +84,7 @@ test('a sign-in terminal is asked for by name, with the login\'s folder only whe
 test('outside the shell the exit-on-close choice and the runner start do nothing and say what they can', async () => {
   assert.equal(await getExitOnClose({ call: null }), undefined);
   assert.match((await setExitOnClose(true, { call: null })) ?? '', /installed app/);
-  assert.equal(await startRunner({ call: null }), false);
+  assert.match((await startRunner({ call: null })) ?? '', /installed app/);
 });
 
 test('outside the shell it does nothing and says nothing', async () => {

@@ -208,7 +208,12 @@ export function run(args, d) {
   } else say(`Left ${tb} as it was: it isn't one this wrote.`);
   sc('daemon-reload');
   // On demand: not enabled (a sign-in install from before is switched off), only started.
-  if (onDemand) sc('disable', UNIT);
+  // If it can't be switched off it is still a sign-in service, so say so rather than that
+  // it no longer starts at login (and the app would leave it running on quit).
+  if (onDemand) {
+    const off = sc('disable', UNIT);
+    if (off.status !== 0) return { code: 1, out: [...out, `Could not stop the runner starting at login: ${(off.stderr || off.stdout || '').trim()}`] };
+  }
   const r = onDemand ? sc('start', UNIT) : sc('enable', '--now', UNIT);
   if (r.status !== 0) return { code: 1, out: [...out, `Could not start the runner: ${(r.stderr || r.stdout || '').trim()}`] };
   say(onDemand ? 'The runner is running now. It does not start at login: the desktop app starts it when it opens.' : 'The runner starts when you log in, and is running now.');
