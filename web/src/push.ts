@@ -11,8 +11,8 @@ export type Invoke = (command: string, args?: unknown) => Promise<unknown>;
 export type PushStatus = { available: boolean; permission: string };
 export type PushRegistration = { token: string; key: string };
 
-// The backend that takes an Android phone's registration (convex/version.ts, 64)
-export const PUSH_API_VERSION = 64;
+// The backend that takes an Android phone's registration (convex/version.ts, 66)
+export const PUSH_API_VERSION = 66;
 
 // A push key as phone:registerDevice takes it: base64 of 32 bytes
 const KEY = /^[A-Za-z0-9+/]{43}=$/;

@@ -94,7 +94,7 @@ only the sealed bytes through Firebase Cloud Messaging.
 - **On the phone**: the gear menu's **Notifications on this phone**, in the app
   (not the browser), once it is paired. It asks Android for the permission, then
   registers the phone's Firebase token and its own push key with the backend
-  (`phone:registerDevice` with `platform: "android"`, API 64). The same row turns
+  (`phone:registerDevice` with `platform: "android"`, API 66). The same row turns
   it off. Android is asked only when the row is turned on, never at start.
 - **The plugin** is `android/plugins/push`: Kotlin that starts Firebase from the
   project's `google-services.json`, makes the push key (kept wrapped by a key in
@@ -102,7 +102,7 @@ only the sealed bytes through Firebase Cloud Messaging.
   that opens the sealed text and posts the notification, with the app running or
   not. A thin Rust side lets the page call it. Tapping a notification opens the
   app; going to the thread from it is not done.
-- **Which backend and relay**: the backend needs API 64 (the gear row says so
+- **Which backend and relay**: the backend needs API 66 (the gear row says so
   when it is older) and the relay needs its Firebase sender (`relay/convex/fcm.ts`)
   and `FCM_SERVICE_ACCOUNT`. Deploy the relay first: an old relay turns an
   Android token down as a bad request, and the backend would report its pushes as
