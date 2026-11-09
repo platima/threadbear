@@ -1,8 +1,8 @@
 // What the push relay sends an Android phone through Firebase
 // (relay/convex/fcmMessage.ts), and the sealed text the phone opens. The
-// Kotlin side (android/plugins/push) opens it with Java's AES/GCM; this reads
-// the same bytes the way that does, so a change to convex/push.ts seal() that
-// the phone cannot read fails here, before a phone does.
+// Android app opens it with Java's AES/GCM; this reads the same bytes the way
+// that does, so a change to convex/pushSeal.ts seal() that the phone cannot
+// read fails here, before a phone does.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';

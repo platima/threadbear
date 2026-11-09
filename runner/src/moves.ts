@@ -270,7 +270,7 @@ export class Moves {
         host.setMoving(id, this.moving(row));
         if (!row.key) throw new Error('The move has no key to seal to.');
         const { entries, leftBehind } = await host.pack(id, row);
-        entries.push({ path: 'move.json', data: Buffer.from(JSON.stringify({ format: 'threadbear-move-1', moveId: row.moveId, threadId: id, from: row.from, leftBehind })) });
+        entries.push({ path: 'move.json', data: Buffer.from(JSON.stringify({ format: 'threadbear-move-1', moveId: row.moveId, threadId: id, from: row.from, fromName: host.runnerName(row.from), leftBehind })) });
         const sealed = sealBytes(row.key, archive(entries), sealInfo(row.moveId));
         if (sealed.length > MAX_SEALED_BYTES) throw new Error(`The thread is too big to move (${Math.round(sealed.length / 1024 / 1024)} MB, over 100): most of it is ${biggest(entries)}.`);
         const backend = this.backend();

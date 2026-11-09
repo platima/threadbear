@@ -297,7 +297,7 @@ Copy Image.
 Read this before your first thread. Every thread runs in one of four modes,
 shown on the composer (the box you type in) and changed by clicking it.
 
-- **Full access** (the default): the agent edits files and runs commands
+- **Full access**: the agent edits files and runs commands
   without asking. It can do anything your Mac user account can do, in any
   folder, including deleting files. This is how Threadbear is meant to be
   used day to day, and it's fine for a folder you trust it with.
@@ -330,10 +330,17 @@ patch runs something Threadbear can't follow, every edit asks, and the card
 says it can't tell whether the file runs as code. Even once you allow it, the
 patch waits for you to trust it in Patches.
 
-The mode belongs to one thread. A new thread starts on Full access again
-unless you pick otherwise, so if you're unsure about a task, switch it to Ask
-before edits before you send. Deleting a thread is one thing an agent always
-has to ask about, whatever the mode.
+The mode belongs to one thread. A new thread starts on your default mode
+again unless you pick otherwise, so if you're unsure about a task, switch it
+to Ask before edits before you send. On a new install the default is Auto;
+an install from before 9 Nov 2026 keeps Full access. Threads you start from
+the phone, the website, `tb new` or a schedule with no mode of its own start
+on it too. It's `"defaults": { "permissionMode": "auto" }` in `runner.json`
+in the data folder (`"full"`, `"ask"` or `"auto"`; none is Full access), so
+ask any thread to change it. It applies once the runner next restarts. The
+threads Threadbear starts by itself, to bring in Mike's releases or fix a
+failed update, stay on Full access. Deleting a thread is one thing an agent
+always has to ask about, whatever the mode.
 
 An agent in Ask before edits or Auto can't give itself more room. Switching
 any thread or schedule to more access, starting a thread with more access
@@ -1322,8 +1329,9 @@ under it: a change to one of those asks again too. A patch that loads code
 by a name it works out as it runs (`import(name)`) can't be checked, so it
 never runs and Patches says why: import its files by a plain path instead.
 The same goes for a command a patch runs by itself, a worktree's setup or
-a hook: it has to be one script in the repo with plain words after it,
-like `./scripts/setup.sh --fast`, so trusting the patch covers what runs.
+teardown, or a hook: it has to be one script in the repo with plain words
+after it, like `./scripts/setup.sh --fast`, so trusting the patch covers
+what runs.
 One like `cd scripts && ./setup.sh` or `npm run setup` never runs, and
 Patches says to put the steps in a script. What that script runs in turn
 (another script, a package.json script by name, a Makefile) is covered

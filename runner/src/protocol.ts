@@ -161,6 +161,9 @@ export type RunnerDefaults = {
   model?: string;
   models?: Partial<Record<Provider, string>>;
   efforts?: Partial<Record<Provider, EffortLevel>>;
+  // The mode a threads.create with none starts on (runner.json's
+  // defaults.permissionMode). Absent: full.
+  permissionMode?: Exclude<PermissionMode, 'plan'>;
 };
 
 export type ThreadStatus = 'idle' | 'starting' | 'running' | 'waiting' | 'error' | 'stopped';
@@ -784,7 +787,7 @@ export type EventBody =
       text: string;
       truncated: boolean;
       durationMs: number;
-      trigger?: HookTrigger | 'worktree.setup'; // set when a hook or a new worktree's setup ran it, absent for a chip or tb run
+      trigger?: HookTrigger | 'worktree.setup' | 'worktree.teardown'; // set when a hook, a new worktree's setup or an archived one's teardown ran it, absent for a chip or tb run
     }
   // Mike edited the message at fromSeq (docs/protocol.md, "Editing a
   // message"): fromSeq..toSeq are gone from the conversation. Outside any turn.

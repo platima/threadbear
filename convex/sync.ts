@@ -1834,6 +1834,11 @@ export const setSchedules = mutation({
 // code and the zones); this only stores them.
 
 const CLAIM_MS = 2 * 60_000;
+// Room a runner key's schedule keeps for a run record with no note (at,
+// outcome and threadId as scheduleRan cuts them): the run's time is how a
+// retried scheduleRan knows it was counted (THREADBEAR-15).
+const RUN_ROOM = 400;
+const scheduleRoom = (s: { lastRun?: unknown }) => ({ ...s, lastRun: undefined });
 
 const ownedScheduleDoc = v.object({
   ...scheduleDoc.fields,
@@ -1987,6 +1992,7 @@ export const saveSchedule = mutation({
     if (!mayWrite(caller, schedule.runnerId, row?.runnerId) || (await scheduleIdTaken(ctx, caller, schedule.id))) throw forbidden(`save schedule ${schedule.id}`);
     capText(caller, "A schedule's text", schedule.text, CAP.scheduleText);
     capDoc(caller, 'A schedule', schedule, CAP.scheduleDoc);
+    capDoc(caller, 'A schedule', scheduleRoom(schedule), CAP.scheduleDoc - RUN_ROOM);
     if (!row && !caller.owner && (await ownedCount(ctx, schedule.runnerId)) >= CAP.schedules) throw tooMany('schedules', CAP.schedules);
     await syncWake(ctx, schedule);
     if (!row) {
@@ -2042,7 +2048,7 @@ export const adoptSchedules = mutation({
       }
       if (!caller.owner) {
         if (!SCHEDULE_ID.test(s.id)) held.push({ id: s.id.slice(0, 64), why: "its id isn't a UUID" });
-        else if (utf8Bytes(s.text) > CAP.scheduleText || docBytes(s) > CAP.scheduleDoc) held.push({ id: s.id, why: `it's over ${CAP.scheduleText} bytes` });
+        else if (utf8Bytes(s.text) > CAP.scheduleText || docBytes(s) > CAP.scheduleDoc || docBytes(scheduleRoom(s)) > CAP.scheduleDoc - RUN_ROOM) held.push({ id: s.id, why: `it's over ${CAP.scheduleText} bytes` });
         else if (count >= CAP.schedules) held.push({ id: s.id, why: `over ${CAP.schedules} schedules` });
         else count++;
       }
@@ -2129,19 +2135,34 @@ export const scheduleRan = mutation({
     // refusal to say it's there or whose it is.
     const row = visibleTo(caller, await scheduleRow(ctx, scheduleId));
     if (!row) return null;
+    // One it has already, or older (THREADBEAR-15): the runner tells a run
+    // again until it hears back, so one whose answer got lost comes again,
+    // and a runner process that has gone can have left one in flight. Counted
+    // once, and an older one moves nothing: its next time is behind the one
+    // recorded since. The same one can still put in its next time, when the
+    // runner has caught up with an edit made meanwhile (expectUpdatedAt).
+    const had = row.lastRun;
+    const older = had !== undefined && lastRun.at < had.at;
+    const seen = older || (had !== undefined && had.at === lastRun.at && had.outcome === lastRun.outcome && had.threadId === lastRun.threadId);
     // A runner key's run record is cut to fit: the row it's recorded on is
     // read whole with every other schedule (CAP).
     const run = caller.owner ? lastRun : { ...lastRun, at: cutBytes(lastRun.at, 64), outcome: cutBytes(lastRun.outcome, 64), ...(lastRun.threadId !== undefined ? { threadId: cutBytes(lastRun.threadId, 100) } : {}), ...(lastRun.note !== undefined ? { note: cutBytes(lastRun.note, CAP.note) } : {}) };
-    const patch: Record<string, unknown> = { lastRun: run, runs: row.runs + (sent ? 1 : 0), updatedMs: Date.now() };
+    const patch: Record<string, unknown> = seen ? { updatedMs: Date.now() } : { lastRun: run, runs: row.runs + (sent ? 1 : 0), updatedMs: Date.now() };
     if (row.claim?.holder === holder) patch.claim = undefined;
     if (request !== undefined && row.runRequestedAt === request) patch.runRequestedAt = undefined;
-    if (row.updatedAt === expectUpdatedAt) {
+    const timing = row.updatedAt === expectUpdatedAt && !older;
+    if (timing) {
       patch.nextRunAt = caller.owner || nextRunAt === undefined ? nextRunAt : cutBytes(nextRunAt, 64);
       patch.finishedAt = caller.owner || finishedAt === undefined ? finishedAt : cutBytes(finishedAt, 64);
     }
-    // And the row as it will be, checked whole.
-    if (!caller.owner && docBytes({ ...row, ...patch }) > CAP.scheduleDoc) delete patch.lastRun;
-    if (row.updatedAt === expectUpdatedAt) await syncWake(ctx, { ...row, nextRunAt: patch.nextRunAt as string | undefined, finishedAt: patch.finishedAt as string | undefined });
+    // And the row as it will be, checked whole. Its note goes first: the
+    // run's time is what tells a retry it's been counted.
+    if (!caller.owner && !seen && docBytes({ ...row, ...patch }) > CAP.scheduleDoc) {
+      const { note: _n, ...bare } = run;
+      patch.lastRun = bare;
+      if (docBytes({ ...row, ...patch }) > CAP.scheduleDoc) delete patch.lastRun;
+    }
+    if (timing) await syncWake(ctx, { ...row, nextRunAt: patch.nextRunAt as string | undefined, finishedAt: patch.finishedAt as string | undefined });
     await ctx.db.patch(row._id, patch);
     return null;
   },

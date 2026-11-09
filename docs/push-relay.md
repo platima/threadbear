@@ -49,7 +49,7 @@ skips the relay. `PUSH_VIA=relay` sends through the relay anyway, for testing.
 
 ### An Android phone
 
-The same, through Firebase Cloud Messaging (API 66; docs/android.md):
+The same, through Firebase Cloud Messaging (API 66):
 
 1. The Android app makes its 32 bytes (kept wrapped by an Android Keystore key)
    and registers them, with its Firebase token as `apnsToken` and
@@ -63,7 +63,7 @@ The same, through Firebase Cloud Messaging (API 66; docs/android.md):
    account key (`FCM_SERVICE_ACCOUNT`) of the Firebase project the app was built
    for, which is whoever publishes the app's. It sees the token and the thread
    id, and the sealed text it cannot open.
-4. The app's `FirebaseMessagingService` (`android/plugins/push`) opens `e` with
+4. The Android app's `FirebaseMessagingService` opens `e` with
    its key and posts the notification; if it can't, it posts "A thread needs
    you". A token Firebase says is unregistered (404) is dropped like an Apple
    one.

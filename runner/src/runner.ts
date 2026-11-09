@@ -1211,6 +1211,8 @@ export class Runner {
     if (claudeModel) defaults.model = claudeModel;
     if (this.cfg.defaults.models) defaults.models = { ...this.cfg.defaults.models };
     if (this.cfg.defaults.efforts) defaults.efforts = { ...this.cfg.defaults.efforts };
+    // The app's composer starts a new thread on it.
+    if (this.cfg.defaults.permissionMode) defaults.permissionMode = this.cfg.defaults.permissionMode;
     const out: ReturnType<Runner['hello']> = { runnerVersion: RUNNER_VERSION, protocol: PROTOCOL_VERSION, accounts, pools, defaults };
     const clis = this.cliList();
     if (clis) out.clis = clis;
@@ -1681,7 +1683,7 @@ export class Runner {
       if (rt.turn?.turnId !== msg.turnId) return; // interrupted during setup
     }
     if (!rt.session) {
-      const left = this.leaveRemovedWorktree(st, msg.turnId);
+      const left = this.leaveRemovedWorktree(st, msg.turnId) ?? this.tellTornDown(st, msg.turnId);
       if (left) text = `${left}\n\n${text}`;
     }
     if (!rt.session) {
@@ -2882,7 +2884,12 @@ export class Runner {
     // first, then released, so that can take a moment. Resuming unarchives.
     if (archiving) {
       rt.archivePending = true;
-      if (rec.worktree && !rec.worktree.removedAt) rec.worktree.cleanupOwed = true;
+      if (rec.worktree && !rec.worktree.removedAt) {
+        rec.worktree.cleanupOwed = true;
+        // Each archive tears down again: a thread brought back may have
+        // made its things again since the last one.
+        delete rec.worktree.tornDownAt;
+      }
       this.archiveWhenGone(st);
     }
     rec.updatedAt = this.isoNow();
@@ -3500,7 +3507,16 @@ export class Runner {
   // archived has been dealt with, so that gets a new one.
   noticeOnMac(threadId: string | undefined, title: string, text: string): string {
     let st = threadId ? this.threads.get(threadId) : undefined;
-    if (!st || st.rt.deleted || st.rec.archivedAt) st = this.makeThread({ text, title, worktree: false, origin: 'runner', startedBy: { kind: 'runner', label: 'Threadbear' } }).st;
+    if (!st || st.rt.deleted || st.rec.archivedAt) st = this.makeThread({
+      text,
+      title,
+      worktree: false,
+      origin: 'runner',
+      // The runner's own, so not the default for new threads: Mike answering
+      // it runs as it always has.
+      permissionMode: 'full',
+      startedBy: { kind: 'runner', label: 'Threadbear' },
+    }).st;
     st.rec.forceUnread = true;
     st.rec.preview = oneLine(text, LIMITS.previewChars);
     this.emit(st, { type: 'system.note', text });

@@ -10,7 +10,7 @@ import { RELEASE } from './release.ts';
 import { gatewayBase, gatewayUrlFrom } from './connectors.ts';
 import { credentialUrlProblem } from './secure-url.ts';
 import { findGatewayClient } from './notion-tasks.ts';
-import { CLI_POLICIES, isEffortLevel, isProvider, type CliPolicy, type EffortLevel, type Provider } from './protocol.ts';
+import { CLI_POLICIES, isEffortLevel, isProvider, type CliPolicy, type EffortLevel, type PermissionMode, type Provider } from './protocol.ts';
 
 // <package version>+<release id>, or +source when run from a checkout.
 export const RUNNER_VERSION = RELEASE.version;
@@ -70,6 +70,11 @@ export type Config = {
     model?: string;
     models?: Partial<Record<Provider, string>>;
     efforts?: Partial<Record<Provider, EffortLevel>>;
+    // The mode a thread that names none starts on (the phone, the website,
+    // tb new, a schedule without one) and the app's composer starts on.
+    // Unset is full, so an install from before it changes nothing; setup
+    // writes "auto" into a new install's runner.json (scripts/setup.mjs).
+    permissionMode?: DefaultMode;
   };
   // Where accounts are discovered. Tests can narrow these.
   claudeMainDir: string;
@@ -150,6 +155,7 @@ export type RunnerJson = {
     model?: string;
     models?: Partial<Record<Provider, string>>;
     efforts?: Partial<Record<Provider, EffortLevel>>;
+    permissionMode?: DefaultMode;
   };
   claudePath?: string;
   idleMinutes?: number;
@@ -191,6 +197,14 @@ export type RunnerJson = {
   // ~/.claude.json; url "" or enabled: false turns the panel's polling off.
   connectors?: { url?: string; enabled?: boolean; headersHelper?: string };
 };
+
+// What defaults.permissionMode may be. Not Plan first: that waits for Mike
+// to approve a plan, so a thread nobody's watching (a schedule, one from
+// the phone) would only sit there.
+export type DefaultMode = Exclude<PermissionMode, 'plan'>;
+export function defaultModeOf(v: unknown): DefaultMode | undefined {
+  return v === 'full' || v === 'ask' || v === 'auto' ? v : undefined;
+}
 
 export function defaultHome(): string {
   return dataDirFor();
@@ -268,6 +282,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       model: nonEmpty(json.defaults?.model),
       ...(models ? { models } : {}),
       ...(efforts ? { efforts } : {}),
+      ...((m) => (m ? { permissionMode: m } : {}))(defaultModeOf(json.defaults?.permissionMode)),
     },
     claudeMainDir: expandHome(env.THREADBEAR_CLAUDE_MAIN_DIR || '~/.claude'),
     claudeMainJson: expandHome(env.THREADBEAR_CLAUDE_MAIN_JSON || '~/.claude.json'),
