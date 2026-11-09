@@ -33,3 +33,6 @@ android/google-services.json
 # A Firebase service account key (a private key): it goes into the
 # FIREBASE_SERVICE_ACCOUNT secret and nowhere else
 *-firebase-adminsdk-*.json
+# The same, as the console names a key made for a service account of your own
+# (<project id>-<12 hex digits>.json)
+*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].json
