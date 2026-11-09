@@ -485,14 +485,29 @@ said otherwise.
   logs and the data.
 - **The runner's task is offered, not assumed:** the first time the installed
   app opens, it asks once whether to start the runner when you sign in to
-  Windows, and sets that task up (the item above) if you say yes. "No thanks"
-  is remembered in `%LOCALAPPDATA%\Threadbear\declined-runner-task`; the tray
-  menu's "Start the runner at sign-in..." asks again. Each time the app opens
-  with the task registered it runs `--runner --start`, so the runner comes back
-  after an update. `Threadbear.exe --runner [--installed | --start | --stop |
-  --status | --uninstall | --dry-run]` runs the same script from a terminal or
-  an installer (its answer prints to the terminal that started it; an unknown
-  flag is refused).
+  Windows, and sets that task up (the item above) if you say yes. On "No
+  thanks" it asks a second question: whether to start the runner only while
+  Threadbear is open. Yes makes the same task with no logon trigger
+  (`install-windows.mjs --on-demand`), so nothing starts it at sign-in; the app
+  starts it when it opens and stops it (`--stop`) when it quits, and
+  `--mode` tells the app which kind it is (`sign-in`, `on-demand` or `none`).
+  A second "No thanks" is remembered in
+  `%LOCALAPPDATA%\Threadbear\declined-runner-task`. The tray menu's "Start the
+  runner at sign-in..." and "Start the runner only while Threadbear is open..."
+  ask again and switch from one kind to the other, and the connection banner's
+  "Start the runner" button starts a set-up runner or offers the second kind.
+  Each time the app opens with the task registered it runs `--runner --start`,
+  so the runner comes back after an update. `Threadbear.exe --runner
+  [--installed | --start | --stop | --status | --uninstall | --dry-run |
+  --on-demand | --mode]` runs the same script from a terminal or an installer
+  (its answer prints to the terminal that started it; an unknown flag is
+  refused).
+- **Exit on close** (Settings, This app): off by default, so closing the window
+  leaves the app in the tray. On, closing it ends the app. The choice is the
+  file `%LOCALAPPDATA%\Threadbear\exit-on-close`, which is there when it is on
+  (the shell reads it when the window is closed). On Linux the choice only
+  matters where a tray icon could be made; with none, closing ends the app
+  either way.
 - **The update check** (`desktop/src/core/updates.ts`): the installed app asks
   `api.github.com/repos/<the fork>/releases/latest` once a day (a plain
   request, so GitHub sees the PC's address and the app's user agent, and

@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { REPO, setUpdateCheck, updateCheckOn } from '../../core/updates.ts';
-import { isNative } from '../../core/native.ts';
+import { getExitOnClose, isNative, setExitOnClose } from '../../core/native.ts';
 import { APP_VERSION, runUpdateCheck, useAvailableUpdate, useSessionKeepsSettings } from '../update-state.ts';
 import { Card, Note } from './ops-ui.tsx';
 
@@ -13,6 +13,23 @@ export function AppSection() {
   const [unsaved, setUnsaved] = useState(false);
   const update = useAvailableUpdate();
   const keeps = useSessionKeepsSettings();
+  // Whether closing the window ends the app. The shell keeps it (it reads it when the
+  // window is closed), so it is asked for rather than kept here. Undefined until it says, and
+  // outside the installed app, where there is no window to close.
+  const [exitOnClose, setExit] = useState<boolean>();
+  const [exitProblem, setExitProblem] = useState<string>();
+  useEffect(() => {
+    void getExitOnClose().then(setExit);
+  }, []);
+  const toggleExit = async (next: boolean) => {
+    setExit(next);
+    setExitProblem(undefined);
+    const problem = await setExitOnClose(next);
+    if (problem) {
+      setExit(!next);
+      setExitProblem(problem);
+    }
+  };
   const toggle = (next: boolean) => {
     const stuck = setUpdateCheck(localStorage, next);
     setUnsaved(!stuck);
@@ -28,6 +45,18 @@ export function AppSection() {
   return (
     <Card>
       <h3>Threadbear for Windows {APP_VERSION}</h3>
+      {exitOnClose !== undefined && (
+        <>
+          <label className="ops-row" title="Closing the window ends Threadbear, instead of leaving it in the tray">
+            <input type="checkbox" checked={exitOnClose} title="Closing the window ends Threadbear" onChange={(e) => void toggleExit(e.target.checked)} />
+            <span>Exit on close</span>
+          </label>
+          <Note>
+            Off: closing the window leaves Threadbear in the tray, and Quit in the tray menu ends it. On: closing the window ends it. A runner you set up to run only while Threadbear is open stops with it.
+          </Note>
+          {exitProblem && <Note tone="bad">{exitProblem}</Note>}
+        </>
+      )}
       <label className="ops-row" title="Ask GitHub once a day whether a newer release is out. Nothing is downloaded or installed for you.">
         <input type="checkbox" checked={on} title="Ask GitHub once a day whether a newer release is out" onChange={(e) => toggle(e.target.checked)} />
         <span>Check for a newer release once a day</span>

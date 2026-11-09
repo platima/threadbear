@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The window's own page, served by the local bridge on loopback. It may pick a folder, show a notification and open a web or mail link in the browser, and nothing else.",
+  "description": "The window's own page, served by the local bridge on loopback. It may pick a folder, show a notification, open a web or mail link in the browser, read and set the Exit on close choice and ask for the runner to be started (the shell's own three commands: get_exit_on_close, set_exit_on_close and start_runner), and nothing else.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [

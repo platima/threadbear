@@ -30,7 +30,7 @@ export function ModelMenu({ account, provider, model, inUse, onPick, disabled }:
   return (
     <Menu
       label={label}
-      title={list.length ? 'Choose the model' : 'The model this thread runs on'}
+      title={disabled ? "Not connected to the runner, so the models can't be listed" : list.length ? 'Choose the model' : "The runner hasn't found a login yet, so there are no models to choose from. Sign in with Claude Code (claude auth login)."}
       disabled={disabled || !list.length}
       items={[
         { key: '', label: 'Default', note: def ? `Currently ${def.title}` : 'The login’s own choice', on: !model, onPick: () => onPick(null) },

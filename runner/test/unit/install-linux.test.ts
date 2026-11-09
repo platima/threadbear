@@ -100,6 +100,42 @@ test('installing writes the unit and tb, reloads systemd, and enables and starts
   assert.equal(fs.readFileSync(w.unit, 'utf8'), unitText(w.d));
 });
 
+test('--on-demand installs the unit but does not enable it, and starts it; --mode says how it starts', () => {
+  const w = world();
+  assert.deepEqual(run(['--mode'], w.d).out, ['none']);
+
+  const dry = run(['--on-demand', '--dry-run'], w.d);
+  assert.match(dry.out.join('\n'), /systemctl --user disable threadbear-runner\.service/);
+  assert.match(dry.out.join('\n'), /systemctl --user start threadbear-runner\.service/);
+  assert.doesNotMatch(dry.out.join('\n'), /enable --now/);
+  assert.deepEqual(w.state.calls, [], 'a dry run touches nothing');
+
+  const r = run(['--on-demand'], w.d);
+  assert.equal(r.code, 0, r.out.join('\n'));
+  assert.equal(fs.readFileSync(w.unit, 'utf8'), unitText(w.d));
+  assert.equal(w.state.enabled, false, 'so it does not start at login');
+  assert.equal(w.state.active, true, 'but it is running now');
+  assert.match(r.out.join('\n'), /does not start at login/);
+  const calls = (): string[][] => w.state.calls; // (a function, so the deepEqual above doesn't narrow it to never[])
+  assert.ok(!calls().some((c) => c.includes('enable')));
+  assert.deepEqual(run(['--mode'], w.d).out, ['on-demand']);
+
+  // Installing the usual way afterwards puts it back to starting at login.
+  assert.equal(run([], w.d).code, 0);
+  assert.equal(w.state.enabled, true);
+  assert.deepEqual(run(['--mode'], w.d).out, ['sign-in']);
+  // And on demand again switches it off at login.
+  assert.equal(run(['--on-demand'], w.d).code, 0);
+  assert.equal(w.state.enabled, false);
+});
+
+test('--mode takes a service whose state systemd will not give as a sign-in one, so it is never stopped by mistake', () => {
+  const w = world();
+  run([], w.d);
+  w.d.systemctl = (...args: string[]) => (args.includes('is-enabled') ? { status: 1, stdout: '', stderr: 'Failed to get unit file state' } : { status: 0, stdout: '', stderr: '' });
+  assert.deepEqual(run(['--mode'], w.d).out, ['sign-in']);
+});
+
 test('--installed, --start and --stop go by the unit and what systemd says', () => {
   const w = world();
   assert.equal(run(['--installed'], w.d).code, 1, 'nothing yet');

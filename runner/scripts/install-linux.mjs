@@ -4,7 +4,10 @@
 // leaves behind.
 //
 //   node scripts/install-linux.mjs --dry-run     say what it would do
-//   node scripts/install-linux.mjs               install and start it
+//   node scripts/install-linux.mjs               install and start it, to start at login
+//   node scripts/install-linux.mjs --on-demand   the same, but not enabled: the desktop app starts
+//                                                it when it opens and stops it when it quits
+//   node scripts/install-linux.mjs --mode        sign-in, on-demand or none, by how the service starts
 //   node scripts/install-linux.mjs --status      is the service there and running
 //   node scripts/install-linux.mjs --installed   exit 0 if the service is there, 1 if not
 //   node scripts/install-linux.mjs --start       start the service if it is there and not running
@@ -36,7 +39,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const UNIT = 'threadbear-runner.service';
-export const OPTIONS = ['--dry-run', '--status', '--installed', '--start', '--stop', '--uninstall'];
+export const OPTIONS = ['--dry-run', '--status', '--installed', '--start', '--stop', '--uninstall', '--on-demand', '--mode'];
 
 // Text inside quotes in a unit: \ and " escaped, and % and $ doubled, since
 // systemd expands specifiers (%h) and variables ($X) in a command line.
@@ -115,6 +118,20 @@ export function run(args, d) {
 
   if (flag('--installed')) return { code: installed() ? 0 : 1, out };
 
+  // How the service starts, on one line, for the desktop app, which stops an
+  // on-demand runner when it quits: 'sign-in' (enabled, so it starts at login),
+  // 'on-demand' (installed but not enabled) or 'none'. If systemd won't say, it
+  // is taken as the usual sign-in one, so the app never stops one it can't vouch for.
+  if (flag('--mode')) {
+    if (!installed()) say('none');
+    else {
+      const r = sc('is-enabled', UNIT);
+      const state = (r.stdout || '').trim();
+      say(r.status !== 0 && state === 'disabled' ? 'on-demand' : 'sign-in');
+    }
+    return { code: 0, out };
+  }
+
   if (flag('--status')) {
     if (!installed()) say('The runner is not installed.');
     else say(`The runner is installed and ${active() ? 'running' : 'not running'}.`);
@@ -157,6 +174,7 @@ export function run(args, d) {
 
   // Install (or reinstall) and start, or say what that would be.
   const dry = flag('--dry-run');
+  const onDemand = flag('--on-demand');
   const existing = readOr(tb);
   const ownTb = existing === undefined || isOurTb(existing);
   if (dry) {
@@ -164,7 +182,10 @@ export function run(args, d) {
     if (ownTb) say(`Would write ${tb} (runs tb with ${d.node}).`);
     else say(`Would leave ${tb} as it is: it isn't one this wrote.`);
     say(`Would run: systemctl --user daemon-reload`);
-    say(`Would run: systemctl --user enable --now ${UNIT}`);
+    if (onDemand) {
+      say(`Would run: systemctl --user disable ${UNIT} (so it does not start at login)`);
+      say(`Would run: systemctl --user start ${UNIT}`);
+    } else say(`Would run: systemctl --user enable --now ${UNIT}`);
     return { code: 0, out };
   }
   const probe = sc('show-environment');
@@ -186,9 +207,11 @@ export function run(args, d) {
     say(`Wrote ${tb}.`);
   } else say(`Left ${tb} as it was: it isn't one this wrote.`);
   sc('daemon-reload');
-  const r = sc('enable', '--now', UNIT);
+  // On demand: not enabled (a sign-in install from before is switched off), only started.
+  if (onDemand) sc('disable', UNIT);
+  const r = onDemand ? sc('start', UNIT) : sc('enable', '--now', UNIT);
   if (r.status !== 0) return { code: 1, out: [...out, `Could not start the runner: ${(r.stderr || r.stdout || '').trim()}`] };
-  say('The runner starts when you log in, and is running now.');
+  say(onDemand ? 'The runner is running now. It does not start at login: the desktop app starts it when it opens.' : 'The runner starts when you log in, and is running now.');
   if (!(d.env.PATH || '').split(':').includes(d.binDir)) say(`Add ${d.binDir} to your PATH to use tb.`);
   return { code: 0, out };
 }

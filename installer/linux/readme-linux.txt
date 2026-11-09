@@ -26,6 +26,9 @@ or run ./install.sh once to add Threadbear to your applications menu. The first
 time it opens it offers to set the runner up: a systemd user service named
 threadbear-runner.service (no root) and a tb command in ~/.local/bin.
 
+    ./threadbear-desktop --runner --on-demand   the same, but not at login: the app starts it
+                                                when it opens and stops it when it quits
+    ./threadbear-desktop --runner --mode        sign-in, on-demand or none
     ./threadbear-desktop --runner --dry-run     say what that would do
     ./threadbear-desktop --runner --status      is it installed and running
     ./threadbear-desktop --runner --uninstall   take the service and tb away

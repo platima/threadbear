@@ -8,7 +8,7 @@ import { Rail } from './Rail.tsx';
 import { Shortcuts } from './Shortcuts.tsx';
 import { TOUR_KEY, Tour } from './Tour.tsx';
 import { PAGES } from './registry.ts';
-import { isNative } from '../core/native.ts';
+import { isNative, startRunner } from '../core/native.ts';
 import { runUpdateCheck } from './update-state.ts';
 
 export function useSnap(store: AppStore) {
@@ -113,6 +113,15 @@ export function App({ store }: { store: AppStore }) {
         {offline && (
           <div className={snap.conn === 'closed' ? 'banner bad' : 'banner'}>
             {snap.conn === 'connecting' ? 'Connecting to the runner...' : `Not connected to the runner${snap.connWhy ? `: ${snap.connWhy}` : ''}. Trying again.`}
+            {snap.conn === 'closed' && /^no runner token/i.test(snap.connWhy ?? '') && " That means the runner isn't running, so there is nothing to connect to."}
+            {snap.conn === 'closed' && isNative() && (
+              <>
+                {' '}
+                <button className="ghost" onClick={() => void startRunner()} title="Start the runner, or choose how it should start">
+                  Start the runner
+                </button>
+              </>
+            )}
           </div>
         )}
         {snap.notices.slice(-1).map((n, i) => (

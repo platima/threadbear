@@ -3,7 +3,10 @@
 // --dry-run first, and docs/on-your-mac.md says what it leaves behind.
 //
 //   node scripts/install-windows.mjs --dry-run     say what it would do
-//   node scripts/install-windows.mjs               install and start it
+//   node scripts/install-windows.mjs               install and start it, to start at logon
+//   node scripts/install-windows.mjs --on-demand   the same, but with no logon trigger: the desktop
+//                                                  app starts it when it opens and stops it when it quits
+//   node scripts/install-windows.mjs --mode        sign-in, on-demand or none, by how the task starts
 //   node scripts/install-windows.mjs --status      is the task there and running
 //   node scripts/install-windows.mjs --installed   exit 0 if the task is there, 1 if not
 //   node scripts/install-windows.mjs --start       start the task if it is there and not running
@@ -46,12 +49,17 @@ const xmlEscape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 
 // conhost --headless gives node a console with no window, which its children
 // share, so nothing flashes up. The runner also hides its own children.
-export function taskXml({ node, script, cwd, user }) {
+//
+// With `onDemand` the task has no trigger at all: it runs only when something asks
+// (`schtasks /Run`, which the desktop app does when it opens), so nothing starts
+// it at logon.
+export function taskXml({ node, script, cwd, user, onDemand = false }) {
+  const description = onDemand ? 'Threadbear runner: started by the desktop app while it is open, and kept running.' : 'Threadbear runner: starts at logon and is kept running.';
+  const triggers = onDemand ? '' : `  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xmlEscape(user)}</UserId></LogonTrigger></Triggers>\n`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>Threadbear runner: starts at logon and is kept running.</Description></RegistrationInfo>
-  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xmlEscape(user)}</UserId></LogonTrigger></Triggers>
-  <Principals><Principal id="Author"><UserId>${xmlEscape(user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <RegistrationInfo><Description>${description}</Description></RegistrationInfo>
+${triggers}  <Principals><Principal id="Author"><UserId>${xmlEscape(user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
@@ -203,6 +211,21 @@ function ownTasks(d) {
   return names;
 }
 
+// How this user's task starts: 'sign-in' (it has a logon trigger), 'on-demand'
+// (it has none, so only a request starts it) or 'none' (no task). If Task
+// Scheduler won't show the task's definition it is taken as the usual sign-in
+// one, so the desktop app, which stops an on-demand runner when it quits, never
+// stops one it can't vouch for.
+export function taskMode(d) {
+  const names = ownTasks(d);
+  if (!names.length) return 'none';
+  try {
+    return /<LogonTrigger[\s>]/i.test(d.schtasks('/Query', '/TN', names[0], '/XML')) ? 'sign-in' : 'on-demand';
+  } catch {
+    return 'sign-in';
+  }
+}
+
 function endTask(d, name) {
   try {
     d.schtasks('/End', '/TN', name);
@@ -247,6 +270,13 @@ export function runInstaller(argv, d) {
 
   // Exit 0 if the task is there, 1 if not: for the desktop app's first run.
   if (args.has('--installed')) return ownTasks(d).length ? 0 : 1;
+
+  // How the task starts, on one line: for the desktop app, which stops an
+  // on-demand runner when it quits.
+  if (args.has('--mode')) {
+    out(taskMode(d));
+    return 0;
+  }
 
   // For the desktop app when it opens and an installer after an upgrade: the
   // runner comes back if its task is there and has stopped.
@@ -308,9 +338,10 @@ export function runInstaller(argv, d) {
   const script = path.join(d.root, 'scripts', 'windows-run.mjs');
   const tbText = tbCmdText({ node: d.node, tbScript: path.join(d.root, 'bin', 'tb') }, d.env);
   const older = ownTasks(d).includes(LEGACY_TASK);
+  const onDemand = args.has('--on-demand');
   out(
     [
-      `Register the task "${d.task}" for ${d.me}: at logon, hidden, no admin rights, restarted if it fails.`,
+      `Register the task "${d.task}" for ${d.me}: ${onDemand ? 'with no logon trigger (the desktop app starts it when it opens)' : 'at logon'}, hidden, no admin rights, restarted if it fails.`,
       `  runs: conhost.exe --headless "${d.node}" "${script}"`,
       ...(older ? [`End and delete the older task "${LEGACY_TASK}" of yours, which this replaces.`] : []),
       `Write ${tbCmdFile} and add ${d.binDir} to this user's PATH${onPath(d, d.binDir) ? ' (already there)' : ''}.`,
@@ -324,7 +355,7 @@ export function runInstaller(argv, d) {
     d.schtasks('/Delete', '/TN', LEGACY_TASK, '/F');
   }
   const xmlFile = path.join(d.tmp, `threadbear-task-${process.pid}.xml`);
-  fs.writeFileSync(xmlFile, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(taskXml({ node: d.node, script, cwd: d.root, user: d.me }), 'utf16le')]));
+  fs.writeFileSync(xmlFile, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(taskXml({ node: d.node, script, cwd: d.root, user: d.me, onDemand }), 'utf16le')]));
   try {
     d.schtasks('/Create', '/TN', d.task, '/XML', xmlFile, '/F');
   } finally {
@@ -334,7 +365,7 @@ export function runInstaller(argv, d) {
   fs.writeFileSync(tbCmdFile, tbText);
   if (!onPath(d, d.binDir)) writeUserPath(d.ps, d.envKey, [readUserPath(d.ps, d.envKey), d.binDir].filter(Boolean).join(';'));
   d.schtasks('/Run', '/TN', d.task);
-  out('Installed and started. Open a new terminal to use `tb`. Check with: node scripts/install-windows.mjs --status');
+  out(`Installed and started${onDemand ? ', with no logon trigger: it starts when the desktop app opens' : ''}. Open a new terminal to use \`tb\`. Check with: node scripts/install-windows.mjs --status`);
   return 0;
 }
 

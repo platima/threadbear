@@ -137,7 +137,7 @@ type Fake = {
   calls: string[][];
   tasks: Set<string>;
   xml: string[];
-  set(o: { state?: string; legacyOwner?: string; failRun?: boolean }): void;
+  set(o: { state?: string; legacyOwner?: string; failRun?: boolean; noXml?: boolean }): void;
   binDir: string;
 };
 
@@ -146,8 +146,10 @@ function fake(key: string, tasks: string[] = []): Fake {
   const errors: string[] = [];
   const calls: string[][] = [];
   const xml: string[] = [];
+  // The definition each task was made with; one that was there already counts as a sign-in task.
+  const xmlOf = new Map<string, string>();
   const have = new Set(tasks);
-  const opts: { state?: string; legacyOwner?: string; failRun?: boolean } = { state: 'Ready', legacyOwner: 'mine' };
+  const opts: { state?: string; legacyOwner?: string; failRun?: boolean; noXml?: boolean } = { state: 'Ready', legacyOwner: 'mine' };
   const binDir = path.join(tmpDir(), 'Threadbear', 'bin');
   const d = {
     task: 'Threadbear Runner (Test)',
@@ -164,12 +166,17 @@ function fake(key: string, tasks: string[] = []): Fake {
       calls.push(a);
       if (a[0] === '/Query') {
         if (!have.has(a[2])) throw new Error('ERROR: The system cannot find the file specified.');
+        if (a[3] === '/XML') {
+          if (opts.noXml) throw new Error('ERROR: Access is denied.');
+          return xmlOf.get(a[2]) ?? '<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers></Task>';
+        }
         return 'Status: Ready\r\nLast Run Time: never\r\nOther: x\r\n';
       }
       if (a[0] === '/Delete') have.delete(a[2]);
       if (a[0] === '/Create') {
         const buf = fs.readFileSync(a[4]);
         xml.push(buf.subarray(2).toString('utf16le'));
+        xmlOf.set(a[2], xml[xml.length - 1]);
         have.add(a[2]);
       }
       if (a[0] === '/Run' && opts.failRun) throw Object.assign(new Error('failed'), { stderr: 'ERROR: Access is denied.\r\n' });
@@ -276,6 +283,57 @@ test('installing registers this user\'s task, writes tb.cmd, adds its folder to 
     // Installing again leaves the PATH as it is.
     assert.equal(inst.runInstaller([], f.d), 0);
     assert.equal(stored(key).value, `${PATH_WITH_LETTERS};${f.binDir}`);
+  });
+});
+
+test('the on-demand task has no trigger at all, and the usual one starts at logon', () => {
+  const args = { node: 'C:\\n\\node.exe', script: 'C:\\r\\scripts\\windows-run.mjs', cwd: 'C:\\r', user: 'PC\\Test' };
+  const usual = inst.taskXml(args);
+  assert.match(usual, /<Triggers><LogonTrigger><Enabled>true<\/Enabled><UserId>PC\\Test<\/UserId><\/LogonTrigger><\/Triggers>/);
+  assert.match(usual, /starts at logon/);
+  const onDemand = inst.taskXml({ ...args, onDemand: true });
+  assert.doesNotMatch(onDemand, /Triggers|LogonTrigger/);
+  assert.match(onDemand, /started by the desktop app/);
+  // Otherwise the same task: its principal, settings and what it runs.
+  for (const part of [/<Principals>.*<\/Principals>/s, /<Settings>.*<\/Settings>/s, /<Actions Context="Author">.*<\/Actions>/s]) {
+    assert.equal(onDemand.match(part)?.[0], usual.match(part)?.[0]);
+  }
+});
+
+test('--mode says how the task starts: none, sign-in, on-demand, and sign-in when Task Scheduler will not show it', () => {
+  const none = fake('unused', []);
+  assert.equal(inst.runInstaller(['--mode'], none.d), 0);
+  assert.deepEqual(none.lines, ['none']);
+
+  const usual = fake('unused', ['Threadbear Runner (Test)']);
+  assert.equal(inst.runInstaller(['--mode'], usual.d), 0);
+  assert.deepEqual(usual.lines, ['sign-in']);
+  assert.ok(!verbs(usual).some((v) => /^\/(Run|End|Delete|Create)/.test(v)), 'it only asks');
+
+  const unsure = fake('unused', ['Threadbear Runner (Test)']);
+  unsure.set({ noXml: true });
+  assert.equal(inst.runInstaller(['--mode'], unsure.d), 0);
+  assert.deepEqual(unsure.lines, ['sign-in'], 'a runner it cannot vouch for is never taken for an on-demand one');
+});
+
+test('--on-demand installs the task with no logon trigger, and installing again the usual way puts the trigger back', WINDOWS_ONLY, async () => {
+  await withKey((key) => {
+    const f = fake(key, []);
+    assert.equal(inst.runInstaller(['--on-demand'], f.d), 0);
+    assert.equal(f.xml.length, 1);
+    assert.doesNotMatch(f.xml[0], /LogonTrigger/);
+    assert.match(f.lines.join('\n'), /no logon trigger/);
+    assert.ok(verbs(f).includes('/Run Threadbear Runner (Test)'), 'and it is started now');
+    assert.ok(fs.existsSync(path.join(f.binDir, 'tb.cmd')));
+    f.lines.length = 0;
+    assert.equal(inst.runInstaller(['--mode'], f.d), 0);
+    assert.deepEqual(f.lines, ['on-demand']);
+
+    assert.equal(inst.runInstaller([], f.d), 0);
+    assert.match(f.xml[1], /<LogonTrigger>/);
+    f.lines.length = 0;
+    assert.equal(inst.runInstaller(['--mode'], f.d), 0);
+    assert.deepEqual(f.lines, ['sign-in']);
   });
 });
 

@@ -2,7 +2,8 @@ Threadbear for Windows
 ======================
 
 Run Threadbear.exe to open the app. Closing its window keeps it in the system
-tray; Quit in the tray menu ends it.
+tray; Quit in the tray menu ends it. (Settings, This app has an Exit on close box
+if you would rather closing the window ended it.)
 
 What it needs, and does not install
 -----------------------------------
@@ -27,9 +28,15 @@ The runner
 ----------
 The first time the app opens it offers to start the runner when you sign in to
 Windows. That adds one Task Scheduler task for your account (no admin rights)
-and puts the "tb" command on your PATH. You can say no and set it up later from
-the tray menu, or with "Threadbear.exe --runner". Other switches:
+and puts the "tb" command on your PATH. If you say no, it offers a second way:
+a runner that starts only while Threadbear is open (the same task with nothing
+that starts it at sign-in; the app starts it when it opens and stops it when you
+quit). Say no to both and nothing starts, and the app shows "Not connected to the
+runner" with a Start the runner button. You can set either kind up later from the
+tray menu, or with "Threadbear.exe --runner" (at sign-in) or
+"Threadbear.exe --runner --on-demand" (only while the app is open). Other switches:
 
+  Threadbear.exe --runner --mode        sign-in, on-demand or none
   Threadbear.exe --runner --status      is the task there, and running
   Threadbear.exe --runner --stop        end it (it stays registered)
   Threadbear.exe --runner --uninstall   remove the task and "tb"
