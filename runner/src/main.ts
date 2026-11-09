@@ -204,6 +204,18 @@ async function main(): Promise<void> {
         return relay.overlay(r);
       },
       call: (threadId, method, params) => relay.call(threadId, method, { threadId, ...params }),
+      // move_thread with a runner: by name, a unique word of one, or id.
+      move: async ({ threadId, runner: asked, cwd, accountId }) => {
+        const want = asked.toLowerCase();
+        const all = [{ id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName() }, ...sync.remoteThreads().runners.map((r) => ({ id: r.id, name: r.name }))];
+        const partly = all.filter((r) => r.name.toLowerCase().includes(want));
+        const to = all.find((r) => r.id === asked) ?? all.find((r) => r.name.toLowerCase() === want) ?? (partly.length === 1 ? partly[0] : undefined);
+        if (!to) throw new Error(`No runner called ${asked}. There are: ${all.map((r) => r.name).join(', ')}.`);
+        const move = methods['threads.move'];
+        if (!move) throw new Error("This runner can't move threads.");
+        await move({ threadId, runnerId: to.id, ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}) });
+        return `Moving it to ${to.name}. It goes once its turn ends, with its whole conversation and its worktree's git work, and carries on there from its next message. If it can't, it stays here and says why.`;
+      },
     };
   };
   const gatewayHealth = async () => {
@@ -846,7 +858,8 @@ async function main(): Promise<void> {
       else if (relay.owns(threadId)) info = await relay.describeForMove(threadId);
       else throw new Error('No such thread.');
     } catch (e) {
-      return { accounts: [], leftBehind: [], problems: [said(e)] };
+      const older = /can't be asked of this runner/.test(said(e));
+      return { accounts: [], leftBehind: [], problems: [older ? "The thread's runner runs a Threadbear from before moves. It updates itself within a few minutes of a new release." : said(e)] };
     }
     const cwd = typeof p.cwd === 'string' && p.cwd ? p.cwd : undefined;
     const accountId = typeof p.accountId === 'string' && p.accountId ? p.accountId : undefined;
@@ -858,7 +871,9 @@ async function main(): Promise<void> {
       }
       return await relay.previewMove(to, { info, ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}) });
     } catch (e) {
-      return { accounts: [], leftBehind: [], problems: [said(e)] };
+      // A runner from before moves turns the call down by name.
+      const older = /can't be asked of this runner/.test(said(e));
+      return { accounts: [], leftBehind: [], problems: [older ? `${runnerNames.get(to) ?? 'That runner'} runs a Threadbear from before moves. It updates itself within a few minutes of a new release.` : said(e)] };
     }
   };
   methods['threads.moveCancel'] = async (p) => {

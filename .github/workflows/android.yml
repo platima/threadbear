@@ -4,12 +4,18 @@ name: android
 # which already has the Android SDK, an NDK and a JDK, so nobody needs
 # Android Studio to get an APK.
 #
-# The APK is a release build, signed by android/scripts/sign-apk.sh: with the
-# release key when the repository has the four ANDROID_KEYSTORE_* secrets (so a
-# phone takes each build as an update of the last), and with a key made for the
-# run when it has not (enough to install it, once). Whether it was the release
-# key is the workflow's `signed` output, which release.yml reads to decide
-# whether the APK goes on a release.
+# The APK is a release build, built unsigned by the `apk` job and signed by the
+# `sign` job (android/scripts/sign-apk.sh). The release key is the four
+# ANDROID_KEYSTORE_* secrets of the repository's `release` environment, so only
+# a job that runs in that environment can read it, and the environment
+# allows only a release tag (v*) or `main`. `sign` runs in it for a release tag
+# and for a rehearsal started by hand from main (the same refs release.yml's
+# own signing uses). For anything else, a push to a branch or a pull request,
+# it runs with no environment, never sees the key, and signs with a key made
+# for the run: enough to install it once, and never the key that makes a phone
+# take a build as an update. Whether it was the release key is the workflow's
+# `signed` output, which release.yml reads to decide whether the APK goes on a
+# release.
 #
 # Notifications go through Firebase (android/plugins/push). The app gets its
 # Firebase project from the ANDROID_GOOGLE_SERVICES_JSON secret, the contents of
@@ -37,20 +43,12 @@ on:
         type: string
         default: ''
     secrets:
-      ANDROID_KEYSTORE_BASE64:
-        required: false
-      ANDROID_KEYSTORE_PASSWORD:
-        required: false
-      ANDROID_KEY_ALIAS:
-        required: false
-      ANDROID_KEY_PASSWORD:
-        required: false
       ANDROID_GOOGLE_SERVICES_JSON:
         required: false
     outputs:
       signed:
         description: "true when the APK is signed with the release key, false when with a key made for the run"
-        value: ${{ jobs.apk.outputs.signed }}
+        value: ${{ jobs.sign.outputs.signed }}
 
 permissions:
   contents: read
@@ -63,8 +61,6 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    outputs:
-      signed: ${{ steps.sign.outputs.signed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -131,7 +127,7 @@ jobs:
         working-directory: android
         # Up to three tries: the build downloads Gradle, Kotlin and the libraries
         # from servers that now and then answer 504. A release build comes out
-        # unsigned, and is signed in the next step.
+        # unsigned, and is signed by the next job.
         run: |
           for i in 1 2 3 4 5; do
             npx tauri android build --apk --target aarch64 armv7 && exit 0
@@ -139,21 +135,63 @@ jobs:
             sleep $((i * 45))
           done
           exit 1
-      - name: Sign it
-        id: sign
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          VERSION: ${{ inputs.version }}
+      - name: Keep the unsigned APK for the signing job
         run: |
           set -eu
           unsigned=$(find android/src-tauri/gen/android -name '*-unsigned.apk' -print -quit)
           [ -n "$unsigned" ] || { echo "::error::The build made no unsigned APK"; find android/src-tauri/gen/android -name '*.apk'; exit 1; }
+          mkdir -p unsigned
+          cp "$unsigned" unsigned/app-unsigned.apk
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: threadbear-android-unsigned
+          path: unsigned/app-unsigned.apk
+          retention-days: 1
+          if-no-files-found: error
+
+  # Signs it. For a release tag, and for a rehearsal started by hand from main,
+  # it runs in the `release` environment, which holds the release key and only
+  # lets those refs in; for anything else it has no environment and no key (the
+  # secrets are blanked in the step, so a copy of the key left in the
+  # repository's own secrets could not be read either), and a key made for the
+  # run signs it. The unsigned APK is all it takes from the build, and it
+  # builds nothing.
+  sign:
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && 'release' || '' }}
+    env:
+      # The same test as the environment's, for the steps: true where this job is in
+      # the release environment
+      RELEASE_REF: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: threadbear-android-unsigned
+          path: unsigned
+      - name: Sign it
+        id: sign
+        env:
+          # Blanked by the expression itself unless this is a release or a rehearsal
+          # from main, so no step or child process of a branch run ever holds the
+          # key, even if a copy is left in the repository's own secrets
+          ANDROID_KEYSTORE_BASE64: ${{ env.RELEASE_REF == 'true' && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ env.RELEASE_REF == 'true' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          ANDROID_KEY_ALIAS: ${{ env.RELEASE_REF == 'true' && secrets.ANDROID_KEY_ALIAS || '' }}
+          ANDROID_KEY_PASSWORD: ${{ env.RELEASE_REF == 'true' && secrets.ANDROID_KEY_PASSWORD || '' }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          [ "$RELEASE_REF" = true ] || echo "Not a release or a rehearsal from main: signing with a key made for this run"
           mkdir -p out
           name="threadbear-${VERSION:-dev}-android.apk"
-          sh android/scripts/sign-apk.sh "$unsigned" "out/$name" | tee "$RUNNER_TEMP/sign.log"
+          sh android/scripts/sign-apk.sh unsigned/app-unsigned.apk "out/$name" | tee "$RUNNER_TEMP/sign.log"
           echo "signed=$(tail -n 1 "$RUNNER_TEMP/sign.log" | cut -d= -f2)" >> "$GITHUB_OUTPUT"
           (cd out && sha256sum --text "$name" > "$name.sha256" && cat "$name.sha256")
       # What a release would say about this APK (release.yml runs the same check

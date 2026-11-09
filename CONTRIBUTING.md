@@ -30,8 +30,9 @@ release workflows) is this repository's to change.
   and Android apps, and `installers.yml` builds the Windows packages.
 - Do not put anything private in a pull request: no keys, no signing
   certificates, no `google-services.json`, no service account files. The
-  Android release key and the Firebase files are repository secrets
-  (`docs/android.md`), and a pull request from a fork never gets them.
+  Android release key is a secret of the `release` environment, the Firebase
+  files are repository secrets (`docs/android.md`), and a pull request from a
+  fork never gets either.
 - Keep to the style of the file you are in. Commit messages say what changed
   and why, in plain words.
 - If your change touches code that came from Mike, say so in the pull request.

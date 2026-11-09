@@ -240,7 +240,13 @@ export const movesPart = {
       if (rec.id !== row.threadId) throw new Error("The moved thread's record is for another thread.");
       if (rec.confined) throw new Error("A thread in a sandbox can't move yet.");
       const manifest = entries.find((e) => e.path === 'move.json');
-      if (manifest) placed.leftBehind.push(...((JSON.parse(manifest.data.toString('utf8')).leftBehind as string[]) ?? []));
+      if (manifest) {
+        const m = JSON.parse(manifest.data.toString('utf8')) as { leftBehind?: string[]; fromName?: unknown };
+        placed.leftBehind.push(...(m.leftBehind ?? []));
+        // A runner on its own key doesn't hear the other runners' names, so
+        // the old one says its own (the note read "Moved from 7928812d92c1").
+        if (placed.fromName === row.from && typeof m.fromName === 'string' && m.fromName.trim()) placed.fromName = m.fromName.trim().slice(0, 80);
+      }
       const schedules = entries.find((e) => e.path === 'schedules.json');
       if (schedules) placed.schedules = JSON.parse(schedules.data.toString('utf8')) as unknown[];
       if (plan.clone) await clone(plan.clone.url, plan.clone.to);

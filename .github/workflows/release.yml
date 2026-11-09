@@ -148,9 +148,11 @@ jobs:
       contents: read
 
   # The Android app (docs/android.md), a release APK. It goes on the release
-  # only when it was signed with the release key (the ANDROID_KEYSTORE_*
-  # secrets): a key made for the run would give a phone an app it could not
-  # update. Without the secrets the build still runs, as a check, and the
+  # only when it was signed with the release key: a key made for the run would
+  # give a phone an app it could not update. The key is the ANDROID_KEYSTORE_*
+  # secrets of the `release` environment, which android.yml's own signing job
+  # reads (a job that uses a workflow cannot name an environment, so they are
+  # not passed in here). Without them the build still runs, as a check, and the
   # release has no APK.
   build-android:
     needs: [ci-validation, meta]
@@ -158,10 +160,6 @@ jobs:
     with:
       version: ${{ needs.meta.outputs.version }}
     secrets:
-      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       # The Firebase project the app gets notifications through. Not the
       # service account that sends one to the emulator: that check runs on
       # changes to the app, and a release does not wait on Firebase's delivery.

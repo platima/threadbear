@@ -1,7 +1,9 @@
+"use node";
 // How a notification is sealed for a phone, apart from push.ts (which needs
 // Convex) so the runner's unit tests can check it against what the phones
 // open: runner/test/unit/android-push.test.ts, ios/NotificationService and
-// android/plugins/push (PushSeal.kt).
+// an Android app's PushSeal. "use node" as it needs node:crypto, so only
+// push.ts (Node too) may import it.
 import { createCipheriv, randomBytes } from 'node:crypto';
 
 // AES-256-GCM with the phone's own key, as the app's notification extension

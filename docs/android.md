@@ -50,18 +50,27 @@ and open it (Android asks to allow installs from that app, once).
 It is a release build, signed by `android/scripts/sign-apk.sh`:
 
 - **With the release key** (the four secrets below), every build has the same
-  signature, so a phone takes each one as an update of the last.
-- **Without it**, with a key made for that run: enough to install it once, but
-  the next build has another key, so the phone has to remove the app first.
-  A release (`release.yml`) leaves such an APK off, and says so in its log.
+  signature, so a phone takes each one as an update of the last. Only a
+  release tag, and a rehearsal started by hand from `main`, are signed with
+  it: the signing job runs in the repository's `release` environment, which
+  holds the key and lets only those refs in.
+- **Without it**, with a key made for that run (every push to a branch, and a
+  pull request): enough to install it once, but the next build has another
+  key, so the phone has to remove the app first. A release (`release.yml`)
+  leaves such an APK off, and says so in its log.
 
 To make the release key, once, and keep the file somewhere safe (lose it and
 nobody can update the app without removing it):
 
     keytool -genkeypair -v -keystore threadbear-release.jks -alias threadbear -keyalg RSA -keysize 4096 -validity 10000
 
-Then add four secrets to the repository (Settings, Secrets and variables,
-Actions, **Secrets**, not variables): `ANDROID_KEYSTORE_BASE64` (the file,
+First limit the `release` environment to the refs that may use it (Settings,
+Environments, `release`, Deployment branches and tags, **Selected branches and
+tags**: the branch `main` and the tag pattern `v*`). A newly made environment
+lets every branch and tag in, so without this a workflow on any branch could
+name `release` and read the key. Only then add four secrets to it
+(**Environment secrets** on the same page; not the repository's own secrets,
+which any workflow on any branch can read): `ANDROID_KEYSTORE_BASE64` (the file,
 base64 on one line: `base64 -w0 threadbear-release.jks`, or in PowerShell
 `[Convert]::ToBase64String([IO.File]::ReadAllBytes("threadbear-release.jks"))`),
 `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`threadbear` above) and
