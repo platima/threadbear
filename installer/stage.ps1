@@ -171,6 +171,29 @@ if (-not (Test-Path $ws)) { throw "desktop/node_modules/ws is missing. Run npm c
 New-Item -ItemType Directory -Force (Join-Path $desk "node_modules") | Out-Null
 Copy-Item $ws (Join-Path $desk "node_modules\ws") -Recurse
 
+# The Terminal's pseudo-terminal (bridge/terminal.ts): @lydell/node-pty, a few files of
+# JavaScript, and one package for the platform with the prebuilt addon, ConPTY's conpty.dll
+# and OpenConsole.exe (Microsoft's, MIT). desktop/node_modules has this build machine's
+# platform only, so, as for the runner, npm installs the target's (--os/--cpu) from the
+# lockfile, checked against its hashes, in a folder of its own. Nothing is compiled and no
+# install script runs.
+$ptyWork = Join-Path ([System.IO.Path]::GetTempPath()) "threadbear-pty-$Arch-$PID"
+New-Item -ItemType Directory -Force $ptyWork | Out-Null
+try {
+    foreach ($f in "package.json", "package-lock.json") { Copy-Item (Join-Path $repo "desktop\$f") (Join-Path $ptyWork $f) }
+    Push-Location $ptyWork
+    try {
+        Invoke-Native "npm ci (desktop, for the terminal)" { npm ci --omit=dev --ignore-scripts --no-audit --no-fund --os=win32 --cpu=$npmCpu }
+    } finally { Pop-Location }
+    $ptyPackage = Join-Path $ptyWork "node_modules\@lydell\node-pty-win32-$npmCpu"
+    if (-not (Test-Path (Join-Path $ptyPackage "prebuilds\win32-$npmCpu\conpty.node"))) { throw "The terminal's @lydell/node-pty-win32-$npmCpu package did not install, so the Terminal would not work. Is it in desktop/package-lock.json?" }
+    Copy-Item (Join-Path $ptyWork "node_modules\@lydell") (Join-Path $desk "node_modules\@lydell") -Recurse
+} finally {
+    Remove-Item $ptyWork -Recurse -Force -ErrorAction SilentlyContinue
+}
+# Debug symbols are not read at run time (a third of the package).
+Get-ChildItem (Join-Path $desk "node_modules\@lydell") -Recurse -File -Filter *.pdb | Remove-Item -Force
+
 # --- The docs the runner points agents at, licence, readmes ---
 # guideLine() and patchesLine() (runner/src/threadbear-mcp.ts) look for
 # <root>/docs/guide.md and <root>/docs/protocol.md, and tell the agent the rest

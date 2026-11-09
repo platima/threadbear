@@ -8,7 +8,9 @@ import { Rail } from './Rail.tsx';
 import { Shortcuts } from './Shortcuts.tsx';
 import { TOUR_KEY, Tour } from './Tour.tsx';
 import { PAGES } from './registry.ts';
+import { TerminalDock } from './TerminalDock.tsx';
 import { isNative, startRunner } from '../core/native.ts';
+import { targetFor, terminals } from '../core/terminals.ts';
 import { runUpdateCheck } from './update-state.ts';
 
 export function useSnap(store: AppStore) {
@@ -21,6 +23,17 @@ const saved = (): string | null => {
     return localStorage.getItem(WIDTH_KEY);
   } catch {
     return null;
+  }
+};
+
+// Whether the Terminal under the thread is showing. A shell never starts from this being on
+// at launch: it starts when the person opens the panel or asks for one in it.
+const TERMINAL_KEY = 'threadbear.terminalOpen';
+const savedTerminal = (): boolean => {
+  try {
+    return localStorage.getItem(TERMINAL_KEY) === '1';
+  } catch {
+    return false;
   }
 };
 
@@ -41,6 +54,32 @@ export function App({ store }: { store: AppStore }) {
     setStartProblem(problem);
   };
   const [tour, setTour] = useState(false);
+  // The Terminal: its panel under the page, and a counter that asks the screen to take the keyboard.
+  const [term, setTerm] = useState(savedTerminal);
+  const [termFocus, setTermFocus] = useState(0);
+  const sessions = terminals();
+  const target = targetFor(snap.selected ? snap.threads.get(snap.selected) : undefined);
+  const showTerminal = (show: boolean) => {
+    setTerm(show);
+    try {
+      localStorage.setItem(TERMINAL_KEY, show ? '1' : '0');
+    } catch {
+      // not kept
+    }
+    // Opening it (Ctrl+J, the rail's button) is asking for a shell: the one already there, or a new one.
+    if (show) {
+      sessions.ensure(target.key, target.cwd);
+      setTermFocus((n) => n + 1);
+    }
+  };
+  const showTerminalRef = useRef(showTerminal);
+  showTerminalRef.current = showTerminal;
+  const termRef = useRef(term);
+  termRef.current = term;
+  // A thread archived or deleted takes its shell with it.
+  useEffect(() => {
+    sessions.reconcile(snap.threads, snap.listings > 0);
+  }, [sessions, snap.threads, snap.listings]);
   // The installed app asks once a day whether a newer release is out
   // (core/updates.ts); a page in an ordinary browser tab never does.
   useEffect(() => {
@@ -76,6 +115,11 @@ export function App({ store }: { store: AppStore }) {
         store.deselect();
       }
       if (e.key === 'Escape') setHelp(false);
+      // Ctrl+J (or Ctrl+backtick) shows or hides the Terminal. In the terminal itself it comes here too.
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key.toLowerCase() === 'j' || e.key === '`')) {
+        e.preventDefault();
+        showTerminalRef.current(!termRef.current);
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === '/') {
         e.preventDefault();
         setHelp((h) => !h);
@@ -116,7 +160,7 @@ export function App({ store }: { store: AppStore }) {
   const offline = snap.conn !== 'open';
   return (
     <div className="app" style={{ ['--side' as string]: `${page && !page.Sidebar ? 0 : width}px` }}>
-      <Rail route={page ? route : 'threads'} go={go} conn={snap.conn} help={() => setHelp(true)} snap={snap} />
+      <Rail route={page ? route : 'threads'} go={go} conn={snap.conn} help={() => setHelp(true)} snap={snap} terminal={term} toggleTerminal={() => showTerminal(!term)} />
       {page ? page.Sidebar ? <aside className="side"><page.Sidebar {...pageProps} /></aside> : <div /> : <Sidebar store={store} snap={snap} />}
       <div className="grip" onPointerDown={drag} />
       {help && <Shortcuts onClose={() => setHelp(false)} onTour={() => { setHelp(false); setTour(true); }} />}
@@ -143,6 +187,7 @@ export function App({ store }: { store: AppStore }) {
           </div>
         ))}
         {page ? <page.Main {...pageProps} /> : snap.selected ? <ThreadView store={store} snap={snap} /> : <NewThread store={store} snap={snap} />}
+        {term && <TerminalDock target={target} close={() => showTerminal(false)} focusTick={termFocus} />}
       </main>
     </div>
   );
