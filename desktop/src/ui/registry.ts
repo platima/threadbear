@@ -18,6 +18,11 @@ export type PageDef = {
   title: string; // the page's name
   hint?: string; // a sentence on what the page is for: the rail's tooltip, after the name
   icon: string; // one character or short symbol for the rail
+  // False leaves the page's button out of the rail (Connectors, with no gateway set up).
+  available?: (snap: Snapshot) => boolean;
+  // A dot on the page's rail button, and what its tooltip adds: the accent one for something
+  // that is the person's to do, a quiet one for trouble that usually mends itself.
+  signal?: (snap: Snapshot) => { dot: 'accent' | 'quiet'; tip: string } | undefined;
   order: number; // rail position, after Threads (0)
   // The list column beside the page, when it has one (a list of projects,
   // of schedules). Without one the page takes the whole width.

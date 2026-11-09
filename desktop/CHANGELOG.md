@@ -26,6 +26,8 @@ release stops before anything is published if it is missing.
 ### Added
 
 - The desktop app: threads, the transcript, the composer with pictures, asks and review cards, Projects, Schedules, Usage, Runners and Settings pages, Highlights, Actions, Agents and Files panes, a first-run tour, and the shortcuts sheet.
+- An Updates page, as the Mac app has an Updates panel: this app's version and whether a newer release is out, how the runner updates and whether threads are still finishing on a previous version, and Claude Code's updates, in one place.
+- A Connectors page, for a runner that has a Connectors gateway set up: the services your agents get from it, which need signing in, and buttons that open each sign-in page in your browser. The button is left out of the rail for a runner with no gateway, and gets a dot when a service needs you. The window never talks to the gateway; the runner does.
 - `Threadbear.exe --runner [--status | --start | --installed | --stop | --uninstall | --dry-run]` and `--quit`, for installers and for people who like a terminal. Their answers print to the terminal that ran them.
 - A launch key on the bridge between the window and the runner, so no other program on the PC can use it. The bridge keeps the same address between launches, so the app remembers its settings, and sends a content security policy, so a remote picture in a message shows as its description.
 - A check once a day for a newer release of the fork, shown as a link in the rail. It downloads nothing, and Settings, "This app", turns it off.

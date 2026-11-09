@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { Snapshot } from '../core/store.ts';
 import { PAGES, tip } from './registry.ts';
 import { useAvailableUpdate } from './update-state.ts';
 
@@ -20,7 +21,7 @@ apply(readTheme());
 
 // The strip down the left edge: Threads, then each page. The Updates page's button
 // carries a dot, and says so in its tooltip, while a newer release is out.
-export function Rail({ route, go, conn, help }: { route: string; go: (route: string) => void; conn: string; help: () => void }) {
+export function Rail({ route, go, conn, help, snap }: { route: string; go: (route: string) => void; conn: string; help: () => void; snap: Snapshot }) {
   const [theme, setTheme] = useState<Theme>(readTheme);
   const update = useAvailableUpdate();
   const cycle = () => {
@@ -33,9 +34,14 @@ export function Rail({ route, go, conn, help }: { route: string; go: (route: str
       // not kept
     }
   };
-  const items = [
-    { id: 'threads', title: 'Threads', hint: 'Your threads: the inbox, what is running, and what is hibernating or archived', icon: '☰', news: undefined as string | undefined },
-    ...PAGES.map((p) => ({ id: p.id, title: p.title, hint: p.hint, icon: p.icon, news: p.id === 'updates' && update ? `Version ${update.version} is out.` : undefined })),
+  type Item = { id: string; title: string; hint?: string; icon: string; dot?: 'accent' | 'quiet'; news?: string };
+  const items: Item[] = [
+    { id: 'threads', title: 'Threads', hint: 'Your threads: the inbox, what is running, and what is hibernating or archived', icon: '☰' },
+    ...PAGES.filter((p) => p.available?.(snap) ?? true).map((p): Item => {
+      // Updates: a dot while a newer release is out. Others say it themselves (Connectors).
+      const signal = p.id === 'updates' && update ? { dot: 'accent' as const, tip: `Version ${update.version} is out.` } : p.signal?.(snap);
+      return { id: p.id, title: p.title, hint: p.hint, icon: p.icon, dot: signal?.dot, news: signal?.tip };
+    }),
   ];
   return (
     <nav className="rail">
@@ -48,7 +54,7 @@ export function Rail({ route, go, conn, help }: { route: string; go: (route: str
           onClick={() => go(p.id)}
         >
           {p.icon}
-          {p.news && <span className="railBadge" aria-hidden="true" />}
+          {p.dot && <span className={`railBadge${p.dot === 'quiet' ? ' quiet' : ''}`} aria-hidden="true" />}
         </button>
       ))}
       <span className="grow" />

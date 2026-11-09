@@ -36,6 +36,26 @@ export type RunnerUpdates = {
   upstream?: UpstreamStatus;
 };
 
+// The Connectors gateway's services, as the runner reports them (docs/protocol.md,
+// "Connectors"). Written out here for the same reason as the update types above.
+export type ConnectorService = {
+  id: string;
+  title: string;
+  state: 'connected' | 'signed_out' | 'connecting' | 'error' | 'disabled' | 'unknown';
+  message?: string;
+  connectUrl?: string;
+};
+
+export type ConnectorsStatus = {
+  state: 'ok' | 'unreachable' | 'off' | 'checking';
+  url?: string;
+  checkedAt?: string;
+  error?: string;
+  version?: string;
+  release?: string;
+  services: ConnectorService[];
+};
+
 export type HelloResult = {
   runnerVersion: string;
   protocol: number;
