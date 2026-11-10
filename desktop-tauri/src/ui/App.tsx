@@ -9,8 +9,8 @@ import { Shortcuts } from './Shortcuts.tsx';
 import { TOUR_KEY, Tour } from './Tour.tsx';
 import { PAGES } from './registry.ts';
 import { TerminalDock } from './TerminalDock.tsx';
-import { isNative, startRunner, type RunnerWay } from '../core/native.ts';
-import { RUNNER_WAYS, runnerChoiceText, startClick } from '../core/runner-start.ts';
+import { isNative } from '../core/native.ts';
+import { RUNNER_WAYS, RunnerStart, runnerChoiceText, startButton } from '../core/runner-start.ts';
 import { targetFor, terminals } from '../core/terminals.ts';
 import { runUpdateCheck } from './update-state.ts';
 
@@ -42,59 +42,25 @@ export function App({ store }: { store: AppStore }) {
   const snap = useSnap(store);
   const [width, setWidth] = useState(() => clampWidth(readWidth(saved()), window.innerWidth));
   const [help, setHelp] = useState(false);
-  // The banner's Start the runner button: busy until the shell has started the runner (or has
-  // answered that none is set up), so a second click can't start it twice. With none set up, the
-  // banner offers the two ways to start one, in the page, where it can be seen. What went wrong
-  // is said beside the button.
-  const [starting, setStarting] = useState(false);
-  const [choosing, setChoosing] = useState(false);
-  const [startProblem, setStartProblem] = useState<string>();
-  // What the shell said it did ("Started the runner.", "The runner is already running."...), so a
-  // start that changed nothing is not silent: it stays until the connection comes up.
-  const [startNote, setStartNote] = useState<string>();
+  // The banner's Start the runner button (core/runner-start.ts): busy until the shell has started
+  // the runner (or has answered that none is set up), so a second click can't start it twice, and
+  // then busy again while the connection is brought up, so the button does not sit there saying
+  // Start beside "Started the runner." With none set up, the banner offers the two ways to start
+  // one, in the page, where it can be seen. What went wrong, or what the shell said it did, is
+  // said beside the button.
+  const [flow] = useState(() => new RunnerStart({ hurry: (ms) => store.rpc.retryNow(ms) }));
+  const start = useSyncExternalStore(flow.subscribe, flow.getSnapshot);
+  const button = startButton(start);
   // The connection has been closed since it was last open. The banner's button and choice are kept
   // for as long as the connection is down, through the "connecting" of each retry, and not torn down
   // and rebuilt on every one.
   const [sawClosed, setSawClosed] = useState(false);
-  // Which click's answer may still be shown. A connection that opens while the shell is still
-  // answering makes that answer stale (it would bring back the note, the error or the choice the
-  // open just cleared, and the next disconnect would show them), so opening moves this on and each
-  // click only shows its answer if it is still the current one.
-  const attempt = useRef(0);
   useEffect(() => {
     if (snap.conn === 'closed') setSawClosed(true);
-    if (snap.conn === 'open') {
-      // Connected, however it came about: nothing from the last click is still true.
-      attempt.current += 1;
-      setSawClosed(false);
-      setChoosing(false);
-      setStartProblem(undefined);
-      setStartNote(undefined);
-    }
-  }, [snap.conn]);
-  const start = async (way?: RunnerWay) => {
-    const mine = ++attempt.current;
-    setStarting(true);
-    setChoosing(false);
-    setStartProblem(undefined);
-    setStartNote(undefined);
-    if (way) {
-      const answer = await startRunner(way);
-      setStarting(false);
-      if (mine !== attempt.current) return;
-      setStartProblem(answer.problem);
-      setStartNote(answer.note);
-      return;
-    }
-    const clicked = await startClick();
-    setStarting(false);
-    if (mine !== attempt.current) return;
-    if (clicked.kind === 'choose') setChoosing(true);
-    else {
-      setStartProblem(clicked.problem);
-      setStartNote(clicked.note);
-    }
-  };
+    if (snap.conn === 'open') setSawClosed(false);
+    flow.connection(snap.conn);
+  }, [flow, snap.conn]);
+  useEffect(() => () => flow.stop(), [flow]);
   const [tour, setTour] = useState(false);
   // The Terminal: its panel under the page, and a counter that asks the screen to take the keyboard.
   const [term, setTerm] = useState(savedTerminal);
@@ -209,28 +175,35 @@ export function App({ store }: { store: AppStore }) {
       {tour && <Tour store={store} snap={snap} close={() => setTour(false)} />}
       <main className="main">
         {offline && (
-          <div className={snap.conn === 'closed' ? 'banner bad' : 'banner'}>
-            {snap.conn === 'connecting' ? 'Connecting to the runner...' : `Not connected to the runner${snap.connWhy ? `: ${snap.connWhy}` : ''}. Trying again.`}
-            {snap.conn === 'closed' && !startNote && /^no runner token/i.test(snap.connWhy ?? '') && " That means the runner isn't running, so there is nothing to connect to."}
-            {(snap.conn === 'closed' || sawClosed) && isNative() && (
+          <div className={snap.conn === 'closed' && !start.waiting ? 'banner bad' : 'banner'}>
+            {/* Waiting: the runner has been started, so the banner says that and not that it is
+                down. The shell's own line leads, and the button says what is being waited for. */}
+            {start.waiting
+              ? <span role="status">{start.note}</span>
+              : snap.conn === 'connecting'
+                ? 'Connecting to the runner...'
+                : `Not connected to the runner${snap.connWhy ? `: ${snap.connWhy}` : ''}. Trying again.`}
+            {snap.conn === 'closed' && !start.note && !start.waiting && /^no runner token/i.test(snap.connWhy ?? '') && " That means the runner isn't running, so there is nothing to connect to."}
+            {(snap.conn === 'closed' || sawClosed || start.waiting) && isNative() && (
               <>
                 {' '}
-                <button className="ghost" disabled={starting} aria-busy={starting} onClick={() => void start()} title={starting ? 'Working on it: waiting for the runner to start' : 'Start the runner, or choose how it should start if none is set up'}>
-                  {starting ? 'Starting...' : 'Start the runner'}
+                <button className="ghost" disabled={button.busy} aria-busy={button.busy} onClick={() => void flow.click()} title={button.tip}>
+                  {button.busy && <span className="spin" aria-hidden="true" />}
+                  {button.label}
                 </button>
-                {startNote && <span className="note" role="status"> {startNote}</span>}
-                {startProblem && <span className="error" role="alert"> {startProblem}</span>}
+                {!start.waiting && start.note && <span className="note" role="status"> {start.note}</span>}
+                {start.problem && <span className="error" role="alert"> {start.problem}</span>}
               </>
             )}
-            {offline && isNative() && choosing && (
+            {offline && isNative() && start.choosing && (
               <div className="runnerChoice">
                 <p>{runnerChoiceText()}</p>
                 {RUNNER_WAYS.map((w) => (
-                  <button key={w.way} className="ghost" disabled={starting} onClick={() => void start(w.way)} title={w.tip}>
+                  <button key={w.way} className="ghost" disabled={start.starting} onClick={() => void flow.choose(w.way)} title={w.tip}>
                     {w.label}
                   </button>
                 ))}
-                <button className="ghost" onClick={() => setChoosing(false)} title="Close this without setting up a runner">
+                <button className="ghost" onClick={() => flow.dismissChoice()} title="Close this without setting up a runner">
                   Not now
                 </button>
               </div>
