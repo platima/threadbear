@@ -96,30 +96,39 @@ the launcher, sends it a `threadbear://pair` link and keeps the screenshots
 and log (`threadbear-android-emulator`). It then opens the first screen again and
 taps "Scan the code". That shows the app starts, takes a link and gets as far as
 Google's scanner; it is not a phone with a camera or a notification shade. The
-emulator cannot download the scanner's module, so the tap ends at Google's "still
-getting its scanner ready" there. The step waits for that answer (or Google's own
-scanner screen) and fails if the app broke before it (below), crashed, or never
-got one, so a button that is still on "Scanning..." does not pass.
+emulator cannot download the scanner's module, so Google answers that the scanner is
+unavailable and the tap ends at the app's "still getting its scanner ready" line
+there. The step waits for that answer (or Google's own scanner screen) and fails if
+the app broke before it (below), crashed, or never got one, so a button that is
+still on "Scanning..." does not pass.
 
 ### When Scan the code fails
 
-The red line under the button is one of two kinds:
+The red line under the button is one of three kinds. The words are this app's
+(`scanFailure` and `scanBroke` in `PushPlugin.kt`): Google supplies an error code, and
+the app chooses the line for it.
 
-- **Google's own words** ("Google is still getting its scanner ready", "needs
-  updating", no camera permission for Google Play services). The scanner was reached
-  and said no; each says what to do, and the paste box still works.
+- **A line for a code the app knows**: "Google is still getting its scanner ready",
+  "Google Play services needs updating before it can scan", or no camera permission
+  for Google Play services. The scanner was reached and said no; each line says what
+  to do, and the paste box still works.
+- **"The scanner could not open (...)"**: Google gave a code the app has no line for,
+  so the line carries the message that came with the code.
 - **"The scanner could not start (NullPointerException at Class.method (File:line))"**,
   or "could not read the code": something inside the app broke before or after the
-  scanner, and the line names the exception's class and the first frame that is not
-  Android's or Kotlin's. A release build renames most of those, so the line is for
-  finding the place in the log. With the phone on USB debugging,
-  `adb logcat -s ThreadbearPush:W` shows the whole trace and the thread it ran on,
-  and `adb logcat -s ComponentDiscovery:W` any part of ML Kit or Firebase that could
-  not start at launch.
+  scanner. The brackets name the exception's class and the first frame that is not
+  Android's or Kotlin's, to send on with a bug report. A release build renames most
+  of those, so they are for finding the place in the log. With the phone on USB
+  debugging, `adb logcat -s ThreadbearPush:W` shows the whole trace and the thread
+  it ran on, and `adb logcat -s ComponentDiscovery:W` any part of ML Kit or Firebase
+  that could not start at launch.
 
-The failure a real phone showed with rc.4 was the second kind, before the app put it
-in words: "Attempt to invoke virtual method 'java.lang.Class java.lang.Object.getClass()'
-on a null object reference". The release build's shrinker (R8) had removed the empty constructors of the classes
+If nothing comes back for five minutes, the page says the scanner did not answer.
+
+A phone running rc.4 showed none of these, because the app then passed the
+exception's own message straight to the page: "Attempt to invoke virtual method
+'java.lang.Class java.lang.Object.getClass()' on a null object reference". The
+release build's shrinker (R8) had removed the empty constructors of the classes that
 ML Kit and Firebase find by name at start-up, so ML Kit had none of its parts and
 Google's code threw a null error when the scanner was made. The plugin's
 `consumer-rules.pro` keeps them, and the emulator step fails if any part of ML Kit

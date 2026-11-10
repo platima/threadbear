@@ -416,8 +416,8 @@ jobs:
       # and neither the build nor the checks above ever tapped it. The emulator cannot
       # download the scanner's module (Google's log says the request failed and is
       # retried), so the scanner answers "still getting its scanner ready": what is
-      # checked is that the app gets as far as that answer, in Google's words, and that
-      # nothing in the app's own start-up was left unable to start.
+      # checked is that the app gets as far as that answer (Google's code for it, in the
+      # app's words), and that nothing in the app's own start-up was left unable to start.
       - name: Scan the code is tapped
         timeout-minutes: 10
         run: |
@@ -425,6 +425,15 @@ jobs:
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
           pkg=com.tinkerware.threadbear
           adb logcat -c
+          # The log as the app wrote it holds the copy's Firebase token, which is no use
+          # without the project's key but is not for an artifact either. It is kept here,
+          # outside what is uploaded, and shots/ only ever gets the copy with the token
+          # taken out, whenever the step ends.
+          raw="${RUNNER_TEMP:-/tmp}/threadbear-logcat-scan-raw.txt"
+          take_log() {
+            adb logcat -d > "$raw"
+            sed 's/test token .*/test token (removed)/' "$raw" > shots/logcat-scan.txt
+          }
           # From the launcher again, so it is the first screen (the pairing link above was
           # never accepted)
           adb shell am force-stop "$pkg"
@@ -455,7 +464,7 @@ jobs:
           for i in $(seq 1 18); do
             sleep 5
             adb exec-out uiautomator dump /dev/tty > shots/3-scan-after.xml || true
-            adb logcat -d > shots/logcat-scan.txt
+            take_log
             if grep -q 'ThreadbearPush: the code scanner failed to ' shots/logcat-scan.txt || grep -qE 'The scanner could not start|Attempt to invoke virtual method' shots/3-scan-after.xml; then reached=app-failure; break; fi
             if grep -q 'ThreadbearPush: the code scanner failed: ' shots/logcat-scan.txt; then reached=google-answered; break; fi
             if grep -q 'package="com.google.android.gms"' shots/3-scan-after.xml && ! grep -q 'package="com.tinkerware.threadbear"' shots/3-scan-after.xml; then reached=google-screen; break; fi
@@ -470,9 +479,7 @@ jobs:
             done
           fi
           adb exec-out screencap -p > shots/3-scan-after.png
-          adb logcat -d > shots/logcat-scan.txt
-          # The copy built for the check logs its Firebase token: not for an artifact
-          sed -i 's/test token .*/test token (removed)/' shots/logcat-scan.txt
+          take_log
           echo "--- what the screen says now:"
           grep -o 'text="[^"]\+"' shots/3-scan-after.xml | head -30 || true
           echo "--- the app's lines, and Google's, about the scanner:"
@@ -496,8 +503,8 @@ jobs:
             grep -A 20 'FATAL EXCEPTION' shots/logcat-scan.txt | head -60
             failed=1
           fi
-          # The scanner failing inside the app, not in Google's own words (its codes are the
-          # app's scanFailure)
+          # The scanner failing inside the app, before Google gave a code (the app's own catch,
+          # scanBroke in PushPlugin.kt)
           if [ "$reached" = app-failure ]; then
             echo "::error::Scan the code failed inside the app, before reaching Google's scanner. Its lines are above"
             failed=1

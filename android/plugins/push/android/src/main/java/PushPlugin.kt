@@ -99,10 +99,10 @@ class PushPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(answer)
     }
 
-    // Why the scanner did not open, in words for the person, by Google's own codes: the
-    // first scan on an APK installed by hand is likely to find Play services still
-    // fetching the scanner's module, and "needs Google Play services" would be the wrong
-    // thing to tell a phone that has them.
+    // Why the scanner did not open, in words for the person, chosen by the error code Google
+    // gives (the words are ours, Google supplies only the code): the first scan on an APK
+    // installed by hand is likely to find Play services still fetching the scanner's module,
+    // and "needs Google Play services" would be the wrong thing to tell a phone that has them.
     private fun scanFailure(e: Exception): String {
         val code = (e as? MlKitException)?.errorCode
         return when (code) {
