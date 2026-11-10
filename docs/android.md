@@ -37,6 +37,19 @@ particular. It is told which one to talk to by the link that pairs it:
   fetching and says to wait a minute and try again. What it reads goes through the same
   check as a pasted link, so a code that is not a pairing (a Wi-Fi code, a menu)
   offers nothing. Backing out, or a phone without Play services, leaves the paste box.
+  When it cannot open, the red line says why in words ("Google is still getting its
+  scanner ready", "needs updating"), or, if something inside the app broke before Google's
+  scanner was reached, "The scanner could not start (NullPointerException at Class.method
+  (File:line))", the exception's class and the first frame that is not Android's or
+  Kotlin's. A release build has renamed most of those, so the line is for finding the
+  place in the log: with the phone on USB debugging, `adb logcat -s ThreadbearPush:W`
+  shows the whole trace of the failure, and `adb logcat -s ComponentDiscovery:W` any
+  part of ML Kit or Firebase that could not start. Either way the paste box still works.
+  The release build's shrinker (R8) once removed the constructors ML Kit starts itself
+  from by name, which left the scanner with a null inside it
+  ("Attempt to invoke virtual method ... getClass() on a null object reference"):
+  `android/plugins/push/android/consumer-rules.pro` keeps them, and the emulator check
+  taps the button to see it open.
 - **Or paste** that link, or the website's sign-in link, into the app's first
   screen (`web/src/pair.tsx`).
 
@@ -92,8 +105,11 @@ base64 on one line: `base64 -w0 threadbear-release.jks`, or in PowerShell
 A second job in the same workflow runs the release build on an Android 14
 emulator (x86_64, with KVM) on every change: it installs the APK, opens it from
 the launcher, sends it a `threadbear://pair` link and keeps the screenshots
-and log (`threadbear-android-emulator`). That shows the app starts and takes a
-link; it is not a phone with a camera or a notification shade.
+and log (`threadbear-android-emulator`). It then opens the first screen again and
+taps "Scan the code", and fails if the app's start-up reports a part that could not
+start or the scanner answers with a failure inside the app. That shows the app starts, takes
+a link and reaches Google's scanner; it is not a phone with a camera or a notification
+shade.
 
 To build it yourself you need Android Studio (for the SDK, an NDK and a JDK),
 Rust with the Android targets (`rustup target add aarch64-linux-android

@@ -447,15 +447,38 @@ jobs:
           adb exec-out screencap -p > shots/3-scan-after.png
           adb exec-out uiautomator dump /dev/tty > shots/3-scan-after.xml || true
           adb logcat -d > shots/logcat-scan.txt
+          # The copy built for the check logs its Firebase token: not for an artifact
+          sed -i 's/test token .*/test token (removed)/' shots/logcat-scan.txt
           echo "--- what the screen says now:"
           grep -o 'text="[^"]\+"' shots/3-scan-after.xml | head -30 || true
           echo "--- the app's lines, and Google's, about the scanner:"
-          grep -E 'ThreadbearPush|AndroidRuntime|FATAL|ComponentDiscovery|Invalid component|MlKit|codescanner|barcode' shots/logcat-scan.txt | cut -c1-320 | head -100 || true
+          grep -E 'ThreadbearPush|FATAL EXCEPTION|Could not instantiate|Invalid component|codescanner' shots/logcat-scan.txt | cut -c1-320 | head -80 || true
           echo "---"
           # Away from the scanner (if it opened) and the app
           adb shell input keyevent KEYCODE_BACK || true
           sleep 2
           adb shell am force-stop "$pkg"
+          failed=0
+          # ML Kit and Firebase start from classes found by name, which the release build's
+          # shrinker removes the constructors of unless told not to
+          if grep -q 'Invalid component registrar' shots/logcat-scan.txt; then
+            echo "::error::A part of ML Kit or Firebase could not start (Invalid component registrar): the release build's shrinker removed what starts it. See android/plugins/push/android/consumer-rules.pro"
+            failed=1
+          fi
+          # The scanner failing inside the app, not in Google's own words (its codes are the
+          # app's scanFailure)
+          if grep -qE 'Attempt to invoke virtual method|The scanner could not start' shots/3-scan-after.xml || grep -q 'ThreadbearPush: the code scanner failed to' shots/logcat-scan.txt; then
+            echo "::error::Scan the code failed inside the app, before reaching Google's scanner. Its lines are above"
+            failed=1
+          fi
+          # The tap did something: the screen, below the status bar's clock, is not the one it was
+          convert shots/3-scan-before.png -crop 1080x2000+0+200 +repage shots/3-before-below-clock.png
+          convert shots/3-scan-after.png -crop 1080x2000+0+200 +repage shots/3-after-below-clock.png
+          if cmp -s shots/3-before-below-clock.png shots/3-after-below-clock.png; then
+            echo "::error::Tapping Scan the code changed nothing on the screen"
+            failed=1
+          fi
+          [ "$failed" = 0 ]
       # The notification a thread that needs the person becomes, end to end but
       # for the backend: sealed with the app's key as the backend seals it, sent
       # through Firebase with the service account (as the relay does), to an
