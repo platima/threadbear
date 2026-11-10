@@ -88,9 +88,22 @@ export type StartView = {
 // What the banner's button says for a view: the same button for all three, but disabled and busy
 // while the shell is working or the runner is being waited for.
 export function startButton(view: Pick<StartView, 'starting' | 'waiting'>): { label: string; busy: boolean; tip: string } {
-  if (view.waiting) return { label: 'Waiting for the runner to answer...', busy: true, tip: 'The runner was started. Threadbear is trying to reach it, which takes a few seconds, and this goes away when it does' };
+  // The tip does not say the runner was started: the shell may only have found it running.
+  if (view.waiting) return { label: 'Waiting for the runner to answer...', busy: true, tip: 'Threadbear is trying to reach the runner, which takes a few seconds, and this goes away when it does' };
   if (view.starting) return { label: 'Starting...', busy: true, tip: 'Working on it: waiting for the runner to start' };
   return { label: 'Start the runner', busy: false, tip: 'Start the runner, or choose how it should start if none is set up' };
+}
+
+// What a close for want of a runner token comes to, said after the banner's own words: the runner
+// never wrote its token, so it is not running. Only while nothing else has told what happened,
+// whether that is a note from the shell, the wait for the runner, or an account of a start that
+// did not end well (`problem`, which includes the one after the wait ran out). Two accounts of
+// one thing can disagree.
+const NO_TOKEN_HINT = " That means the runner isn't running, so there is nothing to connect to.";
+
+export function noTokenHint(conn: ConnState, why: string | undefined, view: Pick<StartView, 'note' | 'problem' | 'waiting'>): string | undefined {
+  if (conn !== 'closed' || !/^no runner token/i.test(why ?? '')) return undefined;
+  return view.note || view.problem || view.waiting ? undefined : NO_TOKEN_HINT;
 }
 
 const IDLE: StartView = { starting: false, choosing: false, waiting: false };

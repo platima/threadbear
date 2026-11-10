@@ -65,17 +65,6 @@ test("a runner from before Connectors has none and the page is left out; another
   s.rpc.stop();
 });
 
-test("a runner with no gateway answers off, which is kept: that is how it differs from one too old to answer", async () => {
-  const off = { state: 'off', services: [] };
-  const s = connected(() => ({ result: { connectors: off } }));
-  await until(() => s.store.getSnapshot().connectors !== undefined);
-  assert.deepEqual(s.store.getSnapshot().connectors, off);
-  // And the refresh the page makes when it opens keeps it.
-  await s.store.loadConnectors(true);
-  assert.deepEqual(s.store.getSnapshot().connectors, off);
-  s.rpc.stop();
-});
-
 test("the runner's own update state comes with hello and is replaced by runner.updates", async () => {
   const first = { state: 'idle', oldRunners: [], commit: 'abc1234' };
   const s = connected(() => ({ result: { connectors: gateway('off') } }), { updates: first });

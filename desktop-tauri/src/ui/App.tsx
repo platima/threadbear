@@ -10,7 +10,7 @@ import { TOUR_KEY, Tour } from './Tour.tsx';
 import { PAGES } from './registry.ts';
 import { TerminalDock } from './TerminalDock.tsx';
 import { isNative } from '../core/native.ts';
-import { RUNNER_WAYS, RunnerStart, runnerChoiceText, startButton } from '../core/runner-start.ts';
+import { RUNNER_WAYS, RunnerStart, noTokenHint, runnerChoiceText, startButton } from '../core/runner-start.ts';
 import { targetFor, terminals } from '../core/terminals.ts';
 import { runUpdateCheck } from './update-state.ts';
 
@@ -183,7 +183,7 @@ export function App({ store }: { store: AppStore }) {
               : snap.conn === 'connecting'
                 ? 'Connecting to the runner...'
                 : `Not connected to the runner${snap.connWhy ? `: ${snap.connWhy}` : ''}. Trying again.`}
-            {snap.conn === 'closed' && !start.note && !start.waiting && /^no runner token/i.test(snap.connWhy ?? '') && " That means the runner isn't running, so there is nothing to connect to."}
+            {noTokenHint(snap.conn, snap.connWhy, start)}
             {(snap.conn === 'closed' || sawClosed || start.waiting) && isNative() && (
               <>
                 {' '}

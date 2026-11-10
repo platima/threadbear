@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, mock, test } from 'node:test';
 import { shellSilent, type StartAnswer } from './native.ts';
-import { RUNNER_WAYS, RunnerStart, START_WAIT_MS, notReachedText, runnerChoiceText, startButton, startClick, startOutcome, type StartClick, type StartView } from './runner-start.ts';
+import { RUNNER_WAYS, RunnerStart, START_WAIT_MS, noTokenHint, notReachedText, runnerChoiceText, startButton, startClick, startOutcome, type StartClick, type StartView } from './runner-start.ts';
 
 type Call = { command: string; args?: Record<string, unknown> };
 
@@ -45,7 +45,7 @@ test('a runner that will not start comes back as the shell\'s words', async () =
 });
 
 test('when the shell will not say how the runner is set up, starting it is tried and its answer is given', async () => {
-  const s = shell('???', 'The task "Threadbear Runner (Owner)" is not installed.');
+  const s = shell('???', 'The task "Threadbear Runner (Sam)" is not installed.');
   const done = await startClick({ call: s.call });
   assert.equal(done.kind, 'done');
   assert.match((done as { problem?: string }).problem ?? '', /not installed/);
@@ -98,7 +98,7 @@ test("the shell's lines about a start: a start and a runner already running are 
   assert.equal(startOutcome('Something the script has not said before.'), 'started');
   assert.equal(startOutcome('The runner is already running.'), 'running');
   assert.equal(startOutcome('The runner task is turned off in Task Scheduler, so it was not started.'), 'nothing');
-  assert.equal(startOutcome('The runner task "Threadbear Runner (Owner)" is not installed, so nothing was started.'), 'nothing');
+  assert.equal(startOutcome('The runner task "Threadbear Runner (Sam)" is not installed, so nothing was started.'), 'nothing');
 });
 
 test('the button is the same one all the way through, disabled and busy while it works or waits', () => {
@@ -111,6 +111,24 @@ test('the button is the same one all the way through, disabled and busy while it
   // Waiting wins: the shell has answered by then, but the runner has not.
   assert.equal(startButton({ starting: true, waiting: true }).label, waiting.label);
   for (const b of [waiting, startButton({ starting: true, waiting: false }), startButton({ starting: false, waiting: false })]) assert.ok(b.tip.length > b.label.length, b.label);
+});
+
+test('the waiting button\'s tip does not claim the runner was started: the shell may only have found it running', () => {
+  assert.doesNotMatch(startButton({ starting: false, waiting: true }).tip, /was started/i);
+});
+
+test('the line for a missing runner token is said only while nothing else has said what happened', () => {
+  const idle = { waiting: false };
+  const why = 'no runner token (the runner has not written one yet)';
+  assert.match(noTokenHint('closed', why, idle) ?? '', /the runner isn't running/);
+  // Not for another reason, nor while the connection is trying again.
+  assert.equal(noTokenHint('closed', 'closed (1006)', idle), undefined);
+  assert.equal(noTokenHint('closed', undefined, idle), undefined);
+  assert.equal(noTokenHint('connecting', why, idle), undefined);
+  // Another account of the same thing is the only one: the shell's line, the wait, or a failure.
+  assert.equal(noTokenHint('closed', why, { waiting: false, note: 'The runner is already running.' }), undefined);
+  assert.equal(noTokenHint('closed', why, { waiting: true }), undefined);
+  assert.equal(noTokenHint('closed', why, { waiting: false, problem: 'The runner could not be started.' }), undefined);
 });
 
 test('the account of a runner that could not be reached says it started, that it keeps trying, and where shell.log is', () => {
@@ -203,6 +221,20 @@ describe('the banner after a click', () => {
     mock.timers.tick(60_000);
     assert.deepEqual(hurried, [START_WAIT_MS]);
     assert.deepEqual(clicks, ['click']);
+  });
+
+  test('the banner tells what happened once: the missing-token line is not brought back beside the account after the wait', async () => {
+    const why = 'no runner token (the runner has not written one yet)';
+    const { f } = flow(done(STARTED));
+    assert.ok(noTokenHint('closed', why, f.getSnapshot()), 'before any click, the line explains the close');
+    await f.click();
+    assert.equal(noTokenHint('closed', why, f.getSnapshot()), undefined, 'while waiting');
+    mock.timers.tick(START_WAIT_MS);
+    assert.match(f.getSnapshot().problem ?? '', /was started, but Threadbear cannot reach it/);
+    assert.equal(noTokenHint('closed', why, f.getSnapshot()), undefined, 'after the wait gave up');
+    // Once the connection has been up, the next close starts again with the line.
+    f.connection('open');
+    assert.ok(noTokenHint('closed', why, f.getSnapshot()));
   });
 
   test('a runner the shell says is already running, and still does not connect, ends the same way and says so', async () => {
