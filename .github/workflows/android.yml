@@ -444,9 +444,32 @@ jobs:
           done
           [ -n "$found" ] || echo "The button is not in the screen's text: tapping where it was on the first picture, $x,$y"
           adb shell input tap "$x" "$y"
-          sleep 10
+          # Wait for the scanner's answer, not for a change on the screen: the button says
+          # "Scanning..." at once, and the page waits minutes for the shell, so a screen that
+          # is different says nothing about whether Google's scanner was reached. What counts,
+          # in the order they are looked for (about 90 seconds at most):
+          #   app-failure      the app's own catch ("failed to start") or its words for a null error
+          #   google-answered  Google's failure listener ran, with one of its codes ("failed: ... 200")
+          #   google-screen    Google's own scanner screen is in front (a device that has the module)
+          reached=""
+          for i in $(seq 1 18); do
+            sleep 5
+            adb exec-out uiautomator dump /dev/tty > shots/3-scan-after.xml || true
+            adb logcat -d > shots/logcat-scan.txt
+            if grep -q 'ThreadbearPush: the code scanner failed to ' shots/logcat-scan.txt || grep -qE 'The scanner could not start|Attempt to invoke virtual method' shots/3-scan-after.xml; then reached=app-failure; break; fi
+            if grep -q 'ThreadbearPush: the code scanner failed: ' shots/logcat-scan.txt; then reached=google-answered; break; fi
+            if grep -q 'package="com.google.android.gms"' shots/3-scan-after.xml && ! grep -q 'package="com.tinkerware.threadbear"' shots/3-scan-after.xml; then reached=google-screen; break; fi
+          done
+          # Google answered: the page must have been told, and the button must be back (a page
+          # still on "Scanning..." was never given the answer)
+          if [ "$reached" = google-answered ]; then
+            for i in 1 2 3 4 5 6; do
+              adb exec-out uiautomator dump /dev/tty > shots/3-scan-after.xml || true
+              if grep -q 'text="Scan the code"' shots/3-scan-after.xml && ! grep -q 'text="Scanning' shots/3-scan-after.xml; then break; fi
+              sleep 5
+            done
+          fi
           adb exec-out screencap -p > shots/3-scan-after.png
-          adb exec-out uiautomator dump /dev/tty > shots/3-scan-after.xml || true
           adb logcat -d > shots/logcat-scan.txt
           # The copy built for the check logs its Firebase token: not for an artifact
           sed -i 's/test token .*/test token (removed)/' shots/logcat-scan.txt
@@ -466,17 +489,28 @@ jobs:
             echo "::error::A part of ML Kit or Firebase could not start (Invalid component registrar): the release build's shrinker removed what starts it. See android/plugins/push/android/consumer-rules.pro"
             failed=1
           fi
+          # The app crashing, whatever the scanner did: the same check as the launch step's, for
+          # this app's process only (another process's crash, such as uiautomator's, is not ours)
+          if grep -A 3 'FATAL EXCEPTION' shots/logcat-scan.txt | grep -q 'Process: com.tinkerware.threadbear'; then
+            echo "::error::The app crashed while Scan the code was tapped. Its lines:"
+            grep -A 20 'FATAL EXCEPTION' shots/logcat-scan.txt | head -60
+            failed=1
+          fi
           # The scanner failing inside the app, not in Google's own words (its codes are the
           # app's scanFailure)
-          if grep -qE 'Attempt to invoke virtual method|The scanner could not start' shots/3-scan-after.xml || grep -q 'ThreadbearPush: the code scanner failed to' shots/logcat-scan.txt; then
+          if [ "$reached" = app-failure ]; then
             echo "::error::Scan the code failed inside the app, before reaching Google's scanner. Its lines are above"
             failed=1
           fi
-          # The tap did something: the screen, below the status bar's clock, is not the one it was
-          convert shots/3-scan-before.png -crop 1080x2000+0+200 +repage shots/3-before-below-clock.png
-          convert shots/3-scan-after.png -crop 1080x2000+0+200 +repage shots/3-after-below-clock.png
-          if cmp -s shots/3-before-below-clock.png shots/3-after-below-clock.png; then
-            echo "::error::Tapping Scan the code changed nothing on the screen"
+          # Nothing came back at all: the button is still on "Scanning...", or the page and
+          # the log both stayed quiet
+          if [ -z "$reached" ]; then
+            echo "::error::Scan the code was tapped and neither Google's scanner nor its answer turned up in 90 seconds, so the scan command never answered"
+            failed=1
+          fi
+          # Google answered but the page was not told, or did not take it
+          if [ "$reached" = google-answered ] && { ! grep -q 'text="Scan the code"' shots/3-scan-after.xml || grep -q 'text="Scanning' shots/3-scan-after.xml; }; then
+            echo "::error::Google's scanner answered, but the page is still on Scanning... or has lost its button: the answer did not reach the page"
             failed=1
           fi
           [ "$failed" = 0 ]

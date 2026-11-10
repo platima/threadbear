@@ -97,8 +97,9 @@ and log (`threadbear-android-emulator`). It then opens the first screen again an
 taps "Scan the code". That shows the app starts, takes a link and gets as far as
 Google's scanner; it is not a phone with a camera or a notification shade. The
 emulator cannot download the scanner's module, so the tap ends at Google's "still
-getting its scanner ready" there, and the step fails only if the app broke before
-that (below).
+getting its scanner ready" there. The step waits for that answer (or Google's own
+scanner screen) and fails if the app broke before it (below), crashed, or never
+got one, so a button that is still on "Scanning..." does not pass.
 
 ### When Scan the code fails
 
