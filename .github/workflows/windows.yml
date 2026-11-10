@@ -173,3 +173,8 @@ jobs:
       - name: The shell compiles
         working-directory: desktop-tauri/src-tauri
         run: cargo check --locked
+      # The shell's own tests (lib.rs). Some start copies of Node, set up above, in a
+      # folder of the test's own as stand-ins for the bridge, and end them by handle.
+      - name: The shell's tests
+        working-directory: desktop-tauri/src-tauri
+        run: cargo test --locked

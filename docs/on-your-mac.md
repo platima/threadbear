@@ -486,7 +486,9 @@ said otherwise.
   `%APPDATA%\dev.threadbear.desktop`; the page's own storage is under
   `%LOCALAPPDATA%\dev.threadbear.desktop`, both Tauri's standard places). It
   starts `node desktop/bridge/bridge.ts` on a loopback port and stops it on
-  quitting; if the app is killed, the bridge notices and exits by itself. The
+  quitting, by closing its input (it ends itself, and the Terminal's shells
+  with it) and killing it if it has not gone after 3 seconds; if the app is
+  killed, the bridge notices and exits by itself. The
   page it shows may pick a folder, show a toast and open an `http`, `https` or
   `mailto` link in your browser, and nothing else (`capabilities/default.json`).
 - **The desktop bridge** (`desktop-tauri/bridge/bridge.ts`) listens on `127.0.0.1`
@@ -610,7 +612,10 @@ said otherwise.
   noted, one line each with the time in seconds since 1970, in
   `%LOCALAPPDATA%\Threadbear\shell.log` (`~/.local/state/Threadbear/shell.log`
   on Linux; it starts over past 200 KB and keeps the old one as
-  `shell.log.old`), with no text from the window.
+  `shell.log.old`), with no text from the window. The same file says which
+  Node the bridge was started with and the process ids of the bridge and the
+  shell, and, when the app quits, how the bridge ended and what was done about
+  an on-demand runner (the runner's stop is given 10 seconds).
   Each time the app opens with the task registered it runs `--runner --start`,
   so the runner comes back after an update. `Threadbear.exe --runner
   [--installed | --start | --stop | --status | --uninstall | --dry-run |
