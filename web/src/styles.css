@@ -427,6 +427,11 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .dock { padding: 6px 24px 18px; }
 .dock > * { max-width: 760px; margin-left: auto; margin-right: auto; }
 .box { background: var(--raised); border: 1px solid var(--line-strong); border-radius: 16px; overflow: hidden; }
+.recap { position: relative; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 14px; padding: 11px 38px 11px 14px; margin-bottom: 10px; font-size: 14px; line-height: 1.5; }
+.recap p { margin: 0; }
+.recap ul { margin: 5px 0; padding-left: 18px; }
+.recap .recap-when { color: var(--muted); font-size: 12.5px; }
+.recap-close { position: absolute; top: 7px; right: 7px; width: 26px; height: 26px; display: grid; place-items: center; border: 0; background: none; color: var(--muted); cursor: pointer; }
 .box.asking { border-color: var(--accent); }
 .card { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; }
 .card h2 { display: flex; align-items: center; gap: 7px; font-size: 14px; margin: 0; }

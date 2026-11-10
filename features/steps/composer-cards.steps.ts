@@ -12,6 +12,10 @@ function decisions(d: Dump): string[] {
   return (d as WithCard).decisions ?? [];
 }
 
+Then('the recap box says {string}', async function (this: ThreadbearWorld, line: string) {
+  await this.until(`the recap box saying "${line}"`, (d) => ((d.composer as { recap?: string[] | null }).recap ?? []).includes(line));
+});
+
 Then('the card in the composer says {string}', async function (this: ThreadbearWorld, heading: string) {
   await this.until(`the card saying "${heading}"`, (d) => cardLines(d)[0] === heading);
 });

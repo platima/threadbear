@@ -7,7 +7,7 @@ import { paths } from './config.ts';
 import type { WorktreeRecord } from './worktrees.ts';
 import type { WakeWhen } from './wake-when.ts';
 
-export type QueuedSend = { turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number };
+export type QueuedSend = { turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number; recapped?: true };
 
 // What thread.json holds: the public summary fields plus a few internal ones.
 export type ThreadRecord = {
@@ -159,7 +159,9 @@ export type ThreadRecord = {
   // event it had read up to. Brought up to date when a client asks.
   highlights?: HighlightState;
   highlightsAt?: string; // a pin, a removal or a new brief
-  brief?: { text: string; at: string }; // the librarian's line on where the thread is up to
+  // The librarian's note on where the thread is up to, and what it's for
+  // (purpose: since the recap box, so older notes have none).
+  brief?: { text: string; at: string; purpose?: string };
   // The thread's own git worktree (worktrees.ts), once it's made.
   worktree?: WorktreeRecord;
   // The done card's loose ends (runner/loose-ends.ts), for the card at seq.

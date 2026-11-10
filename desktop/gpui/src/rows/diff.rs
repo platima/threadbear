@@ -10,6 +10,8 @@ use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 use threadbear_core::reducer::{ChangedFiles, DiffBuilder, DiffDisplayLine, DiffLineKind, DiffPreview, EditDiff, PathDisplay, Row};
 
 /// `previewLines`: how many lines a diff opened short shows (a break between

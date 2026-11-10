@@ -356,6 +356,7 @@ export const MAX_RUNNER_KEYS = 3;
 const INDEX_READ_PER_RUNNER = 2_000;
 export const RUNNER_KEY_CAPS = {
   threadDoc: 8_192,
+  recap: 1_000, // the librarian's 200 + 600, with room for multi-byte text
   threadText: 1_000, // title, preview, cwd, working line, each
   threadsInView: 300, // per view the phone reads whole (inbox, hibernating)
   // A runner key's threads in all, every view (the M5 had 714 on 5 Nov,
@@ -374,7 +375,7 @@ export const RUNNER_KEY_CAPS = {
   bodyBytes: 32 * 1024 * 1024,
   bodyEvictPerWrite: 20,
   pushesPerMinute: 10,
-  indexRow: 2_048,
+  indexRow: 3_072, // with `recap` (1,000) next to the others' most
   indexRows: 800, // every row, tombstones too, archived ones too (API 54)
   // How many of its oldest rows a write past that looks through for an archived one to give way.
   indexEvictScan: 100,
@@ -452,6 +453,7 @@ function fitThread<T extends Record<string, any>>(t: T): T | undefined {
   // push every other Mac's threads off them.
   if (typeof out.lastActivityMs === 'number') out.lastActivityMs = Math.min(out.lastActivityMs, Date.now());
   for (const f of ['title', 'preview', 'cwd', 'working', 'asked']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], f === 'title' ? 300 : CAP.threadText);
+  if (typeof out.recap === 'string') out.recap = cutBytes(out.recap, CAP.recap);
   if (out.startedBy) out.startedBy = { ...out.startedBy, label: cutBytes(String(out.startedBy.label ?? ''), 100), ...(out.startedBy.why !== undefined ? { why: cutBytes(String(out.startedBy.why), 300) } : {}) };
   // The card waiting on Mike is cut, never dropped: the phone shows the
   // thread waiting, and its push goes, with shorter text.
@@ -517,6 +519,7 @@ function sameButtons(a: unknown[] | undefined, b: unknown[] | undefined): boolea
 function fitIndexRow<T extends Record<string, any>>(r: T): T | undefined {
   const out: Record<string, any> = { ...r };
   for (const f of ['title', 'preview', 'cwd', 'asked']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], 300);
+  if (typeof out.recap === 'string') out.recap = cutBytes(out.recap, CAP.recap);
   if (out.startedBy) out.startedBy = { ...out.startedBy, label: cutBytes(String(out.startedBy.label ?? ''), 100), ...(out.startedBy.why !== undefined ? { why: cutBytes(String(out.startedBy.why), 300) } : {}), ...(out.startedBy.threadTitle !== undefined ? { threadTitle: cutBytes(String(out.startedBy.threadTitle), 200) } : {}) };
   return docBytes(out) <= CAP.indexRow ? (out as T) : undefined;
 }
@@ -3058,6 +3061,7 @@ const indexDoc = v.object({
   starredAt: v.optional(v.string()),
   startedBy: v.optional(v.object({ kind: v.string(), label: v.string(), icon: v.optional(v.string()), threadTitle: v.optional(v.string()), why: v.optional(v.string()) })),
   asked: v.optional(v.string()), // since API 32
+  recap: v.optional(v.string()), // since API 70
 });
 
 // Rows made or changed, and threads gone. With `keep`, every row of the

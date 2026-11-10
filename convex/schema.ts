@@ -61,6 +61,8 @@ export const threadFields = {
   // What Mike last said to it, one line: the row's "You: ..."
   // (docs/protocol.md, "What Mike last asked"). Since API 31.
   asked: v.optional(v.string()),
+  // The librarian's recap: what it's for, then where it stands. Since API 70.
+  recap: v.optional(v.string()),
   archivedAt: v.optional(v.string()),
   // Mike starred it: the phone's Starred section. Since API 27.
   starredAt: v.optional(v.string()),
@@ -261,6 +263,7 @@ export default defineSchema({
     startedBy: v.optional(v.object({ kind: v.string(), label: v.string(), icon: v.optional(v.string()), threadTitle: v.optional(v.string()), why: v.optional(v.string()) })),
     // What Mike last said to it, one line: the Mac row's "You: ...". Since API 32.
     asked: v.optional(v.string()),
+    recap: v.optional(v.string()), // the recap box, since API 70
     // Since API 29: when the backend last wrote the row, so a watching
     // runner reads only rows changed since its last answer
     // (sync:threadIndexSince), and `deleted` marks a thread that's gone,

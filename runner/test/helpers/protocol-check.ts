@@ -319,7 +319,7 @@ export function checkSummary(t: Obj): string[] {
     'lastActivityAt', 'snoozedUntil', 'snoozedUntilRestart', 'snoozedUntilRelease', 'archivedAt', 'archivedBy', 'archiveVerdict', 'starredAt', 'preview', 'lastSeq', 'lastSeenSeq', 'nativeSessionId', 'contextTokens', 'costUsd',
     'poolId', 'waitingForRoom', 'waitingForNetwork', 'wakeWhen', 'waitingOn',
     'effort', 'modelInUse', 'effortInUse', 'contextWindow', 'panels', 'actions', 'hooks', 'patches', 'background', 'subagents', 'projects', 'worktree',
-    'needs', 'asks', 'asksSeq', 'highlightsAt', 'panelRequest', 'share', 'startedBy', 'asked', 'looseEnds',
+    'needs', 'asks', 'asksSeq', 'highlightsAt', 'panelRequest', 'share', 'startedBy', 'asked', 'recap', 'looseEnds',
   ]);
   for (const k of Object.keys(t)) if (!allowed.has(k)) problems.push(`unexpected field ${k}`);
   return problems;

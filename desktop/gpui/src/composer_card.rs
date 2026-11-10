@@ -12,6 +12,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
@@ -149,11 +151,9 @@ impl Composer {
         self.focus(window, cx);
     }
 
-    fn archive_thread(&self, cx: &mut Context<Self>) {
+    fn archive_thread(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(app) = self.app.upgrade() {
-            app.update(cx, |app, cx| {
-                let _ = app.archive_open(cx);
-            });
+            app.update(cx, |app, cx| app.toggle_archive(window, cx));
         }
     }
 
@@ -294,9 +294,9 @@ impl Composer {
                 .child(h_flex().gap(px(6.)).text_size(px(style::size::CARD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(Icon::from(IconName::Check).with_size(px(14.)).text_color(hsla(0.38, 0.65, 0.5, 1.))).child("Done"))
                 .child(card_button(("done-archive", 0usize), "Archive", ButtonLook::Plain, "Archive this thread", cx).on_click({
                     let this = this.clone();
-                    move |_, _, cx| {
+                    move |_, window, cx| {
                         if let Some(this) = this.upgrade() {
-                            this.update(cx, |this, cx| this.archive_thread(cx));
+                            this.update(cx, |this, cx| this.archive_thread(window, cx));
                         }
                     }
                 })),
@@ -622,7 +622,7 @@ impl Composer {
         self.sync_card(&card);
         let parts: Vec<&str> = action.split(':').collect();
         match parts.as_slice() {
-            ["archive"] => self.archive_thread(cx),
+            ["archive"] => self.archive_thread(window, cx),
             ["collapse"] => self.toggle_collapsed(window, cx),
             ["page", n] => self.set_page(n.parse().map_err(|_| "bad page")?, cx),
             ["next", n] => self.toggle_follow_up(n.parse().map_err(|_| "bad index")?, window, cx),

@@ -13,12 +13,14 @@ use crate::composer_chips::ModelPickerView;
 use crate::style;
 use crate::thread::ThreadPane;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::input::{Enter, InlineToken, InlineTokenContext, InlineTokenHoverEvent, InputContent, InputEvent, Textarea, TextareaState};
+use gpui_kit::component::input::{Enter, Escape, IndentInline, InlineToken, InlineTokenContext, InlineTokenHoverEvent, InputContent, InputEvent, MoveDown, MoveUp, Textarea, TextareaState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -27,6 +29,9 @@ use std::sync::Arc;
 use threadbear_client::runner::Client;
 use threadbear_core::composer::{self, BOX_MAX_LINES, BOX_MIN_LINES, PICTURE_MARK, PICTURE_MARK_STR};
 use threadbear_core::reducer::ImageRef;
+use threadbear_core::slash::{PaletteKey, PaletteState};
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// A picture in the box: the token that draws its chip, what it came from,
 /// and what the runner made of it (`media.import`).
@@ -67,6 +72,14 @@ pub struct Composer {
     /// What's picked on the open card, and how the card's showing.
     pub(crate) card: CardState,
     shown_placeholder: &'static str,
+    /// The slash palette's own state (`PaletteState`), and whether this
+    /// opening of it has asked for the thread's commands yet.
+    pub(crate) palette: PaletteState,
+    pub(crate) palette_asked: bool,
+    /// The palette's list, kept so the arrows can scroll the pick into sight.
+    pub(crate) palette_scroll: ScrollHandle,
+    /// The box's width at the last paint, for the palette's columns.
+    pub(crate) card_width: Rc<Cell<f32>>,
     _subs: Vec<Subscription>,
 }
 
@@ -93,8 +106,12 @@ impl Composer {
         let input = cx.new(|cx| TextareaState::new(window, cx).placeholder("Message").auto_grow(BOX_MIN_LINES, BOX_MAX_LINES).submit_on_enter(true));
         let sub = cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| match ev {
             InputEvent::PressEnter { shift: false, .. } => this.return_pressed(window, cx),
-            // The send button and the picture strip follow what's in the box.
-            InputEvent::Change => cx.notify(),
+            // The send button, the picture strip and the slash palette follow
+            // what's in the box.
+            InputEvent::Change => {
+                this.palette_text_changed(cx);
+                cx.notify();
+            }
             _ => {}
         });
         Composer {
@@ -114,12 +131,31 @@ impl Composer {
             model_picker: None,
             card: CardState::default(),
             shown_placeholder: "Message",
+            palette: PaletteState::default(),
+            palette_asked: false,
+            palette_scroll: ScrollHandle::new(),
+            card_width: Rc::new(Cell::new(style::MAX_CONTENT_WIDTH)),
             _subs: vec![sub],
         }
     }
 
     pub fn attach(&mut self, pane: WeakEntity<ThreadPane>) {
         self.pane = pane;
+    }
+
+    /// A new thread is on its way from this box (`AppModel.creatingThread`).
+    fn creating(&self, cx: &App) -> bool {
+        self.thread_id.is_none() && self.app.upgrade().is_some_and(|a| a.read(cx).new_thread.creating)
+    }
+
+    /// The thread exists: what was sent leaves the box, if it's still what
+    /// the box holds (it was locked while the runner made it).
+    pub(crate) fn clear_sent_draft(&mut self, stored: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.input.read(cx).value().as_ref() == stored {
+            self.input.update(cx, |s, cx| s.set_value("", window, cx));
+            self.pictures.clear();
+        }
+        cx.notify();
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
@@ -218,6 +254,9 @@ impl Composer {
     /// at the end of the transcript until the runner has it; it comes back
     /// if the runner doesn't take it.
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.thread_id.is_none() {
+            return self.send_new_thread(window, cx);
+        }
         let (draft_text, images) = self.draft(cx);
         // Pictures from the asks' boxes come first, numbered as the answers
         // say, then the box's own chips, whose markers go after them.
@@ -242,6 +281,20 @@ impl Composer {
         let restore = RestoreDraft { text: draft_text, images, card: picks };
         pane.update(cx, |p, cx| p.send_message(text, images_to_send, answers, Some(restore), composer, cx));
         cx.notify();
+    }
+
+    /// `AppModel.send(threadId: nil)`: the new-thread page's box. The words
+    /// stay (greyed, locked) until the thread exists; a failure leaves them.
+    fn send_new_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (draft_text, images) = self.draft(cx);
+        let text = composer::sent_text(&draft_text, 1).trim().to_string();
+        if text.is_empty() && images.is_empty() {
+            return;
+        }
+        let stored = self.input.read(cx).value().to_string();
+        if let Some(app) = self.app.upgrade() {
+            app.update(cx, |app, cx| app.send_new_thread(text, images, stored, window, cx));
+        }
     }
 
     fn saved_picks(&self) -> Option<SavedPicks> {
@@ -602,10 +655,20 @@ impl Composer {
         Some(row.into_any_element())
     }
 
-    fn render_send_button(&self, running: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_send_button(&self, running: bool, creating: bool, cx: &mut Context<Self>) -> AnyElement {
         let can_send = self.can_send(cx);
         let side = px(style::size::SEND_BUTTON);
         let circle = || div().flex().items_center().justify_center().size(side).rounded_full();
+        // The runner is making the thread: a spinner in the button's place
+        // until it has, however long a busy Mac makes that (SendButton).
+        if creating {
+            return circle()
+                .id("composer-starting")
+                .bg(style::send_faint_fill(cx))
+                .child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.)))
+                .tooltip(|window, cx| Tooltip::new("Starting the thread").build(window, cx))
+                .into_any_element();
+        }
         if running && !can_send && self.stopping {
             return circle()
                 .id("composer-stopping")
@@ -639,7 +702,7 @@ impl Composer {
 
     /// The text field, at the transcript's body size and line height so a
     /// message keeps its rhythm when it's sent (ComposerTextField).
-    fn render_text_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_text_field(&self, creating: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let this = cx.entity().downgrade();
         let paste_target = this.clone();
         let hover_target = this.clone();
@@ -647,8 +710,34 @@ impl Composer {
         let drop_target = this;
         div()
             .w_full()
+            // Greyed and locked while a new thread is being made from it.
+            .when(creating, |s| s.opacity(0.5))
             .capture_action(cx.listener(|this, action: &Enter, window, cx| {
                 if action.shift && this.shift_return(window, cx) {
+                    cx.stop_propagation();
+                } else if !action.shift && this.palette_key(PaletteKey::Enter, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            // The palette's keys, while it's open (ComposerView.paletteKey);
+            // otherwise the box has them as usual.
+            .capture_action(cx.listener(|this, _: &MoveUp, window, cx| {
+                if this.palette_key(PaletteKey::Up, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &MoveDown, window, cx| {
+                if this.palette_key(PaletteKey::Down, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
+                if this.palette_key(PaletteKey::Tab, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &Escape, window, cx| {
+                if this.palette_key(PaletteKey::Escape, window, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -661,6 +750,7 @@ impl Composer {
                 Textarea::new(&self.input)
                     .appearance(false)
                     .bordered(false)
+                    .disabled(creating)
                     .text_size(px(style::size::COMPOSER))
                     .line_height(px(style::size::BODY_LINE))
                     .token(move |ctx, _window, cx| match token_owner.upgrade() {
@@ -711,12 +801,15 @@ impl Render for Composer {
             self.stopping = false;
         }
         let strip = self.render_strip(cx);
-        let send_button = self.render_send_button(running, cx);
+        let creating = self.creating(cx);
+        let send_button = self.render_send_button(running, creating, cx);
         let controls = self.render_controls(send_button, window, cx);
         // The box: the open card over a line, then the message.
         let card = self.render_card(window, cx);
         let needs_you = self.open_card(cx).is_some_and(|c| !c.is_done());
-        let body = v_flex().w_full().gap(px(style::COMPOSER_GAP)).p(px(style::COMPOSER_PADDING)).when_some(strip, |s, strip| s.child(strip)).child(self.render_text_field(cx)).child(controls);
+        let palette = self.render_palette(window, cx);
+        let width = self.card_width.clone();
+        let body = v_flex().w_full().gap(px(style::COMPOSER_GAP)).p(px(style::COMPOSER_PADDING)).when_some(strip, |s, strip| s.child(strip)).child(self.render_text_field(creating, cx)).child(controls);
         // The transcript's reading column: 780 wide at most, centred, with
         // the same side insets once the window is narrower.
         h_flex()
@@ -727,6 +820,7 @@ impl Render for Composer {
             .pb(px(20.))
             .child(
                 div()
+                    .relative()
                     .w_full()
                     .max_w(px(style::MAX_CONTENT_WIDTH))
                     .rounded(px(style::COMPOSER_RADIUS))
@@ -737,7 +831,10 @@ impl Render for Composer {
                     // Clicking the card's padding puts the cursor in the text.
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window, cx| this.focus(window, cx)))
                     .children(card)
-                    .child(body),
+                    .child(body)
+                    // Measures the box for the palette, which sits on its top edge.
+                    .child(canvas(move |bounds, _, _| width.set(f32::from(bounds.size.width)), |_, _, _, _| {}).absolute().size_full())
+                    .children(palette),
             )
             .children(self.render_peek(cx))
     }

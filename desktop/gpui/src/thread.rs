@@ -4,9 +4,11 @@
 use crate::composer::Composer;
 use crate::rows::list::{transcript_list, TranscriptList};
 use crate::{call, RT};
-use gpui_kit::component::{v_flex, ActiveTheme as _, StyledExt as _};
+use gpui_kit::component::{v_flex, ActiveTheme as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -80,16 +82,27 @@ impl ThreadPane {
         self.client.clone()
     }
 
-    /// What's typed and not yet sent, with pictures as their markers.
-    #[cfg(feature = "automation")]
-    pub fn draft(&self, cx: &App) -> String {
-        self.composer.read(cx).draft_text(cx)
-    }
-
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         if self.summary.busy() {
             self.request("threads.interrupt", json!({ "threadId": self.summary.id }), cx);
         }
+    }
+
+    /// Every row measured again, for a new zoom (their heights are in points).
+    pub(crate) fn remeasure_rows(&mut self, cx: &mut Context<Self>) {
+        let count = self.feed.model().rows().len();
+        self.scroller.update(cx, |s, cx| {
+            s.remeasure_items(0..count, cx);
+        });
+        cx.notify();
+    }
+
+    /// The thread's last message of his, for Send again (`sendAgain`).
+    pub(crate) fn last_user_text(&self) -> Option<String> {
+        self.feed.model().rows().iter().rev().take(80).find_map(|row| match &row.content {
+            RowContent::User(message) if !message.is_from_runner() => Some(message.text.clone()),
+            _ => None,
+        })
     }
 
     fn background_tasks(&self) -> Vec<BackgroundTask> {
@@ -122,6 +135,9 @@ impl ThreadPane {
                     model.known_start = page.at_start;
                     let _ = model.set_background(background);
                     this.feed = ThreadFeed::new(model);
+                    // Another runner's thread through this Mac's runner has
+                    // gaps in its seqs (`feed.sparse = viaRelay`).
+                    this.feed.set_sparse(this.summary.runner_id.is_some());
                     this.feed.begin_subscribe();
                     this.loaded = true;
                     this.loading_older = false;
@@ -768,33 +784,33 @@ impl ThreadPane {
 impl Render for ThreadPane {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (border, muted, danger, bg) = (theme.border, theme.muted_foreground, theme.danger, theme.background);
+        let (muted, danger, bg) = (theme.muted_foreground, theme.danger, theme.background);
         self.rows.list_width = f32::from(self.scroller.read(cx).viewport().size.width);
-        let model = threadbear_core::inbox::model_label(&self.summary.provider, self.summary.model_in_use.as_deref().or(self.summary.model.as_deref()));
-        let meta = format!("{} · {} · {}", threadbear_core::inbox::folder_name(&self.summary.cwd), model, self.summary.status);
         let composer = self.composer.clone();
+        // The thread's title and project line are in the panel's bar (header.rs).
+        // The whole thread is drop space for the box (ComposerDropView), outlined
+        // while a file is over it. It's a layer over the thread for as long as a
+        // file's being dragged, because selectable text under the pointer takes
+        // the hover for itself, and a drop on a reply then went nowhere.
+        let dragging_file = cx.has_active_drag();
+        let drop_layer = dragging_file.then(|| {
+            div()
+                .absolute()
+                .inset_0()
+                .on_drop(move |paths: &ExternalPaths, window, cx| {
+                    let paths = paths.paths().to_vec();
+                    composer.update(cx, |c, cx| c.take_paths(paths, window, cx));
+                })
+                .drag_over::<ExternalPaths>(|s, _, _, cx| s.bg(crate::style::accent(cx).opacity(0.06)).border_2().border_color(crate::style::accent(cx)))
+        });
         v_flex()
+            .relative()
             .size_full()
-            // The whole thread is drop space for the box (ComposerDropView),
-            // outlined while a file is over it.
-            .on_drop(move |paths: &ExternalPaths, window, cx| {
-                let paths = paths.paths().to_vec();
-                composer.update(cx, |c, cx| c.take_paths(paths, window, cx));
-            })
-            .drag_over::<ExternalPaths>(|s, _, _, cx| s.bg(crate::style::accent(cx).opacity(0.06)).border_2().border_color(crate::style::accent(cx)))
-            .child(
-                v_flex()
-                    .px_7()
-                    .pt_3p5()
-                    .pb_2p5()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(div().font_semibold().truncate().child(self.summary.title.clone()))
-                    .child(div().text_xs().text_color(muted).child(meta)),
-            )
             .when_some(self.error.clone(), |s, e| s.child(div().px_7().py_1().text_sm().text_color(danger).child(e)))
             .when(!self.loaded && self.error.is_none(), |s| s.child(div().p_4().text_sm().text_center().text_color(muted).child("Loading…")))
             .child(div().flex_1().min_h_0().child(transcript_list(&self.scroller, bg, cx.processor(|this, ix: usize, window, cx| this.render_item(ix, window, cx)), cx)))
+            .when_some(crate::viewer::action_chips(&self.summary, cx), |s, chips| s.child(chips))
             .child(self.composer.clone())
+            .children(drop_layer)
     }
 }

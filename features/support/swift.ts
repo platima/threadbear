@@ -20,8 +20,9 @@ export class SwiftDriver implements Driver {
       timeout: timeoutSeconds * 1000,
       maxBuffer: 32 * 1024 * 1024,
       // The other Macs' demo threads are their own feature's business, and
-      // leaving them out makes the inbox the same for both apps.
-      env: { ...process.env, TB_MOCK_NO_REMOTE: '1' },
+      // leaving them out makes the inbox the same for both apps. A scenario
+      // about them sets TB_MOCK_REMOTE (@remote-threads).
+      env: { ...process.env, TB_MOCK_NO_REMOTE: process.env.TB_MOCK_REMOTE ? '' : '1' },
     });
     return stdout.trim();
   }
@@ -47,6 +48,10 @@ export class SwiftDriver implements Driver {
 
   async shot(file: string): Promise<void> {
     await this.script(['--id', this.id, 'shot', file]);
+  }
+
+  async relaunch(): Promise<void> {
+    await this.script(['--id', this.id, 'rebuild', '--no-build'], 120);
   }
 
   async stop(): Promise<void> {

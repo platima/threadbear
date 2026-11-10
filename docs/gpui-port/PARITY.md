@@ -11,9 +11,9 @@ The full list of features is [features.md](features.md).
 
 <!-- parity:start -->
 
-54 of 325 features have a spec so far, across 94 scenarios.
+108 of 326 features have a spec so far, across 194 scenarios.
 
-Scenarios passing: Swift: 93 of 94, Mac: 93 of 94, Windows: 24 of 94, Linux: 93 of 94.
+Scenarios passing: Swift: 188 of 194, Mac: 192 of 194, Windows: 192 of 194, Linux: 192 of 194.
 
 
 ### 0. Foundations everything else needs
@@ -21,79 +21,168 @@ Scenarios passing: Swift: 93 of 94, Mac: 93 of 94, Windows: 24 of 94, Linux: 93 
 | Feature | Swift | Mac | Windows | Linux |
 |---|---|---|---|---|
 | `foundation.rpc` Runner RPC client | pass | pass | pass | pass |
+| `foundation.zoom` Zoom | partly | pass | pass | pass |
+
+### 1. Windows and panel dock
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `dock.layout` Layout tree | pass | pass | pass | pass |
+| `dock.frame` Window frame memory | pending | pending | pending | pending |
+| `dock.reset` Default layout and Reset | pass | pass | pass | pass |
+
+### 2. Rails
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `rail.activity` Activity bar | pass | pass | pass | pass |
+| `rail.dots` Rail dots | pass | pass | pass | pass |
+| `rail.right` Right rail | pass | pass | pass | pass |
 
 ### 3. Sidebar and inbox
 
 | Feature | Swift | Mac | Windows | Linux |
 |---|---|---|---|---|
-| `sidebar.sections` Sections | pass | pass | partly | pass |
-| `sidebar.sort` Inbox sort | pass | pass | pending | pass |
+| `sidebar.sections` Sections | pass | pass | pass | pass |
+| `sidebar.sort` Inbox sort | pass | pass | pass | pass |
 | `sidebar.search` Thread search | pass | pass | pass | pass |
-| `sidebar.newthread` New thread button | pass | pass | pending | pass |
-| `sidebar.row` Thread row | pass | pass | pending | pass |
-| `sidebar.row.marks` Row left marks | pass | pass | partly | pass |
-| `sidebar.row.origin` Origin mark | pass | pass | pending | pass |
-| `sidebar.row.status` Row right status | pass | pass | pending | pass |
-| `sidebar.row.hoverbuttons` Hover buttons | pass | pass | partly | pass |
-| `sidebar.row.menu` Row context menu | pass | pass | pending | pass |
-| `sidebar.subagents` Sub-agent tree | pass | pass | pending | pass |
-| `sidebar.archived.paging` Archived paging | pass | pass | pending | pass |
-| `sidebar.skeleton` Loading skeleton | pass | pass | pending | pass |
-| `sidebar.hibernate.presets` Hibernate presets | pass | pass | partly | pass |
+| `sidebar.newthread` New thread button | pass | pass | pass | pass |
+| `sidebar.row` Thread row | pass | pass | pass | pass |
+| `sidebar.row.marks` Row left marks | pass | pass | pass | pass |
+| `sidebar.row.origin` Origin mark | pass | pass | pass | pass |
+| `sidebar.row.status` Row right status | pass | pass | pass | pass |
+| `sidebar.row.remote` Other-Mac icon | pass | pass | pass | pass |
+| `sidebar.row.hoverbuttons` Hover buttons | pass | pass | pass | pass |
+| `sidebar.row.menu` Row context menu | pass | pass | pass | pass |
+| `sidebar.subagents` Sub-agent tree | pass | pass | pass | pass |
+| `sidebar.archived.paging` Archived paging | pass | pass | pass | pass |
+| `sidebar.skeleton` Loading skeleton | pass | pass | pass | pass |
+| `sidebar.hibernate.presets` Hibernate presets | pass | pass | pass | pass |
 | `sidebar.hibernate.pick` Pick a time | pending | pending | pending | pending |
-| `sidebar.hibernate.wake` Wake when… | pass | pass | pending | pass |
+| `sidebar.hibernate.wake` Wake when… | pass | pass | pass | pass |
+| `sidebar.move` Move to another runner | pass | pass | pass | pass |
+
+### 4. Thread header, banners, toasts
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `header.title` Title line | pass | pass | pass | pass |
+| `header.backforward` Back and forward | pass | pass | pass | pass |
+| `header.share` Share | pass | pass | pass | pass |
+| `header.more` ... menu | pass | pass | pass | pass |
+| `banner.connection` Connection banner | pass | pass | pass | pass |
+| `banner.error` Error banner | pass | pass | pass | pass |
+| `toast.archived` Archived toast | pass | pass | pass | pass |
+| `toast.inboxend` Inbox end toast | pass | pass | pass | pass |
+| `thread.newpage` New-thread page | pass | pass | pass | pass |
 
 ### 5. Transcript row kinds
 
 | Feature | Swift | Mac | Windows | Linux |
 |---|---|---|---|---|
-| `transcript.list` The transcript list | pass | pass | pending | pass |
+| `transcript.list` The transcript list | pass | pass | pass | pass |
 | `transcript.user` Your bubble | pass | pass | pass | pass |
-| `transcript.reply` Assistant reply | pass | pass | partly | pass |
-| `transcript.thinking` Thinking line | pass | pass | pending | pass |
-| `transcript.tool` Tool line | pass | pass | partly | pass |
-| `transcript.tooloutput` Tool output styling | pass | pass | pending | pass |
-| `transcript.diff` Diff row | pass | pass | pending | pass |
-| `transcript.images` Images row | pass | pass | pending | pass |
+| `transcript.reply` Assistant reply | pass | pass | pass | pass |
+| `transcript.thinking` Thinking line | pass | pass | pass | pass |
+| `transcript.tool` Tool line | pass | pass | pass | pass |
+| `transcript.tooloutput` Tool output styling | pass | pass | pass | pass |
+| `transcript.diff` Diff row | pass | pass | pass | pass |
+| `transcript.images` Images row | partly | pass | pass | pass |
 | `transcript.approval` Approval card | pass | pass | pass | pass |
-| `transcript.approval.stacked` Stacked approval | pass | pass | pending | pass |
+| `transcript.approval.stacked` Stacked approval | pass | pass | pass | pass |
 | `transcript.approval.settled` Settled approval | pass | pass | pass | pass |
 | `transcript.question` Question card | pass | pass | pass | pass |
-| `transcript.secret` Secret card | pass | pass | pending | pass |
-| `transcript.review` Review card | pass | pass | pending | pass |
+| `transcript.secret` Secret card | pass | pass | pass | pass |
+| `transcript.review` Review card | pass | pass | pass | pass |
 | `transcript.turnfooter` Turn footer | pass | pass | pass | pass |
 | `transcript.error` Error row | pass | pass | pass | pass |
 | `transcript.workedfor` Worked-for group | pass | pass | pass | pass |
-| `transcript.working` Working line | pass | pass | pending | pass |
-| `transcript.changes` Changes card | pass | pass | partly | pass |
-| `transcript.rowmenu` Row context menu | pass | pass | pending | pass |
+| `transcript.working` Working line | pass | pass | pass | pass |
+| `transcript.changes` Changes card | pass | pass | pass | pass |
+| `transcript.rowmenu` Row context menu | pass | pass | pass | pass |
 
 ### 7. Composer
 
 | Feature | Swift | Mac | Windows | Linux |
 |---|---|---|---|---|
-| `composer.textbox` Text box | pass | pass | partly | pass |
+| `composer.textbox` Text box | pass | pass | pass | pass |
 | `composer.return` Return, Shift-Return | pass | pass | pass | pass |
-| `composer.listcontinue` List continuation | pass | pass | pending | pass |
-| `composer.picturechips` Picture chips | pass | pass | pending | pass |
-| `composer.chiphover` Chip hover and × | pass | pass | pending | pass |
-| `composer.filedrop` File path drop | pass | pass | pending | pass |
-| `composer.dropanywhere` Drop anywhere on thread | pass | pass | pending | pass |
-| `composer.modelpicker` Model picker | pass | pass | pending | pass |
-| `composer.permission` Permission chip | pass | pass | pending | pass |
-| `composer.contextring` Context ring | pass | pass | pending | pass |
+| `composer.listcontinue` List continuation | pass | pass | pass | pass |
+| `composer.picturechips` Picture chips | pass | pass | pass | pass |
+| `composer.chiphover` Chip hover and × | pass | pass | pass | pass |
+| `composer.filedrop` File path drop | pass | pass | pass | pass |
+| `composer.dropanywhere` Drop anywhere on thread | pass | pass | pass | pass |
+| `composer.runner` Runner chip | pass | pass | pass | pass |
+| `composer.modelpicker` Model picker | pass | pass | pass | pass |
+| `composer.permission` Permission chip | pass | pass | pass | pass |
+| `composer.contextring` Context ring | pass | pass | pass | pass |
 | `composer.send` Send and Stop | pass | pass | pass | pass |
+| `composer.starting` Starting state | pass | pass | pass | pass |
+| `composer.slash` Slash palette | pass | pass | pass | pass |
+| `composer.slash.keys` Palette keys | pass | pass | pass | pass |
 
 ### 8. Cards in the composer
 
 | Feature | Swift | Mac | Windows | Linux |
 |---|---|---|---|---|
-| `card.done` Done card | pass | pass | pending | pass |
-| `card.needsyou` Needs you card | pass | pass | partly | pass |
-| `card.collapse` Collapse | pass | pass | pending | pass |
-| `card.somethingelse` Something else box | pass | pass | pending | pass |
-| `card.returnflow` Return flow | pass | pass | pending | pass |
-| `card.answers` Answer and follow-up state | pass | pass | partly | pass |
+| `card.done` Done card | pass | pass | pass | pass |
+| `card.needsyou` Needs you card | pass | pass | pass | pass |
+| `card.collapse` Collapse | pass | pass | pass | pass |
+| `card.somethingelse` Something else box | pass | pass | pass | pass |
+| `card.returnflow` Return flow | pass | pass | pass | pass |
+| `card.answers` Answer and follow-up state | pass | pass | pass | pass |
+
+### 9. Highlights
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `highlights.panel` Panel and folds | pass | pass | pass | pass |
+| `highlights.librarian` Librarian line | pass | pass | pass | pass |
+| `highlights.needsyou` Needs you list | pass | pass | pass | pass |
+| `highlights.projects` Project blocks | pass | pass | pass | pass |
+| `highlights.scheduled` Scheduled list | pass | pass | pass | pass |
+| `highlights.subagents` Sub-agents list | pass | pass | pass | pass |
+| `highlights.started` Threads it started | pass | pass | pass | pass |
+| `highlights.pinned` Pinned, Files, Links | pass | pass | pass | pass |
+| `highlights.changes` Changes | pass | pass | pass | pass |
+| `highlights.rowmenus` Row menus | pass | pass | pass | pass |
+
+### 10. Patches panels and web panels
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `patches.list` Patches list | pass | pass | pass | pass |
+| `patches.run` Patch chips run | pass | pass | pass | pass |
+| `panel.list` List panel | pass | pass | pass | pass |
+| `panel.image` Image panel | pass | pass | pass | pass |
+
+### 12. File previews and folders
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `file.host` Preview host | pass | pass | pass | pass |
+| `file.picture` Picture view | pass | pass | pass | pass |
+| `file.textview` Text viewer | pass | pass | pass | pass |
+| `file.markdown` Markdown preview | pass | pass | pass | pass |
+| `folder.list` Folder list | pass | pass | pass | pass |
+| `folder.pathbar` Path bar | pass | pass | pass | pass |
+| `folder.menu` Folder menu | pass | pass | pass | pass |
+| `folder.filespanel` Files panel | pass | pass | pass | pass |
+
+### 17. Navigation, shortcuts, main menu
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `nav.history` Back/forward history | partly | pass | pass | pass |
+| `nav.sidebuttons` Mouse side buttons | pass | pass | pass | pass |
+| `nav.nextinbox` Next Inbox Thread | pass | pass | pass | pass |
+| `menu.app` App menu | pass | pass | pass | pass |
+| `menu.file` File menu | pass | pass | pass | pass |
+| `menu.view` View menu | pass | pass | pass | pass |
+| `menu.go` Go menu | pass | pass | pass | pass |
+| `menu.thread` Thread menu | pass | pass | pass | pass |
+| `menu.help` Help menu | pass | pass | pass | pass |
+| `nav.shortcuts` Keyboard shortcuts | partly | pass | pass | pass |
 
 <!-- parity:end -->
 
@@ -103,6 +192,258 @@ One entry a slice, newest first. Every entry has a `Verification:` line: a spec
 run or a screenshot from the running app. A slice with no runtime check doesn't
 count. (Ghostex's port log is where this shape comes from; its slices 214 to 268
 built parsers and gates with no launch of the app, which is the trap.)
+
+### 2026-11-10 Every spec on real Windows
+
+- Windows paths: the runner's `C:\\` paths work in folder names, relative paths
+  and Highlights (`forward_slashes` in `desktop/core`), and the mock accepts them.
+- Remaining: the folder browser still joins with `/`, which Windows tolerates
+  but shows as mixed separators.
+- Verification: `Behaviour specs` in the Desktop app workflow, 192 of 192 on
+  Windows, Mac and Linux (run 42648513140).
+
+### 2026-11-09 The first app that can be used all day
+
+- Merged: the sidebar, the transcript's real rows, the composer and its cards,
+  the window on BearDock with its rails, header, banners, menus and shortcuts,
+  Highlights, previews, Patches, the Files panel, the new-thread page, the slash
+  palette and other runners' threads.
+- Fixed in the merge: dropping a file on selectable text now works, as a drop
+  layer goes over the thread while a file's being dragged.
+- Remaining: Scheduled, Projects, Librarian, Usage, Updates and Settings pages,
+  the bears and flights, web panels, the terminal.
+- Verification: 192 scenarios pass on Linux and on a real Mac; the Swift app passes
+  the 188 of them that aren't marked GPUI-only.
+
+### 2026-11-09 Against a real runner
+
+- `features/tools/real-runner.ts`: the GPUI app on a dev runner, not the mock,
+  sending a message on claude-haiku-5-5 and getting the reply back.
+- Verification: on `cloud`, "reply after 4480 ms" with rows `user group assistant
+  footer`, the same row kinds as the Swift app.
+### 2026-11-09 The window shell: BearDock, rails, the thread's bar, banners, notes, menus and keys
+
+- The app's window is BearDock now: `desktop/gpui/src/shell.rs` hosts the dock
+  (threads, thread, Highlights as panels, default layout and View > Reset, the
+  layout saved and restored), with no title bar and the traffic lights in the
+  top-left panel's bar, the bars moving the window. `rails.rs` is the activity
+  bar and the right rail (`ActivityBar`, `PanelRail`, with the Inbox count, lit
+  buttons and the Highlights dot). `header.rs` is the thread's title line in the
+  panel's bar (inline rename, project and schedule chips), back and forward with
+  tips that name where they go, share with its popover, the ... menu, the banners
+  (connection, error with Investigate, limit, sign-in, the refusal offer) and the
+  floating notes (Archived with Undo, end of inbox). `settings.rs` is one JSON file
+  in the runner's data folder (`desktop-settings.json`, keyed by the Swift
+  UserDefaults names): window frame, zoom, folds, the Inbox's sort, the panel
+  layout. Zoom scales everything: every `px` in the window goes through
+  `style::px` (the Swift `zoomed`), which each drawing file gets with one
+  `use crate::style::px;` that shadows GPUI's, and gpui-kit's own sizes follow
+  through the theme's rem size. Shortcuts are `threadbear-core`'s `shortcuts`
+  (the Swift tests ported), bound from shortcuts.json with a poll that picks up
+  edits. Menus are the same model for the Mac's menu bar and the `menus` command.
+- Files: `desktop/gpui/src/{shell,rails,header,settings}.rs` (new), `app.rs`
+  (state and the render), `main.rs` (window options, frame memory), `style.rs`
+  (zoom), small additive edits to `sidebar.rs`, `thread.rs`, `composer_card.rs`,
+  `rows/*`, `automation.rs` (the Swift names: `dock-move`, `panel`, `float`,
+  `mode`, `zoom`, `rename`, `undo-archive`, `open-archived`, `error`,
+  `mouse-button`, `copy-thread-id`, `menus`, `menu-item`, `app-menu`, `data-dir`,
+  `share`, `signin`, `refusal`, `appearance`, `resize`), `desktop/core`
+  (`navigation`, `shortcuts`, `zoom`), `desktop/client` (`retry_now`),
+  `desktop/dock/src/view.rs` (`set_options`, so the bars follow the zoom). Specs:
+  `features/{window,rails,header,navigation}.feature`. Swift: `AppDump` has
+  `rails`, `header`, `zoom`, `inboxEndNote`; new debug commands `menus`,
+  `menu-item`, `data-dir`; `dev-app.sh rebuild --no-build`.
+- Remaining: the Scheduled, Projects and Librarian views and Usage/Settings pages
+  are placeholders (later stages). Highlights' content comes from
+  `desktop/gpui/src/highlights.rs` (other branch): `render_highlights_panel` in
+  `shell.rs` is the one place to call it. Files is a placeholder panel. The
+  Browser rail button, panel origin badges and a thread's own patch panels'
+  content aren't there yet. Menus aren't drawn on Windows and Linux yet
+  (`AppMenuBar`, `gpui-kit`'s `title-bar` for the window buttons there).
+  Sign in… says the CLI command rather than opening Terminal. The refusal offer
+  sits with the banners, not above the composer. Hold-⌘ hints, swipes and the
+  honey pot are other rows. A scripted Swift app's menu items keep their greyed
+  state from the last time the menu was opened, so three key-press scenarios are
+  `@swift-pending` (`⌘[`, `⌘0`, `shortcuts.json` pressing the new key); the same
+  state shows they pass through the menu on GPUI. The picture's traffic lights
+  aren't in the GPUI shot (it draws in-process); their position was set from the
+  Swift shot and not checked against a real window capture.
+- Written but with no runtime check yet: window frame memory (scripted runs never
+  save a frame, so only `zoom::on_screen` and the settings file have tests); the
+  limit, sign-in and refusal banners and the project and schedule chips (no spec
+  or fixture reaches them); a real mouse's side buttons (`mouse-button` calls the
+  same handler, not a real event). On GPUI the `@menu.*` scenarios read the menu
+  model, not the system menu bar. Simplified from Swift: the limit banner offers
+  the first login not at its limit rather than the one with most room, and a
+  waiting restart's banner has one fixed sentence.
+- Verification: `TB_APP=swift` on Tinker Desk: 37 scenarios (37 passed); `TB_APP=gpui`
+  on `cloud` (Xvfb): 40 scenarios (40 passed); `TB_APP=gpui` on Tinker Desk: 40
+  scenarios (40 passed), the `@dock.layout or @dock.reset or @foundation.zoom or
+  @rail.* or @header.* or @banner.* or @toast.* or @nav.* or @menu.* or
+  @sidebar.sections or @sidebar.sort` set. `cargo test -p threadbear-core` (the new
+  `navigation`, `shortcuts` and `zoom` modules) and `settings` tests. Side-by-side
+  picture of the window on Tinker Desk: the Swift app and the GPUI app with the
+  same thread open, 1180 by 800, dark.
+### 2026-11-09 Move to another runner (`sidebar.move`)
+
+- The row menu's Move to ▸ (behind `moveToRunner`): it goes straight away when
+  the other runner has a clean answer, else the sheet comes up with its guess at
+  the folder and login, what's in the way and what won't come, and asks again as
+  they change. Cancel Move while it's going, and "Moving to bruce" on the row.
+- Files: `desktop/gpui/src/move_sheet.rs`, `desktop/core/src/remote.rs`,
+  `desktop/gpui/src/sidebar.rs` (the menu lines), `features/remote-threads.feature`,
+  `app/Sources/Threadbear/Views/MoveSheet.swift` and `AppDump.swift` (the dump's
+  `moveSheet`, debug only).
+- Remaining: the login picker is a popover where Swift's is a pop-up menu; a
+  summary landing while a move is being asked for takes the row's guess off
+  (`keepingAskedMove`), which only shows as a flicker.
+- Verification: `@sidebar.move`, 5 of 5 on `TB_APP=swift` and on `TB_APP=gpui` on
+  Tinker Desk, and in the whole-suite runs under the new-thread page's entry
+  below; a picture of the sheet on Tinker Desk.
+
+### 2026-11-09 Other runners' threads and the runner chip (`sidebar.row.remote`, `composer.runner`)
+
+- Rows from `remoteThreads.list`/`remoteThreads.updated` sit beside this Mac's,
+  with the machine's icon in the tile and "On bruce" (faded when offline); opening
+  one reads its events and sends through this Mac's runner, the app's default way
+  in (the direct link's own connections aren't ported, `directRemoteLink`).
+  The box on such a thread leads with its machine's chip; a thread's logins and
+  folders are that runner's once they've come (`remoteThreads.logins`), as is the
+  draft's. The new-thread box has the Runs on chip: this Mac, each runner, the star
+  on the default and a Default submenu that sets it, and on another runner its
+  folders. `composer-menu` with `runner` reads and clicks it, `setDefault` sets
+  the star.
+- Files: `desktop/gpui/src/remote.rs`, `desktop/gpui/src/composer_chips.rs`,
+  `desktop/core/src/remote.rs`, `features/remote-threads.feature`,
+  `app/Tools/mock-runner/server.mjs` (the mock now answers another runner's
+  threads over its own connection, as the real runner does through the backend,
+  and `remoteThreads.logins`).
+- Remaining: the direct link (Settings > Runners), `files.read` of another
+  runner's paths (their pictures show their own placeholder), the sparse mode is
+  on for the relay but a real relay hasn't been run from this app.
+- Verification: `@sidebar.row.remote` and `@composer.runner`, 7 of 7 on both
+  apps on Tinker Desk, and in the whole-suite runs under the new-thread page's
+  entry below.
+
+### 2026-11-09 The slash command palette (`composer.slash`, `composer.slash.keys`)
+
+- Floating over the box in the same window (a deferred layer, as wide as the box,
+  half the window tall): categories with counts and Recent, the matches, the picked
+  command in full with Run, Add details and Open file. The keys come from the box's
+  own actions while it's open (arrows move the pick, Tab fills it in, Return runs
+  it, Esc closes it until the words change), so the cursor stays in the box.
+  Recent is kept in `gpui-prefs.json`. The rules are in `desktop/core/src/slash.rs`
+  with tests; the dump's `palette` is on both apps.
+- Files: `desktop/gpui/src/slash_palette.rs`, `desktop/gpui/src/composer.rs`,
+  `desktop/core/src/slash.rs`, `features/slash-palette.feature`,
+  `app/Sources/Threadbear/AppDump.swift` and `ComposerView.swift` (debug only).
+- Remaining: `composer.slash.resize` (dragging its edges and columns); Open file
+  opens the system's app until file previews land; descriptions read as plain text
+  rather than inline markdown.
+- Verification: `@composer.slash` and `@composer.slash.keys`, 9 of 9 on both apps
+  on Tinker Desk, and in the whole-suite runs under the new-thread page's entry
+  below; `cargo test -p threadbear-core` (the palette's own rules, 18 tests); a
+  picture of `/co` on Tinker Desk read against SlashPaletteView.
+
+### 2026-11-09 The new-thread page (`thread.newpage`, `composer.starting`)
+
+- ⌘N and the compose button open a page with the box about 40% of the way down,
+  the heading above it, "Starts in misc on the Claude pool" under it and the
+  logins' room cards (a click pins the draft to that login); a project's New
+  Thread adds its "In …" chip and folder. Sending goes through `threads.create` on
+  the draft's pool or login, the words greyed and locked with a spinner for Send
+  until the thread exists, and starts the next one from the defaults again. `new`
+  (with `project`), `options`, and `composer-menu` work on the page as in the
+  Swift app. The picks that stick (model, effort, last login, default runner, recent
+  commands) live in `<data dir>/gpui-prefs.json`; `docs/on-your-mac.md` should
+  name it when this app ships.
+- Files: `desktop/gpui/src/new_thread.rs`, `desktop/gpui/src/prefs.rs`,
+  `desktop/core/src/new_thread.rs`, `features/new-thread.feature`, a page branch
+  in `desktop/gpui/src/app.rs`.
+- Remaining: the page doesn't clamp the heading and note for very short windows
+  as ComposerPlacement does; the bear over the heading.
+- Verification: `TB_APP=gpui` whole suite, 125 of 125 on Tinker Desk (real Mac
+  desktop) and 125 of 125 on Linux (`cloud`) at the final commit; `TB_APP=swift`
+  whole suite, 125 of 125 on Tinker Desk; `cargo test -p threadbear-core`
+  (92 lib tests); side-by-side of the page at
+  `/tmp/gpui-new-thread-side-by-side.png`.
+### 2026-11-09 Pictures in the transcript: an in-app viewer
+
+- A click on a picture tile opens an overlay on that picture, with arrows through
+  its message's other pictures and Escape to close, in place of the file's default
+  app. Only a real, decodable picture opens (named as one, not a code runner, then
+  decoded from its bytes): `viewer.rs`, `looks_like_picture` and `runs_code` in core,
+  the `quickLooks` rule carried over.
+- `tile` and `viewer` join the automation commands on both apps (Swift's `viewer`
+  says what Quick Look would have shown, as the real panel comes to the front of a
+  desktop); the arrows are GPUI's own, so that scenario is `@swift-pending`.
+- Files: `desktop/gpui/src/viewer.rs`, `rows/images.rs`, `features/picture-viewer.feature`.
+- Remaining: zoom and pan, video, PDFs, drag out (`file.quicklook`, `drag.fileout`).
+- Verification: `TB_APP=swift` 1 of 1 and `TB_APP=gpui` 2 of 2 on Tinker Desk (real Mac) and on Linux (`cloud`), the arrows scenario `@swift-pending`; picture of the overlay on the GPUI app. Whole suite with the pane's 19 new scenarios: `TB_APP=swift` 124 of 124 on Tinker Desk, `TB_APP=gpui` 125 of 125 on Tinker Desk and 124 of 125 on Linux (one streaming scenario was too slow on a loaded box and passed on its own).
+
+### 2026-11-09 Files panel and the folder browser
+
+- The Files panel and folder previews: a list with fold-out rows, sortable columns
+  (Date Modified and Size go when the pane is narrow, as the Finder's do), a path bar
+  under the list, double-click to go in with Back to come out, and the right-click menu
+  (Open, Open in its app, Reveal, Copy path, Sort by, Show hidden files). Rows come
+  from the runner's `files.list`, so a thread on another Mac browses the same.
+- Files: `desktop/core/src/folders.rs` (FolderSort, crumbs, sizes, `files.read`
+  decoding), `desktop/gpui/src/folders.rs`, `features/folders.feature`.
+- Remaining: the icon grid (`folder.icons`, the menu item is there, greyed), Finder keys
+  and Quick Look on Space (`folder.keys`), type-to-select, the folder watch.
+- Verification: `TB_APP=swift` 6 of 6 on Tinker Desk; `TB_APP=gpui` 6 of 6 on Tinker Desk (real Mac) and on Linux (`cloud`); side-by-side pictures against the Swift pane.
+
+### 2026-11-09 Patches: the list, chips and native panels
+
+- The Patches section (Trust, waiting lines, what each gives, grouped under its
+  project), chips over the composer (`actions.run`, spinner while it runs), list panels
+  (headings, tones, Show in pane rows), image panels (a refreshed picture through
+  `files.read`, so another Mac's works) and the web-panel placeholder with Open in Browser.
+- Files: `desktop/gpui/src/patches.rs`, `features/patches.feature`, core `Panel`,
+  `Action`, `PatchInfo`, `PanelRender`.
+- Remaining: chip look (the Swift app's grouped bar with its +N overflow; these are
+  simple pills), patch and `.app` picture icons (`patches.icons`), web panels
+  (`panel.web`).
+- Verification: `TB_APP=swift` 5 of 5 on Tinker Desk; `TB_APP=gpui` 5 of 5 on Tinker Desk (real Mac) and on Linux (`cloud`); side-by-side pictures against the Swift pane.
+
+### 2026-11-09 File previews in the pane
+
+- `PanePreview` and its Back stack, the preview host, a picture view with Copy Image
+  (the file's own bytes), code in a read-only editor coloured by the kit's syntect
+  highlighter (the `syntect` feature on `gpui-kit`; the transcript's code blocks stay
+  plain, as the Swift app's are), Markdown drawn as a page, and web pages and `.html`
+  files handed to the system browser for now.
+- Files come from the runner (`files.read`), with `runnerId` for another machine's
+  thread, so a preview never touches the Mac's own disk.
+- Files: `desktop/gpui/src/files.rs`, `features/file-previews.feature`.
+- Remaining: the in-app web view (`file.htmlpreview`, later work), video and PDF
+  (`file.video`, `file.quicklook`), editing and find (`file.editor`, `file.find`),
+  the Markdown Preview/Raw menu, drag out of a picture.
+- Verification: `TB_APP=swift` 5 of 5 on Tinker Desk and `TB_APP=gpui` 5 of 5 on Tinker Desk (real Mac); side-by-side pictures against the Swift pane.
+
+### 2026-11-09 The pane beside the thread: Highlights
+
+- `desktop/core/src/highlights.rs` ports the logic and protocol types of
+  HighlightSections, HighlightFold, HighlightProjects, PreviewRules, FileIcon,
+  HighlightText, PanelIcon, ScheduleRows, StartedThreadRows and PatchGroups,
+  with the Swift tests. `desktop/gpui/src/highlights.rs` is the pane: one
+  self-contained `SidePane` entity beside the thread in a simple split (`new`
+  and `render`; the shell will host it as a dock panel), drawing the brief,
+  Needs you ticks (the same `threads.tickAsk`, optimistic), project blocks with
+  the ⓘ popover (Keep, Take out), Scheduled, Sub-agents, Threads it started,
+  Pinned, Files, Links and Changes, with Show all, the folds remembered across
+  launches, and the row menus.
+- `dump`'s new `panels.pane` says what's drawn on both apps (AppDump.swift,
+  `highlights.rs` `dump`); `highlight` joins the automation commands
+  (app/README.md).
+- Files: `desktop/core/src/highlights.rs`, `desktop/gpui/src/highlights*.rs`,
+  `features/highlights.feature`, `features/support/pane.ts`,
+  `app/Sources/Threadbear/AppDump.swift`, `Automation+Commands.swift`.
+- Remaining: the Notion board (`highlights.board`), the project page link from
+  the ⓘ, middle truncation of file names, drag-out, Open in Panel's page view.
+- Verification: `TB_APP=swift` 14 of 14 and `TB_APP=gpui` 14 of 14 on Linux
+  (`cloud`) and on Tinker Desk; side-by-side picture of the pane against Swift's.
 
 ### 2026-11-09 BearDock for GPUI
 

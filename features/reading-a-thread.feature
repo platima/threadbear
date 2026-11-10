@@ -86,3 +86,10 @@ Feature: Reading a thread
     When I open the thread "Make uploads resume after a crash"
     And I choose "Copy message" from the menu of the reply starting "Uploads now pick up"
     Then the clipboard holds "Uploads now pick up where they stopped"
+
+  @manual @gpui-pending @terminal.putcommand
+  Scenario: A shell block's play icon puts the command at the Terminal's prompt
+    When I open a thread whose reply has a bash block with "npm test"
+    And I press the block's play icon
+    Then the Terminal shows "npm test" at its prompt
+    And nothing has run until I press Return

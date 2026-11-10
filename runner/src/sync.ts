@@ -130,7 +130,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 67;
+export const BACKEND_API_VERSION = 70;
 // From this one sync:sharedThreads lists a runner's rows shared by link, which
 // it checks against its own threads on every start and every
 // SHARE_RECONCILE_MS (reconcileShares).
@@ -307,6 +307,10 @@ export const RUNNER_STATS_API_VERSION = 45;
 // From this one a heartbeat can carry `followProblem` (follow-origin.ts); an
 // older backend's validator would turn the heartbeat down.
 export const FOLLOW_PROBLEM_API_VERSION = 67;
+// From this one a thread's row and its threadIndex row carry `recap`, the
+// librarian's recap for the recap box. An older backend's validator would
+// turn the row down, so it goes without.
+export const RECAP_API_VERSION = 70;
 // How far back a start looks for pictures, as new ones go up as they come.
 // Reading a whole log for each thread is too much to do for all of them on
 // every start, and it's the threads in use that Mike opens on the phone.
@@ -390,6 +394,7 @@ export type ThreadDoc = {
   woke?: { at: string; since?: string };
   startedBy?: { kind: string; label: string; icon?: string; why?: string };
   asked?: string;
+  recap?: string;
   archivedAt?: string;
   starredAt?: string;
   costUsd?: number;
@@ -846,6 +851,7 @@ export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pen
   // Not the thread it came from: the phone's row has no tooltip to name it.
   if (t.startedBy) doc.startedBy = { kind: t.startedBy.kind, label: t.startedBy.label, ...(t.startedBy.icon ? { icon: t.startedBy.icon } : {}), ...(t.startedBy.why ? { why: t.startedBy.why } : {}) };
   if (t.asked) doc.asked = t.asked;
+  if (t.recap) doc.recap = t.recap;
   if (t.archivedAt) doc.archivedAt = t.archivedAt;
   if (t.starredAt) doc.starredAt = t.starredAt;
   // To the cent: a running thread's cost moves every turn and the phone
@@ -938,6 +944,7 @@ export function forBackend(d: ThreadDoc, v: number, now: number): ThreadDoc {
   if (v < STARTED_BY_API_VERSION) delete out.startedBy;
   if (v < LINKS_API_VERSION) delete out.links;
   if (v < ASKED_API_VERSION) delete out.asked;
+  if (v < RECAP_API_VERSION) delete out.recap;
   if (v < WAKE_NOTE_API_VERSION) delete out.wakeNote;
   if (v < STARS_API_VERSION && out.starredAt) {
     // That backend's phones have no Starred section to show it in.
@@ -1379,6 +1386,7 @@ export class ConvexSync {
         takesStartedBy: () => (this.backendApiVersion ?? 0) >= INDEX_STARTED_BY_API_VERSION,
         takesStars: () => (this.backendApiVersion ?? 0) >= STARS_API_VERSION,
         takesAsked: () => (this.backendApiVersion ?? 0) >= INDEX_ASKED_API_VERSION,
+        takesRecap: () => (this.backendApiVersion ?? 0) >= RECAP_API_VERSION,
         takesSince: () => (this.backendApiVersion ?? 0) >= INDEX_SINCE_API_VERSION,
         takesOrder: () => (this.backendApiVersion ?? 0) >= RUNNER_ORDER_API_VERSION,
         seed: () => {

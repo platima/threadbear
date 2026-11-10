@@ -15,8 +15,8 @@ import ThreadbearCore
 /// line saying so, as its folder isn't here. With no thread open it's a
 /// shell in your home folder too.
 ///
-/// A shell only starts when you ask for one: ⌘J, or clicking the empty
-/// panel. Clicking through threads with the panel open, or launching with
+/// A shell only starts when you ask for one: ⌘J, clicking the empty
+/// panel, or a ```bash block's play icon. Clicking through threads with the panel open, or launching with
 /// it left open, starts nothing, as each login shell reads your whole
 /// profile. A thread's shell stops when the thread is archived or deleted
 /// (a dev server left running there would otherwise keep going in a
@@ -45,6 +45,7 @@ final class Terminals {
     @discardableResult
     func open(_ target: TerminalTarget) -> TerminalSession {
         defer { focusTick += 1 }
+        watchKeys()
         if let s = sessions[target.key] { return s }
         let s = TerminalSession(target: target)
         sessions[target.key] = s
@@ -76,6 +77,56 @@ final class Terminals {
         for key in sessions.keys where key != "home" && !keep.contains(key) { stop(threadId: key) }
     }
 
+    enum PutOutcome { case typed, alreadyThere, busy }
+
+    /// Threads with a command on its way, so a second click while the shell
+    /// is still starting doesn't queue another.
+    @ObservationIgnored private var putting: Set<String> = []
+    @ObservationIgnored private var keyWatch: Any?
+
+    /// Keys are seen here, ahead of the terminal, as SwiftTerm's keyDown
+    /// can't be overridden from outside it.
+    private func watchKeys() {
+        guard keyWatch == nil else { return }
+        keyWatch = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated {
+                if let responder = event.window?.firstResponder, let session = self?.sessions.values.first(where: { $0.view === responder }) {
+                    session.noteKey(event)
+                }
+            }
+            return event
+        }
+    }
+
+    /// Types `block` at the target's prompt, starting a shell if it needs
+    /// one, and gives it the keyboard. Never presses Return: the command
+    /// came out of a reply, so a person gets to read it first.
+    func put(_ block: ShellBlock, in target: TerminalTarget, done: @escaping @MainActor (PutOutcome) -> Void) {
+        guard putting.insert(target.key).inserted else { return }
+        if sessions[target.key]?.exited == true { restart(target.key) }
+        let session = open(target)
+        Task { @MainActor [weak self] in
+            defer { self?.putting.remove(target.key) }
+            while true {
+                switch session.putStep(for: block) {
+                case .wait:
+                    try? await Task.sleep(for: .milliseconds(50))
+                case .type:
+                    session.put(block.command)
+                    return done(.typed)
+                case .replaceLast:
+                    guard await session.clearLastPut() else { return done(.busy) }
+                    session.put(block.command)
+                    return done(.typed)
+                case .alreadyThere:
+                    return done(.alreadyThere)
+                case .busy:
+                    return done(.busy)
+                }
+            }
+        }
+    }
+
     /// A new shell in place of one that has exited.
     func restart(_ key: String) {
         guard let old = sessions[key] else { return }
@@ -89,6 +140,24 @@ final class Terminals {
     /// For the automation and `dump`: what's running where.
     var debugSummary: [String] {
         sessions.values.sorted { $0.target.key < $1.target.key }.map { "\($0.target.key) \($0.exited ? "exited" : "running") in \($0.target.cwd)" }
+    }
+}
+
+/// The terminal view, saying when text reaches it without a key press.
+final class PromptWatchingTerminalView: LocalProcessTerminalView {
+    var onText: (() -> Void)?
+
+    override func paste(_ sender: Any) {
+        onText?()
+        super.paste(sender)
+    }
+
+    /// Dictation and input methods. A key that lands here has been seen
+    /// already (Terminals.watchKeys), and Return mustn't count as text.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        let text = (string as? String) ?? (string as? NSAttributedString)?.string
+        if text != "\r", text != "\n" { onText?() }
+        super.insertText(string, replacementRange: replacementRange)
     }
 }
 
@@ -126,15 +195,27 @@ struct TerminalTarget: Equatable {
 @Observable
 final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     let target: TerminalTarget
-    @ObservationIgnored let view: LocalProcessTerminalView
+    @ObservationIgnored let view: PromptWatchingTerminalView
     private(set) var exited = false
     private(set) var title = ""
+    @ObservationIgnored let startedAt = Date()
+    /// How long a new shell may take to reach its first prompt, after
+    /// which it's treated as busy and the command is copied.
+    static let startingFor: TimeInterval = 10
+    /// What's on the shell's prompt, as far as keys and play icons say.
+    private(set) var promptLine = TerminalPut.Line.empty
+    /// A command is waiting at the prompt for Return, so the panel says so.
+    var waitingForReturn: Bool {
+        if case .put = promptLine { return true }
+        return false
+    }
 
     init(target: TerminalTarget) {
         self.target = target
-        view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 240))
+        view = PromptWatchingTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 240))
         super.init()
         view.processDelegate = self
+        view.onText = { [weak self] in self?.noteText() }
         view.font = TerminalStyle.font
         TerminalStyle.apply(to: view)
         start()
@@ -173,6 +254,63 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         let pid = view.process?.shellPid ?? 0
         if pid > 0, !exited { kill(pid, SIGHUP) }
         view.removeFromSuperview()
+    }
+
+    /// What putting `block` in this shell should do now (TerminalPut).
+    func putStep(for block: ShellBlock, now: Date = Date()) -> TerminalPut.Step {
+        let state = view.terminalStateSnapshot()
+        return TerminalPut.step(for: block, shellInFront: shellInFront, bracketedPaste: state.bracketedPasteMode,
+                                starting: now.timeIntervalSince(startedAt) < Self.startingFor, line: promptLine)
+    }
+
+    /// Pasted as the terminal's own paste is: bracketed where the shell
+    /// asked for that, so a newline in it doesn't run anything.
+    func put(_ text: String) {
+        view.pasteText(text)
+        promptLine = .put(text)
+    }
+
+    /// Deletes the last command put here, which is known to be everything
+    /// on the prompt with the cursor at its end (TerminalPut.Line.put).
+    /// Ctrl-U clears a line in zsh, bash and fish, but zsh and fish take it
+    /// a line of a multi-line paste at a time, and fish needs a second go
+    /// to remove each newline; any extra ones land on an empty prompt and
+    /// do nothing. Says whether it went, so a shell with its keys rebound
+    /// doesn't end up with two commands run together.
+    func clearLastPut() async -> Bool {
+        guard case .put(let text) = promptLine else { return false }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).count
+        view.send(txt: String(repeating: "\u{15}", count: lines * 2))
+        for _ in 0..<30 {
+            try? await Task.sleep(for: .milliseconds(20))
+            let screen = view.terminalStateSnapshot().visibleRows.map(\.text).joined(separator: "\n")
+            if !TerminalPut.endsWith(screen, text) {
+                promptLine = .empty
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The shell owns the terminal, rather than a program it's running.
+    private var shellInFront: Bool {
+        let pid = view.process?.shellPid ?? 0
+        let fd = view.process?.childfd ?? -1
+        return pid > 0 && fd >= 0 && tcgetpgrp(fd) == pid
+    }
+
+    /// A key on its way to this terminal. Keys for a running program (vim's
+    /// `q`) say nothing about the shell's prompt.
+    func noteKey(_ event: NSEvent) {
+        guard shellInFront else { return }
+        let flags = event.modifierFlags
+        promptLine = TerminalPut.line(promptLine, afterKey: event.charactersIgnoringModifiers, control: flags.contains(.control),
+                                      option: flags.contains(.option), shift: flags.contains(.shift), command: flags.contains(.command))
+    }
+
+    /// Text that arrived some way other than a key: a paste or dictation.
+    func noteText() {
+        if shellInFront { promptLine = .edited }
     }
 
     /// Text typed into the shell, for the automation.
@@ -231,6 +369,19 @@ struct TerminalPanel: View {
                 ZStack(alignment: .bottom) {
                     TerminalHost(session: session, focusTick: Terminals.shared.focusTick)
                         .dockDragDisabled()
+                    if session.waitingForReturn {
+                        Text("Return runs it")
+                            .font(.system(size: TypeScale.detail))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, zoomed(6))
+                            .padding(.vertical, zoomed(2))
+                            // Over whatever's in the terminal's top corner.
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: zoomed(4)))
+                            .padding(.horizontal, zoomed(6))
+                            .padding(.vertical, zoomed(5))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .allowsHitTesting(false)
+                    }
                     if session.exited {
                     HStack(spacing: zoomed(8)) {
                         Text("The shell has exited.").foregroundStyle(.secondary)

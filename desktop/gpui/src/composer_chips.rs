@@ -4,6 +4,7 @@
 use crate::composer::Composer;
 use crate::style::{self, size};
 use gpui_kit::assets::IconName;
+use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::popover::{Popover, PopoverState};
 use gpui_kit::component::progress::Progress;
@@ -11,6 +12,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Selectable, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 use serde_json::json;
 use threadbear_core::composer::{effort_porridge, effort_title, ContextMeter};
 use threadbear_core::inbox::ThreadSummary;
@@ -20,6 +23,21 @@ use threadbear_core::logins::{permission_help, permission_title, provider_title,
 pub(crate) struct ChipData {
     pub(crate) summary: Option<ThreadSummary>,
     pub(crate) logins: RunnerLogins,
+    /// The new-thread page's box: these are what its settings start from.
+    pub(crate) is_new: bool,
+    /// Another runner's thread, or a new one for another runner.
+    pub(crate) away: Option<AwayRunner>,
+}
+
+/// The other runner a box's thread (or new draft) is on (`ComposerControls`).
+pub(crate) struct AwayRunner {
+    pub(crate) name: String,
+    pub(crate) icon: &'static str,
+    /// "On bruce", or "On bruce, offline".
+    pub(crate) place: String,
+    /// Its logins have come (`remoteLogins`); until then just its name.
+    pub(crate) logins_known: bool,
+    pub(crate) cwd: String,
 }
 
 impl ChipData {
@@ -36,6 +54,7 @@ impl ChipData {
             effort_in_use: thread.effort_in_use.clone(),
             permission_mode: if thread.permission_mode.is_empty() { "full".to_owned() } else { thread.permission_mode.clone() },
             cwd: thread.cwd.clone(),
+            is_new: self.is_new,
         })
     }
 }
@@ -43,17 +62,50 @@ impl ChipData {
 impl Composer {
     /// The chips for the box's thread: `app.threads` (with `update_open`'s
     /// guess) first, as it's what a click just changed, then the pane's copy.
+    /// For the new-thread page's box, what the draft is set to.
     pub(crate) fn chip_data(&self, cx: &App) -> ChipData {
-        let summary = self.thread_id.as_ref().and_then(|id| self.app.upgrade()?.read(cx).threads.get(id).cloned()).or_else(|| self.pane.upgrade().map(|p| p.read(cx).summary.clone()));
-        let logins = self.app.upgrade().map(|a| a.read(cx).logins.clone()).unwrap_or_default();
-        ChipData { summary, logins }
+        let Some(app) = self.app.upgrade() else { return ChipData { summary: None, logins: RunnerLogins::default(), is_new: self.thread_id.is_none(), away: None } };
+        let t = app.read(cx);
+        if self.thread_id.is_none() {
+            let away = t.new_thread.picks.runner.clone().map(|runner| AwayRunner {
+                name: t.runner_name_of(&runner),
+                icon: t.runner_icon_symbol(Some(&runner)),
+                place: t.runner_place_of(&runner),
+                logins_known: t.remote.logins.contains_key(&runner),
+                cwd: t.draft_summary().cwd,
+            });
+            return ChipData { summary: Some(t.draft_summary()), logins: t.draft_logins(), is_new: true, away };
+        }
+        let summary = self.thread_id.as_ref().and_then(|id| t.threads.get(id).cloned()).or_else(|| self.pane.upgrade().map(|p| p.read(cx).summary.clone()));
+        let (logins, away) = match summary.as_ref().and_then(|s| s.runner_id.clone()) {
+            None => (t.logins.clone(), None),
+            // Another runner's thread: its Mac's logins, once they've come.
+            Some(runner) => {
+                let known = t.remote.logins.get(&runner).cloned();
+                let away = AwayRunner {
+                    name: t.runner_name_of(&runner),
+                    icon: t.runner_icon_symbol(Some(&runner)),
+                    place: t.runner_place_of(&runner),
+                    logins_known: known.is_some(),
+                    cwd: summary.as_ref().map_or_else(String::new, |s| s.cwd.clone()),
+                };
+                (known.unwrap_or_default(), Some(away))
+            }
+        };
+        ChipData { summary, logins, is_new: false, away }
     }
 
-    /// `threads.update` for this box's thread, shown at once (`update_open`).
+    /// `threads.update` for this box's thread, shown at once (`update_open`);
+    /// on the new-thread page's box, the draft's settings instead.
     fn change_thread(&self, change: impl FnOnce(&mut ThreadSummary), params: serde_json::Value, cx: &mut App) {
+        let is_new = self.thread_id.is_none();
         if let Some(app) = self.app.upgrade() {
             app.update(cx, |app, cx| {
-                let _ = app.update_open(change, params, cx);
+                if is_new {
+                    app.change_new_draft(&params, cx);
+                } else {
+                    let _ = app.update_open(change, params, cx);
+                }
             });
         }
     }
@@ -91,6 +143,12 @@ impl Composer {
         if settings.uses_pools() {
             if settings.pool().is_some_and(|p| p.id == column) || column == PINNED_COLUMN {
                 return self.set_model(model, cx);
+            }
+            // On a new thread the draft moves to that pool and its provider
+            // (AppModel.choosePool); the model is remembered under it.
+            if data.is_new {
+                let provider = data.logins.pool(column).and_then(|p| p.account_ids.iter().find_map(|id| data.logins.account(id))).map(|a| a.provider_id().to_owned());
+                return self.change_thread(|_| {}, json!({ "poolId": column, "provider": provider, "model": model }), cx);
             }
             // Picks the pool, and in it the model.
             let (pool, guess_pool, guess_model) = (column.to_owned(), column.to_owned(), model.clone());
@@ -173,7 +231,41 @@ impl Composer {
         let data = self.chip_data(cx);
         let mut row = h_flex().w_full().h(px(size::SEND_BUTTON)).gap(px(4.));
         let composer = cx.entity();
-        row = row.child(div().ml(px(-7.)).child(self.render_plus(&data, window, cx)));
+        // What leads the row depends on where the thread is (controls(remote:)
+        // and its neighbours in ComposerControls.swift): this Mac's has "+".
+        match (&data.away, data.is_new) {
+            // Another runner's thread before its logins have come: its Mac's
+            // name where the chips would be, and send (remoteControls).
+            (Some(away), false) if !away.logins_known => {
+                return row.child(div().ml(px(-7.)).child(render_runner_chip(away, cx))).child(div().flex_1()).child(send_button).into_any_element();
+            }
+            // Its logins known: the machine's chip in place of "+".
+            (Some(away), false) => row = row.child(div().ml(px(-7.)).child(render_runner_chip(away, cx))).child(chip_divider(cx)),
+            // A new thread for another runner, before it's said what logins
+            // it has: the machine chip, and how it's going (draftWaitingControls).
+            (Some(away), true) if !away.logins_known => {
+                let problem = self.app.upgrade().and_then(|a| a.read(cx).new_thread.runner_problem.clone());
+                row = row.child(div().ml(px(-7.)).child(self.render_runs_on_chip(cx)));
+                row = match problem {
+                    Some(problem) => row.child(div().id("runner-problem").text_size(px(size::CHIP)).text_color(style::secondary_text(cx)).child(format!("Can't reach {}", away.name)).tooltip(move |window, cx| Tooltip::new(problem.clone()).build(window, cx))),
+                    None => row.child(div().id("runner-waiting").child(gpui_kit::component::spinner::Spinner::new().color(style::quiet_text(cx)).with_size(px(14.))).tooltip({
+                        let tip = format!("Connecting to {}", away.name);
+                        move |window, cx| Tooltip::new(tip.clone()).build(window, cx)
+                    })),
+                };
+                return row.child(div().flex_1()).child(send_button).into_any_element();
+            }
+            // A new thread for another runner: no pictures or folders from
+            // here (paths on this Mac), so the machine chip leads.
+            (Some(_), true) => row = row.child(div().ml(px(-7.)).child(self.render_runs_on_chip(cx))),
+            // This Mac: "+", then the machine chip on a new thread.
+            (None, _) => {
+                row = row.child(div().ml(px(-7.)).child(self.render_plus(&data, window, cx)));
+                if data.is_new && self.app.upgrade().is_some_and(|a| !a.read(cx).remote.runners.is_empty()) {
+                    row = row.child(self.render_runs_on_chip(cx));
+                }
+            }
+        }
         if let Some(settings) = data.settings() {
             // With pools the runner picks the login, so there's no account chip.
             if !settings.uses_pools() {
@@ -328,6 +420,46 @@ impl Composer {
             })
     }
 
+    /// The machine chip on the new-thread box (`runsOnChip`): which Mac the
+    /// thread will run on, its menu opening under the pointer.
+    fn render_runs_on_chip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (icon, tip) = match self.app.upgrade().and_then(|a| a.read(cx).new_thread.picks.runner.clone()) {
+            Some(runner) => {
+                let app = self.app.upgrade();
+                let t = app.as_ref().expect("the app").read(cx);
+                let name = t.runner_name_of(&runner);
+                let tip = if t.remote.runners.iter().any(|r| r.id == runner && !r.online) { format!("Runs on {name}, offline") } else { format!("Runs on {name}") };
+                (t.runner_icon_symbol(Some(&runner)), tip)
+            }
+            None => (self.app.upgrade().map_or("desktopcomputer", |a| a.read(cx).self_runner_symbol()), "Runs on this Mac".to_owned()),
+        };
+        let app = self.app.clone();
+        h_flex()
+            .gap(px(4.))
+            .child(
+                div()
+                    .id("composer-runner-chip")
+                    .test_support()
+                    .aria_label(tip.clone())
+                    .flex()
+                    .items_center()
+                    .h(px(26.))
+                    .px(px(7.))
+                    .rounded(px(7.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(style::chip_hover_fill(cx)))
+                    .child(crate::icons::symbol(icon).with_size(px(size::CHIP - 1.)).text_color(style::faint_icon(cx)))
+                    .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    .on_click(move |ev: &ClickEvent, window, cx| {
+                        if let Some(app) = app.upgrade() {
+                            let at = ev.position();
+                            app.update(cx, |app, cx| app.open_runner_menu(point(at.x, at.y - px(12.)), window, cx));
+                        }
+                    }),
+            )
+            .child(chip_divider(cx))
+    }
+
     /// The model picker's state lives on the composer so its search text and
     /// column stay put while it's open.
     fn picker_state(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ModelPickerView> {
@@ -401,6 +533,20 @@ impl RenderOnce for ChipTrigger {
 
 fn chip_divider(cx: &App) -> impl IntoElement {
     div().w(px(1.)).h(px(12.)).bg(style::chip_divider(cx))
+}
+
+/// The machine chip on another runner's thread (`runnerChip`): its icon and
+/// name at the front of the row, in place of "+" and the folder.
+fn render_runner_chip(away: &AwayRunner, cx: &App) -> impl IntoElement {
+    let tip = format!("{}, in {}", away.place, abbreviate_home(&away.cwd));
+    h_flex()
+        .id("composer-runner-name")
+        .gap(px(4.))
+        .h(px(26.))
+        .px(px(7.))
+        .child(crate::icons::symbol(away.icon).with_size(px(size::CHIP - 1.)).text_color(style::faint_icon(cx)))
+        .child(div().text_size(px(size::CHIP)).text_color(style::quiet_text(cx)).whitespace_nowrap().child(away.name.clone()))
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
 }
 
 /// The ring for how full the context is (ContextRing): grey, orange near full,
@@ -617,7 +763,7 @@ impl Render for ModelPickerView {
 
 impl ModelPickerView {
     fn chip_snapshot(&self, cx: &App) -> ChipData {
-        self.composer.upgrade().map(|c| c.read(cx).chip_data(cx)).unwrap_or(ChipData { summary: None, logins: RunnerLogins::default() })
+        self.composer.upgrade().map(|c| c.read(cx).chip_data(cx)).unwrap_or(ChipData { summary: None, logins: RunnerLogins::default(), is_new: false, away: None })
     }
 }
 

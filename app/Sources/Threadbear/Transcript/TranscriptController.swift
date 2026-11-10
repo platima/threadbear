@@ -1074,6 +1074,9 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
             app.toggleCardCollapsed(threadId: thread.id, seq: card.seq)
             return
         }
+        // The composer stops clicks reaching the card during a move; this is
+        // for anything else pressing it, as an answer now would miss the move.
+        if thread.moving?.ended == false { return }
         if action.hasPrefix("next:") {
             guard card.isOpen, let n = Int(action.dropFirst(5)), card.next.indices.contains(n) else { return }
             app.toggleFollowUp(threadId: thread.id, card: card, index: n)

@@ -248,6 +248,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | ID | Feature | What it does | How in GPUI | Route | Size | Swift |
 |---|---|---|---|---|---|---|
 | `card.done` | Done card | Archive, Or carry on list, tick and ? | Drawn card with `TextView`. | build | M | `ComposerCard`, `RowRenderer` (`asksText`) |
+| `composer.recap` | Recap box | Above the message box on a thread quiet for 12 hours: what it's for, where it stands, × to put away | Drawn box from `recap`, same rule as `Recap.swift`. | build | S | `RecapBox` |
 | `card.needsyou` | Needs you card | Outlined asks, button rows | Drawn card with blocks for each ask, holding its thread identity (a security fix). | build | L | `ComposerCard`, `RowRenderer` |
 | `card.paging` | Paging | ‹ 1 of 3 ›, moves on after a pick | Drawn, with a slide from `Animation`. | build | S | `ComposerCard` (`CardDeck`) |
 | `card.collapse` | Collapse | Chevron to heading | Drawn. | build | S | `ComposerCard` (`CardCollapseButton`) |
@@ -326,6 +327,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | ID | Feature | What it does | How in GPUI | Route | Size | Swift |
 |---|---|---|---|---|---|---|
 | `terminal.panel` | Terminal panel | Full emulator, per-thread shell, ⌘J, New Shell | `alacritty_terminal` drawn as our own GPUI element, as Ghostex does with libghostty-vt. | build | L | `TerminalPanel` |
+| `terminal.putcommand` | Put a command in the Terminal | Play icon on a shell block types it at the prompt, never presses Return, replaces its own unrun command, copies instead if the shell is busy | Icons on the code block, then the terminal's own paste. | build | S | `ShellBlockIcons`, `ShellBlock`, `TerminalPanel` (`Terminals.put`) |
 | `terminal.lifecycle` | Shell lifecycle | Starts on request, stops on archive or quit | Unix pty on macOS and Linux, ConPTY on Windows. | shim | M | `TerminalPanel` (`Terminals`) |
 
 ## 14. Projects, Librarian, Schedules, Usage, Runners, Connectors, Updates
@@ -394,6 +396,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `menu.thread` | Thread menu | Archive, Hibernate submenu, Stop, Copy Transcript, Show Inbox, Scheduled, Projects, Librarian, Hibernating, Archived | `set_menus`, as `menu.app`. | kit | S | `ThreadbearApp` |
 | `menu.help` | Help menu | Take the Tour, Finish Setting Up | `set_menus`, as `menu.app`. | kit | S | `ThreadbearApp` |
 | `nav.copytranscript` | Copy transcript | Markdown | Port `MarkdownExport`, with GPUI's clipboard. | build | S | `ThreadSession`, `MarkdownExport` |
+| `nav.shortcuts` | Keyboard shortcuts | The 22 defaults, kept in `shortcuts.json` and watched live | `threadbear-core`'s `shortcuts` for the rules; GPUI key bindings rebound when the file changes. | build | S | `AppShortcuts`, `Shortcuts` |
 
 **The 22 default bindings:** New Thread ⌘N, Archive ⌘E, Hibernate (none), Stop ⌘., Copy Transcript ⇧⌘C, Back ⌘[, Forward ⌘], Next Inbox ⌥⌘↓, Inbox ⌘1, Scheduled ⌘2, Projects ⌘3, Librarian ⌘4, Hibernating and Archived (none), Settings ⌘,, Zoom ⌘= ⌘- ⌘0, Threads ⌃⌘S, Panels ⌥⌘P, Terminal ⌘J, Reset Layout (none). `shortcuts.json` is watched live.
 
