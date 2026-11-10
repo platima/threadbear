@@ -51,7 +51,7 @@ stopped.
 | `--project NAME` | the project's name (default `threadbear`) |
 | `--region REGION` | the Convex region (default: the one nearest this computer's time zone) |
 | `--name NAME` | what the phone calls this computer (default: its host name) |
-| `--home DIR` | the runner's data folder, if it isn't the usual one |
+| `--home DIR` | the runner's data folder, if it isn't the usual one. The installed runner is restarted only when this is the folder it uses |
 | `--no-restart` | don't restart the runner; say how to |
 
 The steps, in order:
@@ -65,10 +65,19 @@ The steps, in order:
 4. **A Convex project** of your own with a production deployment. If you have more
    than one Convex team it asks which (or give `--team`). If the clone already
    points at a project (a `.env.local` from an earlier try), that one is used, and
-   if runner.json already names a deployment, no second one is made.
+   if runner.json already names a deployment, no second one is made. A deploy key
+   already in the data folder (from a run that stopped part way) belongs to one
+   deployment: that one is found from the name in the key and used, and if it
+   can't be found the script stops and says what to put in runner.json, rather than
+   make another one that the key would not match.
 5. **Keys.** A deploy key for the runner's backend deploys, and the main runner
    key, set as `RUNNER_KEY` on the deployment. If the deployment already has a
-   `RUNNER_KEY` it is kept and copied here, never replaced.
+   `RUNNER_KEY` it wins: it is copied here, and never replaced on the deployment.
+   That includes a key already in `secrets\convex-key`. The script reads the
+   deployment's `RUNNER_KEY` (a read, which a dry run does too) before it says what
+   it will do, so replacing the key in the file, or setting it on a deployment that
+   has none, is in the list it asks about and needs a yes (or `--yes`) like any
+   other change.
 6. **runner.json.** `sync.url` and `sync.name` are merged in. Everything else in the
    file is left as it was. A runner.json that is there but can't be read (a stray
    comma, an empty file, a byte order mark from Notepad) stops the script with
@@ -82,7 +91,11 @@ The steps, in order:
    `runner/scripts/install-windows.mjs` or `install-linux.mjs`. Anything a thread
    is doing at that moment is cut short. To let working threads finish first,
    answer no (or pass `--no-restart`) and run `tb restart` in a new terminal, which
-   waits until no thread is busy, or use the app's Runners page.
+   waits until no thread is busy, or use the app's Runners page. The installed task
+   or service runs with the standard data folder, so it is restarted only when
+   `--home` (or `THREADBEAR_HOME`) is that folder. With another folder the script
+   leaves it alone, since ending it would change nothing for the runner that uses
+   the folder you named, and says to restart that runner yourself.
 9. **Where to pair.** Open Threadbear, Settings > Phone & browser.
 
 ## Pairing
@@ -127,7 +140,7 @@ project (docs/android.md says how).
 | `secrets\made-deploy-keys` | the name of the deploy key above, so `tb runner rotate-owner` knows it is this computer's |
 | `runner.json` | `sync.url` (the deployment's address) and `sync.name`, merged in |
 | `backend.json` | what the backend deploy last deployed (so the next run can skip it) |
-| `backend.winlock` | while a deploy is running, on Windows only |
+| `backend.winlock` | while a deploy is running, on Windows only (and `backend.winlock.reclaim` for a moment, when it takes over a lock a crash left) |
 | `~\.convex\config.json` | the Convex command line's login. It is Convex's own file, written by `convex login`, not this script |
 | the clone: `node_modules\` and `.env.local` | the packages, and the project the clone is linked to (the second is ignored by git) |
 

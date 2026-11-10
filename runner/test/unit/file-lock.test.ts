@@ -58,6 +58,51 @@ test('a lock whose process has gone is taken over', () => {
   release();
 });
 
+test("a waiter that saw a dead lock does not remove the live one another waiter made in between", () => {
+  const file = path.join(tmpDir(), 'backend.winlock');
+  fs.writeFileSync(file, JSON.stringify({ pid: 99999999, at: Date.now() }));
+  let releaseFirst: (() => void) | undefined;
+  // The second waiter (222) asks whether the old owner is alive. In the moment before it acts, the
+  // first waiter (111) clears the dead lock and takes it, start to finish.
+  const alive = (pid: number) => {
+    if (pid !== 99999999) return true;
+    releaseFirst ??= takeFileLock(file, { pid: 111, alive: (p) => p !== 99999999, ...clock() });
+    return false;
+  };
+  assert.throws(() => takeFileLock(file, { pid: 222, alive, waitMs: 5000, ...clock() }), LockTimeout, 'the second waits for the first, as it should');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, 111, "the first waiter's lock was not removed from under it");
+  assert.equal(fs.existsSync(`${file}.reclaim`), false, 'the gate was let go');
+  releaseFirst!();
+  assert.equal(fs.existsSync(file), false);
+});
+
+test('a dead lock is not cleared while another waiter holds the gate for clearing it', () => {
+  const file = path.join(tmpDir(), 'backend.winlock');
+  fs.writeFileSync(file, JSON.stringify({ pid: 99999999, at: Date.now() }));
+  fs.writeFileSync(`${file}.reclaim`, JSON.stringify({ pid: 333, at: Date.now() }));
+  assert.throws(() => takeFileLock(file, { pid: 222, alive: (p) => p === 333, waitMs: 3000, ...clock() }), LockTimeout);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, 99999999, 'left as it was');
+  assert.equal(JSON.parse(fs.readFileSync(`${file}.reclaim`, 'utf8')).pid, 333, "the other waiter's gate is not touched");
+});
+
+test('a gate left by a crash is cleared, and the lock is then taken over', () => {
+  const file = path.join(tmpDir(), 'backend.winlock');
+  fs.writeFileSync(file, JSON.stringify({ pid: 99999999, at: Date.now() }));
+  fs.writeFileSync(`${file}.reclaim`, JSON.stringify({ pid: 444, at: Date.now() }));
+  const release = takeFileLock(file, { pid: 222, alive: (p) => p !== 99999999 && p !== 444, ...clock() });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, 222);
+  assert.equal(fs.existsSync(`${file}.reclaim`), false);
+  release();
+  // An old gate whose pid is in use is cleared as well: the number may belong to something else now.
+  fs.writeFileSync(file, JSON.stringify({ pid: 99999999, at: Date.now() }));
+  fs.writeFileSync(`${file}.reclaim`, JSON.stringify({ pid: 555, at: 1 }));
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(`${file}.reclaim`, old, old);
+  const again = takeFileLock(file, { pid: 222, alive: (p) => p !== 99999999, ...clock() });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, 222);
+  again();
+});
+
 test('a very old lock is taken over even if its pid is in use, as the number may belong to something else now', () => {
   const file = path.join(tmpDir(), 'backend.winlock');
   fs.writeFileSync(file, JSON.stringify({ pid: 111, at: 1 }));

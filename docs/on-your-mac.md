@@ -39,7 +39,9 @@ File references are where to look.
   command line opens), then `runner/scripts/deploy-backend.mjs`, which unpacks
   the clone's commit with `tar` into a temporary folder, runs `npm ci` there
   and deploys `convex/` and `web/` to your production deployment, taking a
-  lock file (`backend.winlock` in the data folder) on Windows while it does. It
+  lock file (`backend.winlock` in the data folder, and for a moment
+  `backend.winlock.reclaim` when it takes over one a crash left) on Windows
+  while it does. It
   talks to your Convex deployment, api.convex.dev, auth.convex.dev and
   registry.npmjs.org. On Windows it starts npm with `node npm-cli.js` where it
   can, and otherwise `npm.cmd` through `cmd.exe`. At the end it can restart the

@@ -7,9 +7,18 @@
 // It is the simple kind. A lock file left by a crash is told from a live one by
 // asking the system whether that process number is in use, and by its age, so
 // a number a later program was given could keep one alive for as long as
-// STALE_AFTER_MS. Two waiters that both find a dead lock can race to clear it.
-// The kernel locks the other platforms use have neither problem, and are used
-// where they exist.
+// STALE_AFTER_MS. The kernel locks the other platforms use don't have that
+// problem, and are used where they exist.
+//
+// Taking over a dead lock is done one waiter at a time. Two waiters can both
+// find the same dead lock; if each simply removed the file, the second would
+// remove the live lock the first had just made, and both would run. So removing
+// a lock takes a second, short-lived lock file (the gate, `<lock>.reclaim`)
+// first, and looks at the lock again once it has it: only the waiter that holds
+// the gate removes anything, and what it removes is checked to still be dead.
+// A gate is held for a few milliseconds; one left by a crash in that time is
+// cleared after GATE_STALE_AFTER_MS, and two waiters clearing that at the same
+// moment could still race, which takes a crash in those milliseconds as well.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,6 +38,7 @@ export type LockOps = {
 export class LockTimeout extends Error {}
 
 export const LOCK_STALE_AFTER_MS = 2 * 60 * 60 * 1000;
+export const GATE_STALE_AFTER_MS = 30 * 1000;
 
 // Whether a process number is in use. "Not permitted" means it is, and ours to
 // leave alone.
@@ -54,6 +64,22 @@ function holderOf(file: string): { pid?: number; at?: number } | undefined {
   }
 }
 
+// Makes `file` with our pid in it, if nobody has it. False if somebody does.
+function makeLock(file: string, pid: number, at: number): boolean {
+  try {
+    const fd = fs.openSync(file, 'wx');
+    try {
+      fs.writeSync(fd, JSON.stringify({ pid, at }));
+    } finally {
+      fs.closeSync(fd);
+    }
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    return false;
+  }
+}
+
 // Takes the lock at `file`, waiting for whoever holds it, and gives back the
 // function that lets go. Throws LockTimeout if it waited ops.waitMs in vain.
 export function takeFileLock(file: string, ops: LockOps = {}): () => void {
@@ -63,42 +89,74 @@ export function takeFileLock(file: string, ops: LockOps = {}): () => void {
   const sleep = ops.sleep ?? sleepSync;
   const waitMs = ops.waitMs ?? 30 * 60 * 1000;
   const staleAfterMs = ops.staleAfterMs ?? LOCK_STALE_AFTER_MS;
+  const gate = `${file}.reclaim`;
   const until = now() + waitMs;
   let told = false;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  for (;;) {
-    try {
-      const fd = fs.openSync(file, 'wx');
-      try {
-        fs.writeSync(fd, JSON.stringify({ pid, at: now() }));
-      } finally {
-        fs.closeSync(fd);
-      }
-      return () => {
-        // Only our own: one that was taken over as stale is someone else's now.
-        if (holderOf(file)?.pid === pid) fs.rmSync(file, { force: true });
-      };
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-    }
+
+  // Whether the lock at `file` is one to take over right now, read afresh: dead (its owner is gone),
+  // too old, or made and never filled in. 'gone' if there is no file.
+  const stale = (): boolean | 'gone' => {
     const holder = holderOf(file);
     let age = 0;
     try {
       age = now() - fs.statSync(file).mtimeMs;
     } catch {
-      continue; // gone since we looked: try again at once
+      return 'gone';
     }
     // No pid in it: made a moment ago and not written yet, or damaged. Only an old one is cleared.
     const dead = holder?.pid === undefined ? age > 10_000 : holder.pid !== pid && !alive(holder.pid);
-    if (dead || age > staleAfterMs) {
-      fs.rmSync(file, { force: true });
-      continue;
+    return dead || age > staleAfterMs;
+  };
+
+  // Takes the gate for removing a dead lock. A gate whose owner has gone, or that is old, is cleared
+  // for the next try, not taken over in the same step.
+  const takeGate = (): boolean => {
+    if (makeLock(gate, pid, now())) return true;
+    const holder = holderOf(gate);
+    let age = 0;
+    try {
+      age = now() - fs.statSync(gate).mtimeMs;
+    } catch {
+      return false; // gone since we looked: the next try finds it free
+    }
+    const dead = holder?.pid === undefined ? age > 10_000 : holder.pid !== pid && !alive(holder.pid);
+    if (dead || age > GATE_STALE_AFTER_MS) fs.rmSync(gate, { force: true });
+    return false;
+  };
+  const leaveGate = () => {
+    if (holderOf(gate)?.pid === pid) fs.rmSync(gate, { force: true });
+  };
+
+  for (;;) {
+    if (makeLock(file, pid, now())) {
+      return () => {
+        // Only our own: one that was taken over as stale is someone else's now.
+        if (holderOf(file)?.pid === pid) fs.rmSync(file, { force: true });
+      };
+    }
+    const first = stale();
+    if (first === 'gone') continue; // gone since we looked: try again at once
+    let busy = false;
+    if (first) {
+      if (takeGate()) {
+        try {
+          // Looked at again, holding the gate: another waiter may have cleared it and made a live
+          // one in the meantime, which is not ours to remove. While the gate is ours nobody else
+          // removes the lock, and a lock that exists cannot be made, so what this finds is what is removed.
+          if (stale() === true) fs.rmSync(file, { force: true });
+        } finally {
+          leaveGate();
+        }
+        continue;
+      }
+      busy = true; // another waiter is clearing it: look again in a moment
     }
     if (!told) {
       told = true;
       ops.say?.('Waiting for another backend deploy to finish...');
     }
     if (now() >= until) throw new LockTimeout(`Another backend deploy was still running after ${Math.round(waitMs / 60000)} minutes.`);
-    sleep(1000);
+    sleep(busy ? 100 : 1000);
   }
 }

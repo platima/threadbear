@@ -40,7 +40,11 @@ function world(o: Opts = {}) {
   const root = tmpDir();
   const repo = path.join(root, o.repoName ?? 'repo');
   const profile = path.join(root, 'profile');
-  const home = path.join(root, 'data');
+  const win = (o.platform ?? 'win32') === 'win32';
+  // The data folder is the standard one, which is the one an installed runner uses: %APPDATA%\Threadbear
+  // on Windows, and where the runner keeps it on Linux. A test that wants another passes --home.
+  const appData = path.join(root, 'AppData', 'Roaming');
+  const home = win ? path.join(appData, 'Threadbear') : path.join(profile, 'Library', 'Application Support', 'Threadbear');
   for (const dir of ['convex', 'web', path.join('runner', 'scripts')]) fs.mkdirSync(path.join(repo, dir), { recursive: true });
   fs.writeFileSync(path.join(repo, 'package.json'), '{}');
   for (const f of ['deploy-backend.mjs', 'install-windows.mjs', 'install-linux.mjs']) fs.writeFileSync(path.join(repo, 'runner', 'scripts', f), '');
@@ -52,7 +56,6 @@ function world(o: Opts = {}) {
     fs.writeFileSync(convexBin, '');
   };
   if (o.packages !== false) installPackages();
-  const win = (o.platform ?? 'win32') === 'win32';
   const nodeExec = win ? 'C:\\Program Files\\nodejs\\node.exe' : '/opt/node/bin/node';
 
   // What is in the Convex account, and what the deployment holds.
@@ -154,7 +157,7 @@ function world(o: Opts = {}) {
   const deps = {
     platform: o.platform ?? 'win32',
     arch: 'x64',
-    env: { PATH: win ? 'C:\\Windows' : '/usr/bin', ...(o.env ?? {}) },
+    env: { PATH: win ? 'C:\\Windows' : '/usr/bin', ...(win ? { APPDATA: appData } : {}), ...(o.env ?? {}) },
     homedir: profile,
     hostname: 'DESK-PC.local',
     timeZone: 'Australia/Sydney',
@@ -564,6 +567,118 @@ test('restarting the runner: stop then start with --yes, the commands to run by 
   assert.equal(await none.run('--yes', '--home', none.home), 0, none.text());
   assert.match(none.text(), /No Task Scheduler task for the runner was found/);
   assert.ok(!none.calls.some((c) => c.args.includes('--stop')));
+});
+
+test('a runner installed here is restarted only when --home is the folder it uses; another folder is left alone', async () => {
+  // The installed task or service runs with the standard data folder. A run for another folder must not
+  // end it (it would cut short what its threads are doing) and then say the runner restarted.
+  const other = (w: ReturnType<typeof world>) => path.join(w.root, 'another runner data');
+  const touched = (w: ReturnType<typeof world>) => w.calls.filter((c) => /install-(windows|linux)\.mjs$/.test(c.args[0] ?? ''));
+
+  const w = world({ installed: true });
+  assert.equal(await w.run('--yes', '--home', other(w)), 0, w.text());
+  assert.deepEqual(touched(w), [], 'the installer was not run at all: not --installed, not --stop, not --start');
+  assert.match(w.text(), /uses the standard data folder/);
+  assert.ok(w.text().includes(`THREADBEAR_HOME set to ${other(w)}`), w.text());
+  assert.doesNotMatch(w.text(), /the runner restarted/);
+  assert.match(w.text(), /First restart the runner \(step 8\)/, 'the end still says the runner has to be restarted');
+
+  // The same by the environment variable, with no --home.
+  const fromEnv = world({ installed: true });
+  (fromEnv.deps.env as NodeJS.ProcessEnv).THREADBEAR_HOME = other(fromEnv);
+  assert.equal(await fromEnv.run('--yes'), 0, fromEnv.text());
+  assert.deepEqual(touched(fromEnv), []);
+  assert.match(fromEnv.text(), /uses the standard data folder/);
+
+  // The plan does not promise a restart it will not do.
+  const dry = world({ installed: true });
+  assert.equal(await dry.run('--dry-run', '--home', other(dry)), 0, dry.text());
+  assert.doesNotMatch(dry.text(), /todo {2}restart the runner/);
+
+  // The standard folder, named out loud, is the same folder.
+  const same = world({ installed: true });
+  assert.equal(await same.run('--yes', '--home', same.home), 0, same.text());
+  assert.ok(touched(same).some((c) => c.args[1] === '--stop'), 'stopped');
+  assert.match(same.text(), /ok {4}the runner restarted/);
+
+  // On Linux too.
+  const linux = world({ platform: 'linux', installed: true });
+  assert.equal(await linux.run('--yes', '--home', other(linux)), 0, linux.text());
+  assert.deepEqual(touched(linux), []);
+  assert.match(linux.text(), /systemd user service/);
+});
+
+test('a deploy key already in the data folder, with no address anywhere, is used: another deployment is not made to go with it', async () => {
+  const login = (w: ReturnType<typeof world>) => {
+    w.acct.token = true;
+    fs.mkdirSync(path.join(w.profile, '.convex'), { recursive: true });
+    fs.writeFileSync(path.join(w.profile, '.convex', 'config.json'), JSON.stringify({ accessToken: ACCESS_TOKEN }));
+    fs.mkdirSync(path.join(w.home, 'secrets'), { recursive: true });
+    fs.writeFileSync(path.join(w.home, 'secrets', 'convex-deploy.env'), `CONVEX_DEPLOY_KEY=${DEPLOY_KEY}\n`);
+  };
+  // The deployment can be found from the key's name: it is the one used.
+  const found = world({ packages: false });
+  login(found);
+  found.acct.prod = URL_;
+  assert.equal(await found.run('--yes', '--no-restart'), 0, found.text());
+  assert.ok(!found.convexCalls().some((c) => /^(dev|deployment)/.test(c)), `no project or deployment was made: ${found.convexCalls().join(' | ')}`);
+  assert.equal(readJson(path.join(found.home, 'runner.json')).sync.url, URL_);
+  assert.match(found.text(), /is for https:\/\/calm-fox-123\.ap-southeast-2\.convex\.cloud: using that deployment, not making another/);
+  assert.equal(found.acct.deployed, true);
+
+  // It cannot: nothing is made and nothing is written, and it says what to put where.
+  const lost = world({ packages: false });
+  login(lost);
+  assert.equal(await lost.run('--yes', '--no-restart'), 1);
+  assert.match(lost.errs.join('\n'), /already a deploy key in .*convex-deploy\.env, for the deployment calm-fox-123/);
+  assert.match(lost.errs.join('\n'), /"sync": \{ "url": "https:\/\/calm-fox-123\.convex\.cloud" \}/);
+  assert.ok(!lost.convexCalls().some((c) => /^(dev|deployment|env set)/.test(c)));
+  assert.equal(fs.existsSync(path.join(lost.home, 'runner.json')), false, 'runner.json was not written');
+  assert.equal(fs.readFileSync(path.join(lost.home, 'secrets', 'convex-deploy.env'), 'utf8'), `CONVEX_DEPLOY_KEY=${DEPLOY_KEY}\n`, 'the key is as it was');
+});
+
+test("a runner key that is already here is planned for, not skipped: replacing it with the deployment's, or setting it on one that has none, needs a yes", async () => {
+  const keyFile = (w: ReturnType<typeof world>) => path.join(w.home, 'secrets', 'convex-key');
+  const w = world({ packages: false });
+  assert.equal(await w.run('--yes', '--no-restart'), 0, w.text());
+  const mine = fs.readFileSync(keyFile(w), 'utf8');
+  // Up to date: nothing is planned and nothing is asked.
+  assert.equal(await w.run('--no-restart'), 0, w.text());
+  assert.doesNotMatch(w.text().split('Threadbear sync setup').at(-1) ?? '', /This will:/);
+
+  // The deployment has another key of its own: it would win and replace this one.
+  w.acct.runnerKey = 'the-deployments-other-key';
+  const before = w.calls.length;
+  assert.equal(await w.run('--no-restart'), 1, 'no terminal and no --yes: it stops and asks for neither');
+  assert.match(w.errs.join('\n'), /Not asking, as there is no terminal/);
+  assert.match(w.text(), /This will:\n {2}- replace the runner key in .*convex-key with the deployment's own RUNNER_KEY/);
+  assert.equal(fs.readFileSync(keyFile(w), 'utf8'), mine, 'the key is as it was');
+  assert.ok(!w.calls.slice(before).some((c) => c.args.includes('set')), 'nothing was set on the deployment');
+  assert.equal(await w.run('--dry-run'), 0);
+  assert.equal(fs.readFileSync(keyFile(w), 'utf8'), mine, 'a dry run changes nothing');
+  assert.equal(await w.run('--yes', '--no-restart'), 0, w.text());
+  assert.equal(fs.readFileSync(keyFile(w), 'utf8'), 'the-deployments-other-key', 'with a yes it is replaced');
+
+  // The deployment has none: this one would be set on it.
+  const x = world({ packages: false });
+  assert.equal(await x.run('--yes', '--no-restart'), 0, x.text());
+  const keep = fs.readFileSync(keyFile(x), 'utf8');
+  x.acct.runnerKey = undefined;
+  x.errs.length = 0;
+  x.out.length = 0;
+  assert.equal(await x.run('--no-restart'), 1);
+  assert.match(x.text(), /This will:\n {2}- set the runner key in .*convex-key as RUNNER_KEY on the deployment, which has none/);
+  assert.equal(x.acct.runnerKey, undefined, 'RUNNER_KEY was not set');
+  assert.equal(await x.run('--yes', '--no-restart'), 0, x.text());
+  assert.equal(x.acct.runnerKey, keep.trim(), 'with a yes it is set');
+  assert.equal(fs.readFileSync(keyFile(x), 'utf8'), keep, 'the local file is as it was');
+
+  // A first run, a key in the data folder already, and no deploy key yet: the plan says what will happen to it.
+  const first = world({ packages: false });
+  fs.mkdirSync(path.join(first.home, 'secrets'), { recursive: true });
+  fs.writeFileSync(keyFile(first), 'my-local-main-key\n');
+  assert.equal(await first.run('--dry-run'), 0, first.text());
+  assert.match(first.text(), /todo {2}the runner key already in .*convex-key: the deployment's own RUNNER_KEY replaces it/);
 });
 
 test('on a terminal it asks before ending the runner, and "no" leaves it running', async () => {

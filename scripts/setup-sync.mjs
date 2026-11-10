@@ -26,7 +26,8 @@
 //      secrets/convex-key
 //   6. runner.json: sync.url and sync.name merged in, everything else left as it is
 //   7. the backend and the website, deployed (runner/scripts/deploy-backend.mjs)
-//   8. the runner restarted, so it reads the new runner.json
+//   8. the runner restarted, so it reads the new runner.json (the installed one, and
+//      only when --home is the data folder it uses: another folder's runner is left alone)
 //   9. where to pair: Settings > Phone & browser > Show a code
 //
 // Nothing here is Mike's or the fork's: the project, the deployment and the keys
@@ -60,7 +61,8 @@ does what is missing.
   --project NAME the project's name (default threadbear)
   --region R     the Convex region for the deployment (default: near this PC's time zone)
   --name NAME    what the phone calls this computer (default: its host name)
-  --home DIR     the runner's data folder (default $THREADBEAR_HOME, else the runner's own)
+  --home DIR     the runner's data folder (default $THREADBEAR_HOME, else the runner's own).
+                 The installed runner is restarted only when this is the folder it uses
   --no-restart   don't restart the runner; say how to do it
 `;
 
@@ -101,6 +103,15 @@ class Fail extends Error {}
 const shortHost = (name) => String(name).split('.')[0];
 const keyHost = (name) => shortHost(name).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'pc';
 const expand = (p, home) => p.replace(/^~(?=$|[\\/])/, home);
+// Whether two folder names are the same folder: slashes either way and no trailing one, and
+// without regard to case on Windows, where d:\data and D:\Data are one folder.
+const samePath = (a, b, platform) => {
+  const n = (p) => {
+    const s = String(p).replace(/\\/g, '/').replace(/\/+$/, '');
+    return platform === 'win32' ? s.toLowerCase() : s;
+  };
+  return n(a) === n(b);
+};
 const quote = (p) => (/[\s"]/.test(p) ? `"${p}"` : p);
 
 // The last few lines a command said, for a failure message.
@@ -430,6 +441,18 @@ class Setup {
       this.ok(`using ${have}`);
       return have;
     }
+    if (!have && admin.kind === 'cloud') {
+      // A deploy key is already here (an earlier run that stopped part way, or one put here by hand).
+      // It belongs to one deployment, and a second one made now would never match it: the key would
+      // be kept, runner.json would name the new one and the backend deploy would refuse the mismatch.
+      // So it is that deployment that is used, found from the name in the key.
+      const found = admin.deployment ? await this.findUrl(admin.deployment) : undefined;
+      if (!found) {
+        throw new Fail(`There is already a deploy key in ${admin.file}${admin.deployment ? `, for the deployment ${admin.deployment}` : ''}, but runner.json doesn't say where that deployment is and it couldn't be found, so this won't make another backend that the key doesn't match. Put its address in runner.json as "sync": { "url": "https://${admin.deployment ?? 'your-deployment'}.convex.cloud" } (it is on the deployment's page in the Convex dashboard) and run this again, or remove ${admin.file} to start over with a new one. Nothing has been changed.`);
+      }
+      this.ok(`the deploy key in ${admin.file} is for ${found}: using that deployment, not making another`);
+      return found;
+    }
     const env = this.envLocal();
     if (have) {
       if (!env) {
@@ -518,33 +541,43 @@ class Setup {
     // that is already set wins and is never replaced, or a runner using it would
     // be locked out. Only a deployment without one gets a new key.
     // scripts/runner-key-plan.mjs holds those rules.
-    if (this.dry) {
-      if (fs.existsSync(this.runnerKeyFile)) this.ok(`runner key, in ${this.runnerKeyFile}`);
+    const local = this.localKey();
+    // The deploy key to ask the deployment with is not here yet (a dry run, before the real one makes
+    // it), or the Convex command line isn't either. Nothing can be said of the deployment's key, so
+    // what a first run does with a key already in the data folder is planned for, not skipped.
+    if (admin.kind !== 'cloud' || !this.convexBin()) {
+      if (local) this.todo(`the runner key already in ${this.runnerKeyFile}: the deployment's own RUNNER_KEY replaces it if the deployment has one, else this one is set as RUNNER_KEY on the deployment`);
       else {
         this.changed.runnerKey = true;
         this.todo(`the runner key: the deployment's own if it has one, else a new one set as RUNNER_KEY and kept in ${this.runnerKeyFile}`);
       }
       return url;
     }
-    const local = this.localKey();
+    // Asked of the deployment even in a dry run (a read, nothing is written), because a key that is
+    // already here can still be replaced by the deployment's own, or set on a deployment that has none:
+    // those are credential writes, and a plan that left them out would let them run unconfirmed.
     const got = this.convex(['env', 'get', 'RUNNER_KEY'], { admin });
     const nextGet = this.convex(['env', 'get', 'RUNNER_KEY_NEXT'], { admin });
     const plan = runnerKeyPlan({ envGet: got, nextGet, local, joining: false });
     if (plan.action === 'fail') throw new Fail(plan.why.replace(/([Rr])un setup again/g, '$1un it again').replace('so setup stopped', 'so this stopped'));
     if (plan.action === 'keep') this.ok('runner key');
     else if (plan.action === 'copy') {
-      this.writeSecret(this.runnerKeyFile, got.stdout.trim());
       this.changed.runnerKey = true;
-      this.ok(local ? "runner key: using the deployment's (it already had one)" : 'runner key');
-    } else {
-      const fresh = local || crypto.randomBytes(32).toString('hex');
-      if (!local) {
-        this.writeSecret(this.runnerKeyFile, fresh);
-        this.changed.runnerKey = true;
+      if (this.dry) this.todo(local ? `replace the runner key in ${this.runnerKeyFile} with the deployment's own RUNNER_KEY: the deployment already has a different one, which wins, so a runner using the old one would be locked out` : `copy the deployment's own RUNNER_KEY into ${this.runnerKeyFile}`);
+      else {
+        this.writeSecret(this.runnerKeyFile, got.stdout.trim());
+        this.ok(local ? "runner key: using the deployment's (it already had one)" : 'runner key');
       }
-      const set = this.convex(['env', 'set', 'RUNNER_KEY'], { admin, input: fresh });
-      if (set.status !== 0) throw new Fail(`Setting RUNNER_KEY on the deployment failed (${tail(set) || 'no answer'}). Run this again.`);
-      this.ok('runner key set as RUNNER_KEY');
+    } else {
+      if (!local) this.changed.runnerKey = true;
+      if (this.dry) this.todo(local ? `set the runner key in ${this.runnerKeyFile} as RUNNER_KEY on the deployment, which has none` : `make a new runner key, keep it in ${this.runnerKeyFile} and set it as RUNNER_KEY on the deployment, which has none`);
+      else {
+        const fresh = local || crypto.randomBytes(32).toString('hex');
+        if (!local) this.writeSecret(this.runnerKeyFile, fresh);
+        const set = this.convex(['env', 'set', 'RUNNER_KEY'], { admin, input: fresh });
+        if (set.status !== 0) throw new Fail(`Setting RUNNER_KEY on the deployment failed (${tail(set) || 'no answer'}). Run this again.`);
+        this.ok('runner key set as RUNNER_KEY');
+      }
     }
     return url;
   }
@@ -611,6 +644,15 @@ class Setup {
       return this.note(`If Settings > Phone & browser still says the sync backend is off, the runner started before those settings were written: restart it (${path.basename(this.installerScript())} --stop and then --start, or the Runners page).`);
     }
     if (v['no-restart']) return this.restartHelp('Not restarting (--no-restart). To make the runner read the new settings:');
+    // The installed task or service takes no data folder of its own: it runs with the standard one.
+    // With --home (or THREADBEAR_HOME) naming another, restarting it would stop whatever it is
+    // doing for nothing and leave the runner that uses the folder just set up as it was, while
+    // saying it had restarted. So that one is left alone.
+    const standard = dataDirFor({ platform: d.platform, env: d.env, home: d.homedir });
+    if (!samePath(this.home, standard, d.platform)) {
+      this.note(`A runner installed on this computer (its ${d.platform === 'win32' ? 'Task Scheduler task' : 'systemd user service'}) uses the standard data folder, ${standard}, not ${this.home}. It was left alone: restarting it would not change the runner that uses ${this.home}.`);
+      return this.note(`  To make that runner read the new settings, restart it yourself, the way you started it, with THREADBEAR_HOME set to ${this.home}.`);
+    }
     const script = this.installerScript();
     const installer = path.basename(script);
     if (!d.exists(script)) return this.restartHelp(`${script} isn't here. To make the runner read the new settings:`);
