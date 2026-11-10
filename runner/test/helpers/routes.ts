@@ -107,6 +107,13 @@ export async function threeWays(play: (p: Play) => void | Promise<void>) {
   return { views, refused, backend: b, threadId: id };
 }
 
+// Without a subscriber of its own a ConvexSync opens a real Convex client for its url, and
+// 'https://x.convex.cloud' is a real host: the client connected, was told "Couldn't parse
+// deployment name x" and threw that into whichever test was running (scenarios.test.ts failed
+// on GitHub's Ubuntu and Windows runners, 10 Nov). Writes go through `post`, so nothing here
+// needs the phone's command subscription.
+const NO_SUBSCRIBER = { subscribe: () => () => undefined, close: () => undefined };
+
 /**
  * Plays each of `plays` as a thread on one Runner with a fake CLI, and
  * writes them all through `post` with that runner's real ConvexSync: the
@@ -115,7 +122,7 @@ export async function threeWays(play: (p: Play) => void | Promise<void>) {
  */
 export async function playInto(post: Post, runner: { key: string; runnerId: string; name: string }, plays: ((p: Play) => void | Promise<void>)[]) {
   const h = makeHarness();
-  const sync = new ConvexSync({ config: { enabled: true, url: 'https://x.convex.cloud', name: runner.name, runnerId: runner.runnerId }, key: runner.key, home: h.cfg.home, runner: h.runner, version: '0.1.0+test', release: 'rel1', startedAt: '2026-10-27T00:00:00.000Z', clock: h.clock, log: nullLogger, post, upload: async () => 'st' } as never);
+  const sync = new ConvexSync({ config: { enabled: true, url: 'https://x.convex.cloud', name: runner.name, runnerId: runner.runnerId }, key: runner.key, home: h.cfg.home, runner: h.runner, version: '0.1.0+test', release: 'rel1', startedAt: '2026-10-27T00:00:00.000Z', clock: h.clock, log: nullLogger, post, upload: async () => 'st', subscriber: NO_SUBSCRIBER } as never);
   const ids: string[] = [];
   for (const play of plays) {
     const { thread } = h.runner.create({ text: 'Start', accountId: 'claude-3' });
