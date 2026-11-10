@@ -288,6 +288,56 @@ test("a Mac that joined (its key is a runner key) is never handed the main key o
   assert.notEqual(runnerKeyPlan({ envGet: unset, local: 'tbr_mine', joining: false }).action, 'set');
 });
 
+// A computer joining with the key file `tb runner add --out` wrote (scripts/setup-sync.mjs --join):
+// what to do with the key it has already and the one it was given.
+type JoinPlan = (p: { local?: string; file?: string }) => { action: string; why?: string };
+const { joinKeyPlan, keyKind, RUNNER_KEY_SHAPE } = (await import(planModule)) as { joinKeyPlan: JoinPlan; keyKind: (text: string) => string; RUNNER_KEY_SHAPE: RegExp };
+const RK1 = 'tbr_' + 'ab12'.repeat(16);
+const RK2 = 'tbr_' + 'cd34'.repeat(16);
+const MAIN = 'f0e1'.repeat(16);
+
+test('joinKeyPlan: a main key already here is never replaced; a runner key is kept, installed or replaced', () => {
+  // Nothing here and nothing given: part one, the computer waits for its key.
+  assert.deepEqual(joinKeyPlan({}), { action: 'need' });
+  assert.deepEqual(joinKeyPlan({ local: '', file: undefined }), { action: 'need' });
+  // A runner key here and no file (or the same one): kept.
+  assert.deepEqual(joinKeyPlan({ local: RK1 }), { action: 'keep' });
+  assert.deepEqual(joinKeyPlan({ local: RK1, file: RK1 }), { action: 'keep' });
+  assert.deepEqual(joinKeyPlan({ local: `${RK1}\n`, file: ` ${RK1} \r\n` }), { action: 'keep' }, 'blanks around a key are not part of it');
+  // A key given and none here: installed. A different one given: replaces the old.
+  assert.deepEqual(joinKeyPlan({ file: RK1 }), { action: 'install' });
+  assert.deepEqual(joinKeyPlan({ local: RK1, file: RK2 }), { action: 'replace' });
+  // Something else in secrets/convex-key is the main key (or a copy of it): refused, with or without a file.
+  for (const local of [MAIN, 'my-local-main-key', 'prod:calm-fox-123|abc']) {
+    for (const file of [undefined, RK1, RK2]) assert.deepEqual(joinKeyPlan({ local, file }), { action: 'refuse', why: 'local' }, `${local} ${file}`);
+  }
+  // A file that isn't a runner key is refused, and says what it looks like.
+  assert.deepEqual(joinKeyPlan({ file: MAIN }), { action: 'refuse', why: 'file-main' });
+  assert.deepEqual(joinKeyPlan({ file: 'prod:calm-fox-123|SECRET' }), { action: 'refuse', why: 'file-deploy' });
+  assert.deepEqual(joinKeyPlan({ file: 'CONVEX_DEPLOY_KEY=prod:calm-fox-123|SECRET\n' }), { action: 'refuse', why: 'file-deploy' });
+  assert.deepEqual(joinKeyPlan({ file: '   \r\n' }), { action: 'refuse', why: 'file-empty' });
+  assert.deepEqual(joinKeyPlan({ file: '' }), { action: 'refuse', why: 'file-empty' });
+  for (const file of ['tbr_short', RK1 + '0', RK1.toUpperCase(), `${RK1}\n${RK1}`, 'tbr_' + 'zz'.repeat(32), 'hello']) {
+    assert.deepEqual(joinKeyPlan({ local: RK1, file }), { action: 'refuse', why: 'file-other' }, file);
+  }
+  // The same holds a runner key here: the file is judged before anything is replaced.
+  assert.deepEqual(joinKeyPlan({ local: RK1, file: MAIN }), { action: 'refuse', why: 'file-main' });
+});
+
+test('keyKind and RUNNER_KEY_SHAPE: what a runner key looks like is what the backend makes', () => {
+  assert.equal(keyKind(RK1), 'runner');
+  assert.equal(keyKind(MAIN), 'main');
+  assert.equal(keyKind('tbr_' + '1'.repeat(63)), 'other');
+  assert.equal(keyKind('prod:x|y'), 'deploy');
+  assert.equal(keyKind('dev:calm-fox-123|abc+/='), 'deploy');
+  assert.equal(keyKind(''), 'empty');
+  assert.ok(RUNNER_KEY_SHAPE.test(RK1) && !RUNNER_KEY_SHAPE.test(RK1 + '\n') && !RUNNER_KEY_SHAPE.test(MAIN));
+  // The backend makes 32 random bytes in lower case hex after "tbr_" (convex/sync.ts addRunnerKey). If that
+  // ever changes, this shape has to follow it, or a good key file would be refused.
+  const source = fs.readFileSync(path.join(import.meta.dirname, '..', '..', '..', 'convex', 'sync.ts'), 'utf8');
+  assert.match(source, /const bytes = new Uint8Array\(32\);\n\s+crypto\.getRandomValues\(bytes\);\n\s+const key = 'tbr_' \+ Array\.from\(bytes, \(b\) => b\.toString\(16\)\.padStart\(2, '0'\)\)\.join\(''\);/);
+});
+
 test('tb runner add gives a Mac set up without Convex the deployment as well as its key', async () => {
   const s = setup({ sync: { runnerId: 'fresh0000001', name: 'new' } });
   assert.equal(await runnerKeysCommand(s.cfg, ['add', 'new'], { ssh: 'new' }, s.deps), 0);
