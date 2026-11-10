@@ -620,7 +620,7 @@ test('a deploy key already in the data folder, with no address anywhere, is used
   const found = world({ packages: false });
   login(found);
   found.acct.prod = URL_;
-  assert.equal(await found.run('--yes', '--no-restart'), 0, found.text());
+  assert.equal(await found.run('--yes', '--no-restart', '--home', found.home), 0, found.text());
   assert.ok(!found.convexCalls().some((c) => /^(dev|deployment)/.test(c)), `no project or deployment was made: ${found.convexCalls().join(' | ')}`);
   assert.equal(readJson(path.join(found.home, 'runner.json')).sync.url, URL_);
   assert.match(found.text(), /is for https:\/\/calm-fox-123\.ap-southeast-2\.convex\.cloud: using that deployment, not making another/);
@@ -629,7 +629,7 @@ test('a deploy key already in the data folder, with no address anywhere, is used
   // It cannot: nothing is made and nothing is written, and it says what to put where.
   const lost = world({ packages: false });
   login(lost);
-  assert.equal(await lost.run('--yes', '--no-restart'), 1);
+  assert.equal(await lost.run('--yes', '--no-restart', '--home', lost.home), 1);
   assert.match(lost.errs.join('\n'), /already a deploy key in .*convex-deploy\.env, for the deployment calm-fox-123/);
   assert.match(lost.errs.join('\n'), /"sync": \{ "url": "https:\/\/calm-fox-123\.convex\.cloud" \}/);
   assert.ok(!lost.convexCalls().some((c) => /^(dev|deployment|env set)/.test(c)));
@@ -640,36 +640,36 @@ test('a deploy key already in the data folder, with no address anywhere, is used
 test("a runner key that is already here is planned for, not skipped: replacing it with the deployment's, or setting it on one that has none, needs a yes", async () => {
   const keyFile = (w: ReturnType<typeof world>) => path.join(w.home, 'secrets', 'convex-key');
   const w = world({ packages: false });
-  assert.equal(await w.run('--yes', '--no-restart'), 0, w.text());
+  assert.equal(await w.run('--yes', '--no-restart', '--home', w.home), 0, w.text());
   const mine = fs.readFileSync(keyFile(w), 'utf8');
   // Up to date: nothing is planned and nothing is asked.
-  assert.equal(await w.run('--no-restart'), 0, w.text());
+  assert.equal(await w.run('--no-restart', '--home', w.home), 0, w.text());
   assert.doesNotMatch(w.text().split('Threadbear sync setup').at(-1) ?? '', /This will:/);
 
   // The deployment has another key of its own: it would win and replace this one.
   w.acct.runnerKey = 'the-deployments-other-key';
   const before = w.calls.length;
-  assert.equal(await w.run('--no-restart'), 1, 'no terminal and no --yes: it stops and asks for neither');
+  assert.equal(await w.run('--no-restart', '--home', w.home), 1, 'no terminal and no --yes: it stops and asks for neither');
   assert.match(w.errs.join('\n'), /Not asking, as there is no terminal/);
   assert.match(w.text(), /This will:\n {2}- replace the runner key in .*convex-key with the deployment's own RUNNER_KEY/);
   assert.equal(fs.readFileSync(keyFile(w), 'utf8'), mine, 'the key is as it was');
   assert.ok(!w.calls.slice(before).some((c) => c.args.includes('set')), 'nothing was set on the deployment');
-  assert.equal(await w.run('--dry-run'), 0);
+  assert.equal(await w.run('--dry-run', '--home', w.home), 0);
   assert.equal(fs.readFileSync(keyFile(w), 'utf8'), mine, 'a dry run changes nothing');
-  assert.equal(await w.run('--yes', '--no-restart'), 0, w.text());
+  assert.equal(await w.run('--yes', '--no-restart', '--home', w.home), 0, w.text());
   assert.equal(fs.readFileSync(keyFile(w), 'utf8'), 'the-deployments-other-key', 'with a yes it is replaced');
 
   // The deployment has none: this one would be set on it.
   const x = world({ packages: false });
-  assert.equal(await x.run('--yes', '--no-restart'), 0, x.text());
+  assert.equal(await x.run('--yes', '--no-restart', '--home', x.home), 0, x.text());
   const keep = fs.readFileSync(keyFile(x), 'utf8');
   x.acct.runnerKey = undefined;
   x.errs.length = 0;
   x.out.length = 0;
-  assert.equal(await x.run('--no-restart'), 1);
+  assert.equal(await x.run('--no-restart', '--home', x.home), 1);
   assert.match(x.text(), /This will:\n {2}- set the runner key in .*convex-key as RUNNER_KEY on the deployment, which has none/);
   assert.equal(x.acct.runnerKey, undefined, 'RUNNER_KEY was not set');
-  assert.equal(await x.run('--yes', '--no-restart'), 0, x.text());
+  assert.equal(await x.run('--yes', '--no-restart', '--home', x.home), 0, x.text());
   assert.equal(x.acct.runnerKey, keep.trim(), 'with a yes it is set');
   assert.equal(fs.readFileSync(keyFile(x), 'utf8'), keep, 'the local file is as it was');
 
@@ -677,7 +677,7 @@ test("a runner key that is already here is planned for, not skipped: replacing i
   const first = world({ packages: false });
   fs.mkdirSync(path.join(first.home, 'secrets'), { recursive: true });
   fs.writeFileSync(keyFile(first), 'my-local-main-key\n');
-  assert.equal(await first.run('--dry-run'), 0, first.text());
+  assert.equal(await first.run('--dry-run', '--home', first.home), 0, first.text());
   assert.match(first.text(), /todo {2}the runner key already in .*convex-key: the deployment's own RUNNER_KEY replaces it/);
 });
 
