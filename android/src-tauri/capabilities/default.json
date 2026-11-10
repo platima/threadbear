@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "default",
-  "description": "The app's own page. It may hear of a pairing link and ask this phone for notifications, and nothing else of Tauri's: it talks to the user's Convex deployment itself, over the network, not through the shell.",
+  "description": "The app's own page. It may hear of a pairing link, ask this phone for notifications and open the code scanner to read a pairing code, and nothing else of Tauri's: it talks to the user's Convex deployment itself, over the network, not through the shell.",
   "windows": ["main"],
   "permissions": ["core:default", "deep-link:default", "threadbear-push:default"]
 }

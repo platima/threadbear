@@ -3,9 +3,10 @@
 // The work is in Kotlin (android/): it starts Firebase, asks for the
 // notification permission, makes the phone's own push key and opens what the
 // push relay sends (docs/android.md). This file is the thin Rust side that
-// lets the page call it, as `plugin:threadbear-push|status` and
-// `plugin:threadbear-push|register`. Anywhere but Android both answer that
-// notifications are not available.
+// lets the page call it, as `plugin:threadbear-push|status`,
+// `plugin:threadbear-push|register` and `plugin:threadbear-push|scan` (Google's
+// QR code scanner, for pairing). Anywhere but Android the first two answer that
+// notifications are not available and the third that there is no scanner.
 use serde_json::{json, Value};
 use tauri::{
     plugin::{Builder, TauriPlugin},
@@ -64,9 +65,18 @@ async fn register<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
     app.state::<Push<R>>().call("register").await
 }
 
+// Opens Google's code scanner over the app and gives the page the text of the QR code
+// it reads (`{ text }`), or `{ cancelled: true }` if the person backed out. The page
+// checks the text is a pairing link before it offers anything. Anywhere but Android
+// the answer has neither, which the page reads as "no scanner here".
+#[tauri::command]
+async fn scan<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
+    app.state::<Push<R>>().call("scan").await
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("threadbear-push")
-        .invoke_handler(tauri::generate_handler![status, register])
+        .invoke_handler(tauri::generate_handler![status, register, scan])
         .setup(|app, api| {
             #[cfg(target_os = "android")]
             let push = Push { handle: api.register_android_plugin(PLUGIN_IDENTIFIER, "PushPlugin")? };

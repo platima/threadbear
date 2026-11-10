@@ -39,5 +39,7 @@ kotlin {
 dependencies {
     implementation("androidx.core:core-ktx:1.9.0")
     implementation("com.google.firebase:firebase-messaging:24.1.2")
+    // The pairing screen's scanner: Google's, which has its own camera screen
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation(project(":tauri-android"))
 }
