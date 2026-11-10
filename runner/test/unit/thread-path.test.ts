@@ -12,10 +12,12 @@ test("the runner's bin folder comes first, then what the runner had, on a Mac or
 test("on Windows the runner's own Node is on the thread's PATH too, unless it already is", () => {
   const node = 'C:\\Program Files\\Threadbear\\node\\node.exe';
   const folder = 'C:\\Program Files\\Threadbear\\node';
-  const withNode = threadPath('C:\\Windows\\System32', node, true).split(path.delimiter);
-  assert.equal(withNode[0], BIN_DIR);
-  assert.equal(withNode[1], folder, "beside the runner's bin folder, ahead of the rest");
-  assert.equal(withNode[2], 'C:\\Windows\\System32');
+  // The whole string, not split: on a Mac or Linux the delimiter is ':', which is also in 'C:\...'.
+  assert.equal(
+    threadPath('C:\\Windows\\System32', node, true),
+    [BIN_DIR, folder, 'C:\\Windows\\System32'].join(path.delimiter),
+    "the runner's Node beside its bin folder, ahead of the rest",
+  );
   // Already there, in any case or with a trailing slash: not added a second time.
   const base = 'C:\\Windows;c:\\program files\\threadbear\\NODE\\';
   const again = threadPath(base, node, true);

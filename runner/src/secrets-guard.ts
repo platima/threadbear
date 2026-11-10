@@ -72,7 +72,13 @@ export function denySecrets(tool: string, input: Record<string, unknown>, home: 
     if (variants.some((v) => /\brunner-token\b/.test(v) || forward(forms).some((f) => v.includes(f)))) return REASON;
     // A name Windows made for a long one (8.3): Threadbear is THREAD~1 and runner-token is
     // RUNNER~1, so a command can name `THREAD~1\SECRET~1\RUNNER~1` and never say either word.
-    if (variants.some((v) => /runner~\d/.test(v) || (/thread~\d/.test(v) && (/secret/.test(v) || /[*?[]/.test(v))))) return REASON;
+    // RUNNER~1 on its own is also Git's revision syntax (git show runner~1), so it counts only
+    // beside the data folder: the word secret, THREAD~1, Threadbear, the data folder's own path, or
+    // a command run from inside the secrets folder.
+    const inSecrets = cwd !== undefined && inside(resolved(cwd), resolved(secrets));
+    const homeForms = forward([home]).map((h) => h.toLowerCase());
+    const nearData = (v: string) => inSecrets || /secret|thread~\d|threadbear/.test(v) || homeForms.some((h) => v.includes(h));
+    if (variants.some((v) => (/runner~\d/.test(v) && nearData(v)) || (/thread~\d/.test(v) && (/secret/.test(v) || /[*?[]/.test(v))))) return REASON;
     // The data dir named with a wildcard after it reaches the same files
     // without those words (secr*/*).
     const dataDir = forward([home, home.replace(home2, '~'), home.replace(home2, '$HOME'), ...named, 'Application Support/Threadbear', '%appdata%/threadbear', '$env:appdata/threadbear'].map((d) => d.toLowerCase()));

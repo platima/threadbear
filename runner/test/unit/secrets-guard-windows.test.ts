@@ -45,6 +45,16 @@ test('a short (8.3) name or a UNC share of the same drive names the same folder'
   }
 });
 
+test('a short name counts only beside the data folder: Git revisions that look like one are left alone', () => {
+  for (const command of ['git show runner~1', 'git diff feature/runner~1', 'git log runner~2..HEAD', 'git rev-parse HEAD~1 runner~3', 'type C:\\work\\THREAD~1\\notes.txt']) {
+    assert.equal(deny(command), undefined, command);
+  }
+  // From inside the secrets folder, the short name of the token file is the token file.
+  assert.ok(denySecrets('Bash', { command: 'type RUNNER~1' }, home, path.join(home, 'secrets')), 'run from the secrets folder');
+  assert.equal(denySecrets('Bash', { command: 'git show runner~1' }, home, os.tmpdir()), undefined, 'the same words from anywhere else');
+  assert.ok(deny(`type ${home}\\RUNNER~1`), "after the data folder's own path");
+});
+
 test('ordinary commands that only look near it are left alone', () => {
   for (const command of [
     'ls secrets',
