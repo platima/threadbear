@@ -340,6 +340,9 @@ enum Theme {
 extension NSAttributedString.Key {
     /// Fill a rounded box behind the whole run (code blocks, cards).
     static let tbBlockBackground = NSAttributedString.Key("tbBlockBackground")
+    /// A ```bash block's command (ShellBlock), on the box's text: the box
+    /// gets the play and copy icons (ShellBlockIcons).
+    static let tbShellBlock = NSAttributedString.Key("tbShellBlock")
     /// Fill each line fragment edge to edge (diff lines).
     static let tbLineBackground = NSAttributedString.Key("tbLineBackground")
     /// A small rounded fill behind just the run's glyphs (inline code).

@@ -234,6 +234,25 @@ extension AppModel {
     /// it the keyboard.
     func toggleTerminal() {
         if terminalShown { return dock.close(WindowDock.terminal) }
+        bringUpTerminal()
+        Terminals.shared.open(TerminalTarget.for(selectedThread) { runnerName(of: $0) })
+    }
+
+    /// Whether a shell here would be in the showing thread's own folder.
+    /// Otherwise it's a shell on this Mac somewhere else (TerminalTarget's
+    /// note), which is no place to put a command the thread handed you.
+    var canPutInTerminal: Bool {
+        selectedThread != nil && TerminalTarget.for(selectedThread) { runnerName(of: $0) }.note == nil
+    }
+
+    /// A ```bash block's play icon: the command at the thread's prompt.
+    func putInTerminal(_ block: ShellBlock, done: @escaping @MainActor (Terminals.PutOutcome) -> Void) {
+        guard canPutInTerminal else { return }
+        if !terminalShown { bringUpTerminal() }
+        Terminals.shared.put(block, in: TerminalTarget.for(selectedThread) { runnerName(of: $0) }, done: done)
+    }
+
+    private func bringUpTerminal() {
         if dock.layout.contains(WindowDock.terminal) {
             dock.show(WindowDock.terminal)
         } else if let main = dock.layout.group(containing: WindowDock.main) {
@@ -246,7 +265,6 @@ extension AppModel {
         } else {
             dock.open(WindowDock.terminal, .window(.bottom))
         }
-        Terminals.shared.open(TerminalTarget.for(selectedThread) { runnerName(of: $0) })
     }
 
     /// The split a panel's group sits directly in.

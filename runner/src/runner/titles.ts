@@ -88,12 +88,14 @@ export const titlesPart = {
   },
 
   // The librarian's line on where the thread is up to.
-  setBrief(this: Runner, threadId: string, text: string): void {
+  setBrief(this: Runner, threadId: string, text: string, purpose?: string): void {
     const st = this.threads.get(threadId);
     if (!st || st.rt.deleted) return;
     const clean = text.trim().slice(0, 600);
-    if (!clean || clean === st.rec.brief?.text) return;
-    st.rec.brief = { text: clean, at: this.isoNow() };
+    // A look that gave no purpose keeps the one the thread has.
+    const why = purpose?.replace(/\s+/g, ' ').trim().slice(0, 200) || st.rec.brief?.purpose;
+    if (!clean || (clean === st.rec.brief?.text && why === st.rec.brief?.purpose)) return;
+    st.rec.brief = { text: clean, at: this.isoNow(), ...(why ? { purpose: why } : {}) };
     this.highlightsChanged(st);
   },
 

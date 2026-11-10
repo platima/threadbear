@@ -1,7 +1,7 @@
 # Porting the desktop app to GPUI
 
-Status: approved by Mike on 9 Nov 2026. Stage 0 is under way; progress is in
-[PARITY.md](gpui-port/PARITY.md).
+Status: approved by Mike on 9 Nov 2026. Stage 0 is done and stage 1 (the daily
+driver) is nearly there; progress is in [PARITY.md](gpui-port/PARITY.md).
 
 The goal is one Rust desktop app, drawn with [GPUI](https://gpui.rs) and
 [gpui-kit](https://gpui-kit.com), for Mac, Windows and Linux. It replaces the

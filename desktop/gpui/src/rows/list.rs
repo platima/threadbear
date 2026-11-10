@@ -8,10 +8,12 @@ use super::metrics::{FADE_HEIGHT, LIST_TOP_INSET, TOP_FADE_HEIGHT};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 use std::ops::Range;
 
 /// How far past the viewport the list lays rows out.
-const OVERDRAW: Pixels = px(600.);
+const OVERDRAW: Pixels = gpui_kit::px(600.);
 
 pub struct TranscriptList {
     list: ListState,

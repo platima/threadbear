@@ -418,6 +418,9 @@ final class AppModel {
     /// Empty from a runner before step 6, or before it answers: then
     /// there's no choice to offer and every schedule is this runner's.
     var runners: [RunnerInfo] = []
+    /// Asking for `runners` again after a failure (`retryRunners`).
+    @ObservationIgnored var runnersRetry: Task<Void, Never>?
+    @ObservationIgnored var runnersRetryDelay: Duration = .seconds(30)
     /// The experiments on for this Mac's runner, from its hello.
     var experiments: Set<String> = []
     /// The Move sheet, while it's open.
@@ -598,6 +601,11 @@ final class AppModel {
     var collapsedSections: Set<InboxSection> = AppModel.storedCollapsedSections() {
         didSet { UserDefaults.standard.set(collapsedSections.map(\.rawValue).sorted(), forKey: Self.collapsedSectionsKey) }
     }
+    /// Recap boxes put away with ×, by thread: the `lastActivityAt` each was
+    /// put away at, so the box comes back after the thread's next quiet spell.
+    var dismissedRecaps: [String: Double] = UserDefaults.standard.dictionary(forKey: AppModel.dismissedRecapsKey) as? [String: Double] ?? [:] {
+        didSet { UserDefaults.standard.set(dismissedRecaps, forKey: Self.dismissedRecapsKey) }
+    }
     /// The Scheduled list's folded headings, remembered like the inbox's.
     /// Done starts folded: one-offs that have run are there to look up.
     var collapsedScheduleSections: Set<ScheduleSection> = AppModel.storedCollapsedScheduleSections() {
@@ -722,6 +730,7 @@ final class AppModel {
     static let lastEffortKey = "lastEffort"
     static let memoryProviders = ["claude", "codex", "cursor", "opencode"]
     static let collapsedSectionsKey = "collapsedSections"
+    static let dismissedRecapsKey = "dismissedRecaps"
     /// Set once Hibernating and Archive have been folded the first time.
     /// They came after collapsedSections did, so a saved list without them
     /// can't tell "never seen" from "opened".

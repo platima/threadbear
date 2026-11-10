@@ -7,6 +7,8 @@ use crate::style::{MAX_CONTENT_WIDTH, SIDE_INSET};
 use crate::thread::ThreadPane;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 use std::path::PathBuf;
 use threadbear_core::reducer::{ImageRef, Row};
 
@@ -89,9 +91,10 @@ impl ThreadPane {
 
     fn image_grid(&self, images: &[ImageRef], frames: Vec<Frame>, height: f32, width: f32) -> impl IntoElement {
         let mut grid = div().relative().h(px(height)).w(px(width)).flex_none();
+        let all: Vec<ImageRef> = images.to_vec();
         for (i, (image, frame)) in images.iter().zip(frames).enumerate() {
             let path = image.path.clone();
-            let url = format!("file://{path}");
+            let tile_images = all.clone();
             grid = grid.child(
                 div()
                     .id(("image", i))
@@ -103,8 +106,10 @@ impl ThreadPane {
                     .rounded(px(8.))
                     .overflow_hidden()
                     .cursor_pointer()
-                    .tooltip(super::tip("Open the image"))
-                    .on_click(move |_, _, cx| cx.open_url(&url))
+                    .tooltip(super::tip(crate::viewer::TILE_TIP))
+                    // The in-app viewer, not the file's default app: only a
+                    // real picture opens, and nothing is ever run (viewer.rs).
+                    .on_click(move |_, window, cx| crate::viewer::open_from_tile(&tile_images, i, window, cx))
                     .child(img(PathBuf::from(path)).w(px(frame.w)).h(px(frame.h)).rounded(px(8.)).object_fit(ObjectFit::Cover)),
             );
         }

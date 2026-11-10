@@ -51,23 +51,59 @@ pub struct ThreadSummary {
     pub preview: String,
     pub last_seq: u64,
     pub last_seen_seq: u64,
+    /// The rail's panel buttons (`ThreadSummary.panels`) and Patches, as they
+    /// came: the window shell draws a button for each. Kept as they came and
+    /// decoded leniently on demand (highlights.rs), as `background` and
+    /// `subagents` are.
+    pub panels: Option<Vec<Value>>,
+    pub actions: Option<Vec<Value>>,
+    pub patches: Option<Vec<Value>>,
+    pub hooks: Option<Vec<Value>>,
+    /// Moves when a pin, a removal or a brief changes what `threads.highlights`
+    /// would answer, without a new event.
+    pub highlights_at: Option<String>,
+    /// The thread's worktree, while it has one (protocol "Worktrees").
+    pub worktree: Option<Value>,
+    pub on_old_runner: Option<bool>,
+    /// Sharing (protocol "Sharing"): `{ access, slug }`.
+    pub share: Option<Value>,
+    /// Which other runner it lives on; none for this Mac's own threads.
+    /// Never on the wire: a runner's summaries are all its own (Swift
+    /// `ThreadSummary.runnerId`), and `remote::summary` sets it.
+    #[serde(skip)]
+    pub runner_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct OpenAsk {
     pub action: String,
+    #[serde(rename = "where")]
+    pub place: Option<String>,
     pub why: Option<String>,
     pub options: Option<Vec<String>>,
     pub suggested: Option<usize>,
     pub ticked: Option<bool>,
 }
 
+impl OpenAsk {
+    /// Where it's to be done, in plain words (`plainWhere`).
+    pub fn where_text(&self) -> Option<String> {
+        self.place.as_deref().filter(|w| !w.is_empty()).map(crate::sidebar::preview_plain)
+    }
+}
+
+/// One of a thread's projects (`ThreadProject`): who put it there, and the
+/// librarian's reason, behind the project's ⓘ in Highlights.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Project {
     pub id: String,
     pub title: String,
+    /// "mike", "agent" or "librarian".
+    pub by: String,
+    pub pinned: bool,
+    pub why: Option<String>,
 }
 
 impl ThreadSummary {
@@ -164,6 +200,25 @@ impl ThreadSummary {
     }
     pub fn waiting_for_room_until_ms(&self) -> Option<i64> {
         self.waiting_for_room.as_ref()?.get("until")?.as_str().and_then(parse_ms)
+    }
+    /// The thread's panels (a page, a picture or a list), read leniently.
+    pub fn panels(&self) -> Vec<crate::highlights::Panel> {
+        self.panels.iter().flatten().filter_map(crate::highlights::Panel::from_value).collect()
+    }
+    /// Its action chips, read leniently.
+    pub fn actions(&self) -> Vec<crate::highlights::Action> {
+        self.actions.iter().flatten().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect()
+    }
+    /// The patches that apply to it, read leniently.
+    pub fn patches(&self) -> Vec<crate::highlights::PatchInfo> {
+        self.patches.iter().flatten().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect()
+    }
+    pub fn hooks(&self) -> Vec<crate::highlights::HookInfo> {
+        self.hooks.iter().flatten().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect()
+    }
+    /// A thread on another runner, shown here (`isRemote`).
+    pub fn is_remote(&self) -> bool {
+        self.runner_id.is_some()
     }
 }
 

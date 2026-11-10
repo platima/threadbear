@@ -303,6 +303,7 @@ type ThreadSummary = {
                         // started it when Mike didn't (Who started a thread)
   asked?: string        // Mike's last message to it, one line, <= 140 chars
                         // (What Mike last asked)
+  recap?: string        // the librarian's recap (The recap box)
   woke?: { at: string, since?: string } // came back from hibernating by
                         // itself (its time, a restart, a topic) at `at`,
                         // put away at `since` when known; only until Mike
@@ -961,7 +962,7 @@ Persisted event types (stored in `events.ndjson`, returned by `threads.events`):
 
 | type | fields |
 |---|---|
-| `user.message` | `text`, `images: ImageRef[]`, `answers?: AskAnswer[]` (the open card's asks it answers, as `threads.send` gave them: for showing, the agent only gets `text`), `origin?: "runner" \| "schedule" \| "phone"` (`runner` when the runner sent the message by itself, such as the resume after a restart; `schedule` when a schedule sent it, with `scheduleId`; `phone` when it came from the phone through the Convex mirror (Sync), and the agent then gets it after a line saying so and whether the user is at the Mac, though `text` keeps what was typed; absent for anything a person or client sent), `scheduleId?`, `editOf?: number` (the seq of the message this one replaced, see Editing a message) |
+| `user.message` | `text`, `images: ImageRef[]`, `answers?: AskAnswer[]` (the open card's asks it answers, as `threads.send` gave them: for showing, the agent only gets `text`), `origin?: "runner" \| "schedule" \| "phone"` (`runner` when the runner sent the message by itself, such as the resume after a restart; `schedule` when a schedule sent it, with `scheduleId`; `phone` when it came from the phone through the Convex mirror (Sync), and the agent then gets it after a line saying so and whether the user is at the Mac, though `text` keeps what was typed; absent for anything a person or client sent; a message typed by the user that starts a turn 12 hours or more after the thread's last turn ended, and doesn't answer a card or a review, also reaches the agent after a line asking it to open with what the thread is for and where it stands, and `text` keeps what was typed), `scheduleId?`, `editOf?: number` (the seq of the message this one replaced, see Editing a message) |
 | `assistant.text` | `itemId`, `text` (complete markdown for that block), `summary?: true` (the turn's summary, written by the runner from `end_turn`; see "Needs you"), `givesWay?: true` (on a summary, with bullet replies off: see "The summary"), `narration?: true` (Claude sent this as a narration block, whose text reaches the runner only as a short summary of what the agent wrote, not its words: see Transient events), `final?: true` (with one reply, the agent's message after `end_turn`, the turn's reply: see "Needs you", One reply). A later `assistant.text` with the same `itemId` replaces the earlier one where it stands |
 | `reasoning` | `itemId`, `text` (summary) |
 | `tool.call` | `itemId`, `name` (raw tool name), `kind` (`command` \| `read` \| `edit` \| `write` \| `search` \| `web` \| `mcp` \| `task` \| `todo` \| `image` \| `other`; `image` is image generation), `title` (one line, e.g. "npm test" or "Edit src/a.ts"), `input` (object, large strings truncated to 16 KB) |
@@ -1020,7 +1021,7 @@ the summary and then the reply.
 
 | method | params | result |
 |---|---|---|
-| `hello` | `{ client: string, version: string, build?: { commit, short, tree }, pid?: number }` (`build`: the Mac app's own build, see App restarts; a draining runner's link to the primary says `client: "threadbear-drain"` with its `pid`, for the log) | `{ runnerVersion, protocol: 1, accounts: Account[], providers?: ProviderInfo[], pools?: Pool[], defaults: { cwd, accountId, poolId?, model?, models?: { claude?, codex? }, efforts?: { claude?: EffortLevel, codex?: EffortLevel }, permissionMode?: "full" \| "ask" \| "auto" }, clis?: CliStatus[], updates?: RunnerUpdates, experiments?: string[] }`. `providers` is what each provider this runner knows is called and can do, in its own order (`ProviderInfo` above; absent from older runners, when a client uses what it knows of Claude and Codex). `experiments` is the ids of the experiments on for this runner (docs/experiments.md), read at each `hello`, so the app shows what belongs to one (the Move to menu for `moveToRunner`) from its next connect. `updates` is under Runner updates; `pools` and `defaults.poolId` under Pools. `defaults.accountId` is the account a `threads.create` with no `accountId` uses: the one with the most room among the last-used account's provider (skipping blocked ones, ones under 10% and ones with a note), worked out again as usage changes; a client keeps its own copy of the rule rather than asking again. `defaults.models[provider]` is the model a new thread on that provider gets when it names none (`runner.json`'s `defaults.models`; a dev runner sets the cheapest); `defaults.model` is the same for Claude, kept for older apps. Absent means the account's own default (`accounts[].defaultModel` names it, when known). `defaults.efforts[provider]` likewise for effort; absent means the model's own level. `defaults.permissionMode` is the mode a `threads.create` with none starts on, and the one the app's new-thread composer starts on and goes back to after each send (`runner.json`'s `defaults.permissionMode`, read at startup; `"plan"` or anything else there is ignored). Absent means `"full"`: setup writes `"auto"` into the `runner.json` it makes for a new install, and an install from before has none. A client that doesn't know the runner's (an older runner, or another runner reached through the backend) starts on `"full"`. `runnerVersion` is `<package version>+<release id>` when the runner runs from a release, else `<package version>+source` |
+| `hello` | `{ client: string, version: string, build?: { commit, short, tree }, pid?: number }` (`build`: the Mac app's own build, see App restarts; a draining runner's link to the primary says `client: "threadbear-drain"` with its `pid`, for the log) | `{ runnerVersion, protocol: 1, accounts: Account[], providers?: ProviderInfo[], pools?: Pool[], defaults: { cwd, accountId, poolId?, model?, models?: { claude?, codex? }, efforts?: { claude?: EffortLevel, codex?: EffortLevel }, permissionMode?: "full" \| "ask" \| "auto" }, clis?: CliStatus[], updates?: RunnerUpdates, experiments?: string[] }`. `providers` is what each provider this runner knows is called and can do, in its own order (`ProviderInfo` above; absent from older runners, when a client uses what it knows of Claude and Codex). `experiments` is the ids of the experiments on for this runner (docs/experiments.md), read at each `hello`, so the app shows what belongs to one (the Move to menu for `moveToRunner`) from its next connect. `updates` is under Runner updates; `pools` and `defaults.poolId` under Pools. `defaults.accountId` is the account a `threads.create` with no `accountId` uses: the one with the most room among the last-used account's provider (skipping blocked ones, ones under 10% and ones with a note), worked out again as usage changes; a client keeps its own copy of the rule rather than asking again. `defaults.models[provider]` is the model a new thread on that provider gets when it names none (`runner.json`'s `defaults.models`; a dev runner sets the cheapest); `defaults.model` is the same for Claude, kept for older apps. Absent means the account's own default (`accounts[].defaultModel` names it, when known). `defaults.efforts[provider]` likewise for effort; absent means the model's own level. `defaults.permissionMode` is the mode a `threads.create` with none starts on, and the one the app's new-thread composer starts on and goes back to after each send (`runner.json`'s `defaults.permissionMode`, read at startup; `"plan"` or anything else there is ignored). Absent means `"full"`: setup writes `"auto"` into the `runner.json` it makes for a new install, and an install from before has none. A client that doesn't know the runner's (an older runner, or another runner reached through the backend) starts on `"full"`. `runnerVersion` is `<package version>+<release id>` when the runner runs from a release, else `<package version>+source` `client` is `threadbear-mac` for the Swift app and `threadbear-desktop` for the GPUI one, which only counts as the app being open with its experiment on (`gpuiApp`) |
 | `threads.list` | `{ include?: ("inbox" \| "snoozed" \| "archived")[], ids?: string[] }` (default `["inbox"]`; a value the runner doesn't know is left out; `ids` keeps only those threads, unknown ones left out; an older runner ignores it, so pick yours out of the answer) | `{ threads: ThreadSummary[] }` newest activity first |
 | `threads.search` | `{ query: string, limit?: number }` | `{ threads: ThreadSummary[] }` matches title and preview across all threads, archived included |
 | `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, projectIds?: string[] }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. See "Models and effort across providers" |
@@ -2340,6 +2341,33 @@ from anyone but Mike is dropped. Both fields are set afresh by each archive and 
 `archivedAt` is set, so bringing a thread back needn't clear them; threads
 archived before 5 Nov have neither. `read_thread` and `list_threads` say
 them ("archived by the user: it worked").
+
+## The recap box
+
+Coming back to a thread after a while, you often can't remember what it was
+for. The librarian writes a recap ahead of time, as part of the look it
+already takes after a turn: `ThreadSummary.recap`, a sentence on what the
+thread is for and then the bullets from its note on where it stands
+(`brief` in the thread's record), one per line starting `- `. A note from
+before this has only the bullets. It's in the summary only with the
+`recapBox` experiment on, and goes to the phone, the website and other
+runners with the rest of the row (backend API 70).
+
+Each app shows it in a box above the message box when all of these hold,
+and they all use the same rule:
+
+- there is a `recap`
+- `status` is `idle` and the thread isn't archived
+- `lastActivityAt` is 12 hours ago or more
+- it wasn't dismissed for this `lastActivityAt`
+
+Dismissing is the app's own (× on the box), remembered per thread on that
+device. Sending a message ends it, as `lastActivityAt` moves.
+
+A message the user types at a thread that hasn't had a turn for 12 hours
+reaches the agent after a line asking it to open with what the thread is for
+(`user.message`, above). When the box was up and said what the thread is
+for, the runner leaves that line off, so the recap isn't said twice.
 
 ## What Mike last asked
 
@@ -4988,6 +5016,18 @@ default).
   with the runner), and an offline runner is said before anything uploads.
   The direct link sends no pictures yet: the app says to turn it off to send
   them through Convex.
+- **Reply buttons and slash commands** (backend API 68, 9 Nov 2026).
+  `buttons.list` answers from the thread's rows' `buttons` (Sync, "Reply
+  buttons"), newest state of each, oldest first, as a `ReplyButton` with
+  `start: { text: "", cwd: target }` or `send: { threadId: "", threadTitle:
+  target, text: "" }`: the brief and the message stay on that runner.
+  `buttons.press` queues a `press` command `{ buttonId }` and waits for it to
+  be done (30 seconds), answering `{ button }` with `pressed.threadId` the
+  command's `resultThreadId`; a press that failed there is `-32000` with its
+  note. `threads.commands` queues `slashCommands` and answers `{ commands }`
+  from the command's `result`. Both commands are what the phone sends, so a
+  runner from before this does them; a backend before 68 refuses them, so
+  this runner says it needs updating instead.
 - **Answers from another runner.** `files.list` with `runnerId` and `path`
   is a `call` command, `{ method: "files.list", params: { path } }`, which
   that runner answers in the command's `result` (at most 500 entries; JSON

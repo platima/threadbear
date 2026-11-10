@@ -12,6 +12,8 @@ use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::{h_flex, v_flex, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use threadbear_core::reducer::{
@@ -684,7 +686,7 @@ impl ThreadPane {
             body = body.child(super::plan_steps(ix, &plan.entries, cx));
         }
         if let Some(doc) = doc {
-            body = body.child(div().when(!plan.entries.is_empty(), |d| d.mt(px(23.))).text_size(px(size::BODY)).line_height(px(size::BODY_LINE)).child(gpui_kit::base::TextView::new(&doc).selectable(true).style(text_style)));
+            body = body.child(div().when(!plan.entries.is_empty(), |d| d.mt(px(23.))).text_size(px(size::BODY)).line_height(px(size::BODY_LINE)).child(gpui_kit::base::TextView::new(&doc).selectable(true).style(text_style).code_block_highlighter(super::plain_code_blocks)));
         }
         content = content.child(body);
         let has_footer = waiting || !plan.entries.is_empty() || clipped;

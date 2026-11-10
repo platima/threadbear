@@ -90,8 +90,30 @@ async fn run(app: &WeakEntity<Threadbear>, window: AnyWindowHandle, cmd: &Value,
         let client = app.read_with(cx, |t, _| t.client.clone()).map_err(|e| e.to_string())?;
         return call(client, method, cmd["params"].clone()).await.map_err(|e| e.message);
     }
+    // `send` from the new-thread box waits for the thread it starts and says
+    // its id, as the Swift command does, for `tb show` and the like.
+    let from_new = cmd["cmd"] == "send" && app.read_with(cx, |t, _| t.selected.is_none()).map_err(|e| e.to_string())?;
+    let weak = app.clone();
     let Some(app) = app.upgrade() else { return Err("the app has gone".into()) };
-    cx.update_window(window, |_, window, cx| step(&app, cmd, window, cx)).map_err(|e| e.to_string())?
+    let out = cx.update_window(window, |_, window, cx| step(&app, cmd, window, cx)).map_err(|e| e.to_string())??;
+    if !from_new {
+        return Ok(out);
+    }
+    let started = std::time::Instant::now();
+    let wait = cmd["timeout"].as_f64().unwrap_or(10.);
+    loop {
+        let (opened, error) = weak.read_with(cx, |t, _| (t.selected.clone(), t.new_thread.error.clone())).map_err(|e| e.to_string())?;
+        if let Some(id) = opened {
+            return Ok(json!(format!("ok {id}")));
+        }
+        if let Some(error) = error {
+            return Err(format!("not sent: {error}"));
+        }
+        if started.elapsed().as_secs_f64() > wait {
+            return Err(format!("sent, but no new thread showed up within {wait} s"));
+        }
+        cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 fn text<'a>(cmd: &'a Value, key: &str) -> &'a str {
@@ -102,19 +124,48 @@ fn text<'a>(cmd: &'a Value, key: &str) -> &'a str {
 /// is what's on screen now.
 fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App) -> Result<Value, String> {
     match text(cmd, "cmd") {
-        "dump" => Ok(app.read(cx).dump(cx)),
+        "dump" => {
+            // A window covered by another gets no frames from the system on a
+            // Mac, and a scroll only takes effect at a frame.
+            window.render_frame(cx);
+            Ok(app.read(cx).dump(cx))
+        }
         "status" => Ok(json!("ok")),
         // The sidebar's commands (sidebar.rs). Guarded ones only take the forms
         // that name a section, a row or a tip; the others fall through below.
-        "hover" | "sort" | "archive-more" | "star" | "unstar" | "unarchive" | "new" | "realMenu" | "menu-popover" => crate::sidebar::automation(app, cmd, window, cx),
+        "hover" | "sort" | "archive-more" | "star" | "unstar" | "unarchive" | "realMenu" | "menu-popover" => crate::sidebar::automation(app, cmd, window, cx),
+        "new" | "options" => crate::new_thread::automation(app, cmd, window, cx),
+        "move" => crate::move_sheet::automation(app, cmd, window, cx),
         "expand" | "collapse" if cmd.get("section").is_some() => crate::sidebar::automation(app, cmd, window, cx),
         "archive" | "snooze" if cmd.get("id").is_some() || cmd.get("said").is_some() => crate::sidebar::automation(app, cmd, window, cx),
         "click" if cmd.get("tip").is_some() || cmd.get("tipPrefix").is_some() => crate::sidebar::automation(app, cmd, window, cx),
+        // The pane beside the thread (highlights.rs): the Swift app's names.
+        "preview" | "folder" | "highlight" | "trust" | "action" | "project-why" => crate::highlights::automation(app, cmd, window, cx),
+        "expand" | "collapse" if cmd.get("highlightSection").is_some() => crate::highlights::automation(app, cmd, window, cx),
+        "viewer" => {
+            let side = app.read(cx).side.clone();
+            crate::viewer::viewer_command(&side, cmd, cx)
+        }
+        // A picture tile of the transcript, as a click on it (`viewer` says what opened).
+        "tile" => {
+            let index = cmd["index"].as_u64().unwrap_or(0) as usize;
+            let count = cmd["count"].as_u64().unwrap_or(1) as usize;
+            let images = app.update(cx, |t, cx| t.update_pane(cx, |p, _| p.last_row_images(count)))??;
+            crate::viewer::open_from_tile(&images, index, window, cx);
+            let side = app.read(cx).side.clone();
+            crate::viewer::viewer_command(&side, &json!({}), cx)
+        }
         "open" | "select" => {
             let id = app.read(cx).thread_id_from(text(cmd, "id"))?;
-            app.update(cx, |t, cx| t.open(id.clone(), window, cx));
+            app.update(cx, |t, cx| {
+                t.reveal_thread(&id, cx);
+                t.open(id.clone(), window, cx)
+            });
             Ok(json!(format!("open ok {id}")))
         }
+        // The window shell (shell.rs, rails.rs, header.rs), the Swift
+        // app's commands of the same names.
+        "dock-move" | "panel" | "float" | "mode" | "zoom" | "rename" | "undo-archive" | "open-archived" | "error" | "mouse-button" | "copy-thread-id" | "menus" | "menu-item" | "app-menu" | "data-dir" | "share" | "signin" | "refusal" | "appearance" | "resize" => shell_step(app, cmd, window, cx),
         "search" => {
             let words = text(cmd, "text").to_string();
             let search = app.read(cx).search.clone();
@@ -130,6 +181,20 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         }
         "return" => {
             window.press(if cmd["shift"].as_bool().unwrap_or(false) { "shift-enter" } else { "enter" }, cx);
+            Ok(json!("ok"))
+        }
+        // The keys the composer's slash palette takes, where the cursor is
+        // (the Swift `arrow`, `tab`, `escape`).
+        "arrow" => {
+            window.press(if text(cmd, "dir") == "up" { "up" } else { "down" }, cx);
+            Ok(json!("ok"))
+        }
+        "tab" => {
+            window.press("tab", cx);
+            Ok(json!("ok"))
+        }
+        "escape" => {
+            window.press("escape", cx);
             Ok(json!("ok"))
         }
         // The Swift app's `paste-image` and `drop`: a file through the same
@@ -149,8 +214,18 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
                 window.dispatch_event(FileDropEvent::Exited.to_platform_input(), cx);
                 return Ok(json!("ok"));
             }
+            // Submit activates the app, and a window that wasn't active drops the
+            // first event (only a scripted window starts out that way).
+            cx.activate(true);
+            window.activate_window();
+            window.render_frame(cx);
             let paths = ExternalPaths(vec![std::path::PathBuf::from(text(cmd, "path"))].into());
             window.dispatch_event(FileDropEvent::Entered { position, paths }.to_platform_input(), cx);
+            window.render_frame(cx);
+            // A real drag moves over the window before it drops. The first frame
+            // after Entered still has the old hover state, and the drop's target
+            // wants this one.
+            window.dispatch_event(FileDropEvent::Pending { position }.to_platform_input(), cx);
             window.render_frame(cx);
             if !cmd["hover"].as_bool().unwrap_or(false) {
                 window.dispatch_event(FileDropEvent::Submit { position }.to_platform_input(), cx);
@@ -160,6 +235,9 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         // The Swift app's `composer-menu`: a chip's menu as text, or a click
         // on one of its items.
         "composer-menu" => {
+            if text(cmd, "menu") == "runner" {
+                return crate::new_thread::runner_menu_command(app, cmd, cx);
+            }
             let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
             let data = composer.read(cx).chip_data(cx);
             match text(cmd, "menu") {
@@ -269,7 +347,7 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             Ok(json!("ok"))
         }
         "archive" => {
-            app.update(cx, |t, cx| t.archive_open(cx))?;
+            app.update(cx, |t, cx| t.toggle_archive(window, cx));
             Ok(json!("ok"))
         }
         "snooze" => {
@@ -322,7 +400,234 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
     }
 }
 
+/// The window shell's commands, named and shaped as the Swift app's
+/// (app/README.md, "Seeing and driving it from a script").
+fn shell_step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App) -> Result<Value, String> {
+    use crate::shell;
+    use threadbear_dock::{DockDrop, DockEdge};
+    let dock_summary = |app: &Entity<Threadbear>, cx: &App| app.read(cx).dock.read(cx).layout().summary().replace("threadbear.", "");
+    match text(cmd, "cmd") {
+        "dock-move" => {
+            let name = cmd["panel"].as_str().ok_or("panel is a panel id")?.to_string();
+            let edge = match cmd["edge"].as_str().unwrap_or("right") {
+                "left" => DockEdge::Left,
+                "right" => DockEdge::Right,
+                "top" => DockEdge::Top,
+                "bottom" => DockEdge::Bottom,
+                _ => return Err("edge is left, right, top or bottom".into()),
+            };
+            let panels = app.read(cx).dock.read(cx).layout().panels();
+            let panel = panels.into_iter().find(|p| *p == name || *p == format!("threadbear.{name}")).ok_or_else(|| format!("{name} isn't in the layout"))?;
+            let model = app.read(cx).dock.clone();
+            model.update(cx, |m, cx| m.update_controller(cx, |c| c.layout.move_panel(&panel, DockDrop::window(edge))));
+            Ok(json!(format!("ok {}", dock_summary(app, cx))))
+        }
+        "panel" => {
+            app.update(cx, |t, cx| {
+                let Some(thread) = t.open_thread().cloned() else { return Err("no thread selected".to_string()) };
+                if let Some(id) = cmd["id"].as_str() {
+                    let mut ids: Vec<String> = vec![shell::HIGHLIGHTS.to_string(), shell::FILES.to_string()];
+                    ids.extend(thread.panels.iter().flatten().filter_map(|p| p["id"].as_str().map(String::from)));
+                    if thread.patches.as_ref().is_some_and(|p| !p.is_empty()) {
+                        ids.push(shell::PATCHES.to_string());
+                    }
+                    if !ids.iter().any(|i| i == id) {
+                        return Err(format!("no panel {id}; this thread has {}", ids.join(", ")));
+                    }
+                    t.show_pane(id, cx);
+                } else if let Some(show) = cmd["show"].as_bool() {
+                    let shown = t.dock.read(cx).controller.is_showing(shell::HIGHLIGHTS);
+                    if show != shown {
+                        t.click_rail(shell::HIGHLIGHTS, cx);
+                    }
+                } else {
+                    t.click_rail(shell::HIGHLIGHTS, cx);
+                }
+                Ok(())
+            })?;
+            // What the pane shows, straight away rather than at the next frame, and
+            // only now that the app isn't held, because the pane reads it.
+            if let (Some(id), Some(thread)) = (cmd["id"].as_str(), app.read(cx).open_thread().cloned()) {
+                let side = app.read(cx).side.clone();
+                side.update(cx, |pane, cx| pane.choose_section(&thread.id, id, cx));
+            }
+            let showing = app.read(cx).dock.read(cx).controller.is_showing(cmd["id"].as_str().unwrap_or(shell::HIGHLIGHTS));
+            Ok(json!(if showing { "ok showing" } else { "ok hidden" }))
+        }
+        "float" => {
+            let id = text(cmd, "id").to_string();
+            let model = app.read(cx).dock.clone();
+            if cmd["back"].as_bool() == Some(true) {
+                model.update(cx, |m, cx| m.put_back(&id, cx));
+            } else {
+                if !model.read(cx).layout().can_float(&id) {
+                    return Err(format!("{id} can't go into a window of its own (not in the dock, or the last panel there)"));
+                }
+                model.update(cx, |m, cx| m.open_in_window(&id, cx));
+            }
+            Ok(json!(format!("ok {}", dock_summary(app, cx))))
+        }
+        "mode" => {
+            let mode = match cmd["mode"].as_str().unwrap_or("inbox") {
+                "scheduled" => shell::SidebarMode::Scheduled,
+                "projects" => shell::SidebarMode::Projects,
+                "librarian" => shell::SidebarMode::Librarian,
+                "archive" => {
+                    app.update(cx, |t, cx| t.run_command(shell::Command::ShowArchived, window, cx));
+                    return Ok(json!("ok"));
+                }
+                "snoozed" => {
+                    app.update(cx, |t, cx| t.run_command(shell::Command::ShowHibernating, window, cx));
+                    return Ok(json!("ok"));
+                }
+                _ => shell::SidebarMode::Inbox,
+            };
+            app.update(cx, |t, cx| t.set_mode(mode, cx));
+            Ok(json!("ok"))
+        }
+        "zoom" => {
+            use threadbear_core::zoom;
+            let current = crate::style::zoom_percent();
+            let next = match cmd["to"].as_str() {
+                Some("in") => zoom::zoom_in(current),
+                Some("out") => zoom::zoom_out(current),
+                Some("reset") => zoom::DEFAULT_PERCENT,
+                Some(_) => return Err("to is in, out or reset".into()),
+                None => match cmd["percent"].as_u64() {
+                    Some(p) if zoom::STEPS.contains(&(p as u32)) => p as u32,
+                    Some(_) => return Err(format!("percent is one of {:?}", zoom::STEPS)),
+                    None => current,
+                },
+            };
+            app.update(cx, |t, cx| t.set_zoom(next, window, cx));
+            Ok(json!(format!("ok {}", crate::style::zoom_percent())))
+        }
+        "rename" => {
+            let Some(id) = app.read(cx).selected.clone() else { return Err("no thread open".into()) };
+            if let Some(title) = cmd["title"].as_str() {
+                let title = title.to_string();
+                app.update(cx, |t, cx| {
+                    t.finish_rename(false, cx);
+                    t.rename_thread(&id, &title, cx);
+                });
+            } else {
+                app.update(cx, |t, cx| t.start_renaming(id, window, cx));
+            }
+            Ok(json!("ok"))
+        }
+        "undo-archive" | "open-archived" => {
+            let undo = text(cmd, "cmd") == "undo-archive";
+            let Some(note) = app.read(cx).archived_note.clone() else { return Err("no archived note".into()) };
+            app.update(cx, |t, cx| if undo { t.undo_archive(window, cx) } else { t.open_archived_note(window, cx) });
+            Ok(json!(format!("ok {}", note.thread)))
+        }
+        "error" => {
+            let message = cmd["text"].as_str().map(str::to_owned);
+            app.update(cx, |t, cx| {
+                t.error_message = message;
+                cx.notify();
+            });
+            Ok(json!("ok"))
+        }
+        "mouse-button" => {
+            let back = match cmd["button"].as_str() {
+                Some("back") => true,
+                Some("forward") => false,
+                _ => return Err("button is back or forward".into()),
+            };
+            app.update(cx, |t, cx| if back { t.go_back(window, cx) } else { t.go_forward(window, cx) });
+            let t = app.read(cx);
+            Ok(json!(format!("ok {} {} back={} forward={}", t.mode.name(), t.selected.clone().unwrap_or_else(|| "new".into()), t.can_go_back(), t.can_go_forward())))
+        }
+        "copy-thread-id" => {
+            let Some(id) = app.read(cx).selected.clone() else { return Err("no thread open".into()) };
+            cx.write_to_clipboard(ClipboardItem::new_string(id.clone()));
+            Ok(json!(format!("ok {id}")))
+        }
+        "menus" => Ok(json!(format!("ok {}", serde_json::to_string(&app.read(cx).menus_for_dump(cx)).unwrap_or_default()))),
+        "app-menu" => {
+            let menus = app.read(cx).menus_for_dump(cx);
+            let lines: Vec<String> = menus[0]["items"].as_array().into_iter().flatten().map(|i| {
+                let title = i["title"].as_str().unwrap_or("");
+                i["key"].as_str().map_or(title.to_string(), |k| format!("{title} [{k}]"))
+            }).collect();
+            Ok(json!(format!("ok {}", serde_json::to_string(&lines).unwrap_or_default())))
+        }
+        "menu-item" => {
+            let title = cmd["title"].as_str().ok_or("title missing")?.to_string();
+            app.update(cx, |t, cx| t.run_menu_item(&title, window, cx))?;
+            Ok(json!("ok"))
+        }
+        "data-dir" => Ok(json!(format!("ok {}", app.read(cx).settings.path().parent().map(|p| p.display().to_string()).unwrap_or_default()))),
+        "share" => {
+            let Some(id) = app.read(cx).selected.clone() else { return Err("no thread is open".into()) };
+            if let Some(access) = cmd["access"].as_str() {
+                if access != "off" && access != "link" {
+                    return Err("access is off or link".into());
+                }
+                let access = access.to_string();
+                let id2 = id.clone();
+                app.update(cx, |t, cx| t.set_share(id2, &access, false, cx));
+            }
+            if let Some(open) = cmd["open"].as_bool() {
+                app.update(cx, |t, cx| {
+                    t.share_popover = open.then(|| id.clone());
+                    cx.notify();
+                });
+            }
+            Ok(json!(app.read(cx).share_status()))
+        }
+        "signin" => {
+            if cmd["sendAgain"].as_bool() == Some(true) {
+                let status = app.read(cx).signin_status(cx);
+                if status != "ok none" {
+                    let id = app.read(cx).selected.clone().unwrap_or_default();
+                    app.update(cx, |t, cx| t.send_again(&id, cx));
+                    return Ok(json!(format!("ok sent again for {}", status.trim_start_matches("ok "))));
+                }
+            }
+            Ok(json!(app.read(cx).signin_status(cx)))
+        }
+        "refusal" => {
+            if cmd["continue"].as_bool() == Some(true) {
+                let target = app.read(cx).open_thread().and_then(|t| app.read(cx).refusal_target(t, cx));
+                if let Some((account, _)) = target {
+                    let thread = app.read(cx).selected.clone().unwrap_or_default();
+                    app.update(cx, |t, cx| t.continue_refusal(thread, account, cx));
+                }
+            }
+            Ok(json!(app.read(cx).refusal_status(cx)))
+        }
+        // `appearance`: the window's light or dark look, as the Swift command
+        // sets NSApp.appearance. Lasts until the system changes.
+        "appearance" => {
+            let mode = cmd["mode"].as_str().ok_or("mode is light, dark or system")?;
+            use gpui_kit::component::{Theme, ThemeMode};
+            match mode {
+                "light" => Theme::change(ThemeMode::Light, Some(window), cx),
+                "dark" => Theme::change(ThemeMode::Dark, Some(window), cx),
+                "system" => Theme::sync_system_appearance(Some(window), cx),
+                other => return Err(format!("mode is light, dark or system, not {other:?}")),
+            }
+            Ok(json!(format!("ok {mode}")))
+        }
+        // `resize`: the window's content size, as the Swift command sets it
+        // (for pictures at a given size).
+        "resize" => {
+            let (w, h) = (cmd["w"].as_f64().unwrap_or(1240.) as f32, cmd["h"].as_f64().unwrap_or(820.) as f32);
+            window.resize(size(px(w), px(h)));
+            Ok(json!(format!("ok {w}x{h}")))
+        }
+        other => Err(format!("unknown shell command {other:?}")),
+    }
+}
+
 fn type_in_composer(app: &Entity<Threadbear>, words: &str, replace: bool, window: &mut Window, cx: &mut App) -> Result<(), String> {
+    // On the new-thread page the box is made at its first render; a script
+    // may type before that frame has been drawn.
+    if app.read(cx).pane.is_none() {
+        app.update(cx, |t, cx| t.ensure_new_composer(window, cx));
+    }
     let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
     let input = composer.read(cx).input.clone();
     if replace {

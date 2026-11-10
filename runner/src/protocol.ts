@@ -272,6 +272,9 @@ export type ThreadSummary = {
   // Mike's last message to it, one line, for the sidebar's "You: ..."
   // (docs/protocol.md, "What Mike last asked"). Absent until he's sent one.
   asked?: string;
+  // The librarian's recap of it: what it's for, then bullets on where it
+  // stands (docs/protocol.md, "The recap box"). The recapBox experiment.
+  recap?: string;
   // A panel the agent asked to show Mike (show_panel), waiting for him to
   // look at the thread (docs/protocol.md, "Showing panels").
   panelRequest?: PanelRequest;

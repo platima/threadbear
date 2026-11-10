@@ -67,6 +67,8 @@ pub struct Pool {
     pub title: String,
     pub account_ids: Vec<String>,
     pub icon: Option<String>,
+    /// Folders whose threads start in this pool (`Pools.forFolder`).
+    pub folders: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -279,6 +281,10 @@ pub struct ChipSettings<'a> {
     pub effort_in_use: Option<String>,
     pub permission_mode: String,
     pub cwd: String,
+    /// The settings a new thread starts with, not a thread's own: its
+    /// defaults come from the runner (ThreadSettings.defaultModel and
+    /// effectiveEffort, which take `thread == nil` to mean this).
+    pub is_new: bool,
 }
 
 impl<'a> ChipSettings<'a> {
@@ -287,7 +293,8 @@ impl<'a> ChipSettings<'a> {
     }
 
     pub fn default_model(&self) -> Option<String> {
-        resolved_model(&[self.model_in_use.as_deref(), self.logins.account(&self.account).and_then(|a| a.default_model.as_deref())]).map(str::to_owned)
+        let runner_default = if self.is_new { self.logins.defaults.model_for(&self.provider) } else { self.model_in_use.as_deref() };
+        resolved_model(&[runner_default, self.logins.account(&self.account).and_then(|a| a.default_model.as_deref())]).map(str::to_owned)
     }
 
     pub fn effective_model(&self) -> Option<String> {
@@ -295,7 +302,8 @@ impl<'a> ChipSettings<'a> {
     }
 
     pub fn effective_effort(&self) -> Option<String> {
-        self.effort.clone().or_else(|| self.effort_in_use.clone()).or_else(|| implied_effort(self.effective_model().as_deref(), self.choices(), self.logins.account(&self.account), None))
+        let runner_default = if self.is_new { self.logins.defaults.efforts.get(&self.provider).map(String::as_str) } else { None };
+        self.effort.clone().or_else(|| self.effort_in_use.clone()).or_else(|| implied_effort(self.effective_model().as_deref(), self.choices(), self.logins.account(&self.account), runner_default))
     }
 
     pub fn uses_pools(&self) -> bool {
@@ -310,14 +318,15 @@ impl<'a> ChipSettings<'a> {
     }
 
     /// Who runs it, at the front of the model chip (ThreadSettings.owner):
-    /// the pool's title, or a pinned login's name. None without pools.
+    /// the pool's title, or a pinned login's name (`AccountName.login`). None
+    /// without pools.
     pub fn owner(&self) -> Option<String> {
         if !self.uses_pools() {
             return None;
         }
         match self.pool() {
             Some(pool) => Some(pool.title.clone()),
-            None => self.logins.account(&self.account).map(pinned_login_name),
+            None => self.logins.account(&self.account).map(|_| crate::new_thread::login_name(&self.account, &self.logins.accounts)),
         }
     }
 
@@ -423,16 +432,6 @@ pub fn permission_help(mode: &str) -> &'static str {
     }
 }
 
-/// AccountName.login: the first part of its email's domain ("gmail" for
-/// sam.lee@gmail.com), for a pinned thread's chip.
-fn pinned_login_name(account: &Account) -> String {
-    let name = account.name();
-    match name.split_once('@') {
-        Some((_, domain)) => domain.split('.').next().unwrap_or(domain).to_owned(),
-        None => name,
-    }
-}
-
 /// AccountName.short: the part of a Claude email before the @, unless
 /// another Claude account shares it; "Codex", or "Codex sam.lee" if there
 /// are several.
@@ -487,6 +486,7 @@ mod tests {
             effort_in_use: None,
             permission_mode: "full".into(),
             cwd: "/x".into(),
+            is_new: false,
         }
     }
 

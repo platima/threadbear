@@ -53,17 +53,20 @@ struct AsksCard: View {
                     .textSelection(.enabled)
                     .foregroundStyle(ticked ? .secondary : .primary)
             }
-            if !ticked, !(ask.links ?? []).isEmpty || !ask.choices.isEmpty {
-                FlowLayout(spacing: 8) {
-                    ForEach(ask.links ?? [], id: \.url) { link in
-                        if let url = URL(string: link.url) {
-                            Link(destination: url) {
-                                Label(link.title, systemImage: "arrow.up.right.square")
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(.secondary)
-                        }
+            if !ticked, ask.hasNotes {
+                // Each answer says what it does: rows, the note under its
+                // label, as the Mac draws them; links in a row above.
+                if !(ask.links ?? []).isEmpty {
+                    FlowLayout(spacing: 8) { links(ask) }.controlSize(.small)
+                }
+                VStack(spacing: 6) {
+                    ForEach(Array(ask.choices.enumerated()), id: \.offset) { choice, label in
+                        choiceButton(label, note: ask.note(choice), index: index, choice: choice, suggested: ask.suggestedIndex == choice)
                     }
+                }
+            } else if !ticked, !(ask.links ?? []).isEmpty || !ask.choices.isEmpty {
+                FlowLayout(spacing: 8) {
+                    links(ask)
                     ForEach(Array(ask.choices.enumerated()), id: \.offset) { choice, label in
                         choiceButton(label, index: index, choice: choice, suggested: ask.suggestedIndex == choice)
                     }
@@ -73,7 +76,19 @@ struct AsksCard: View {
         }
     }
 
-    private func choiceButton(_ label: String, index: Int, choice: Int, suggested: Bool) -> some View {
+    @ViewBuilder private func links(_ ask: PhoneAsk) -> some View {
+        ForEach(ask.links ?? [], id: \.url) { link in
+            if let url = URL(string: link.url) {
+                Link(destination: url) {
+                    Label(link.title, systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.bordered)
+                .tint(.secondary)
+            }
+        }
+    }
+
+    private func choiceButton(_ label: String, note: String? = nil, index: Int, choice: Int, suggested: Bool) -> some View {
         let picked = picks[index] == choice
         return Button {
             guard !busy else { return }
@@ -87,10 +102,23 @@ struct AsksCard: View {
                 picks[index] = picked ? nil : choice
             }
         } label: {
-            HStack(spacing: 4) {
-                // The agent's own pick, as the Mac marks it.
-                if suggested && !picked { Image(systemName: "star.fill").imageScale(.small).foregroundStyle(.secondary) }
-                Text(label).spinning(picked && busy && asks.count == 1, tint: .white)
+            if let note {
+                // A row: the answer, then what it does, full width.
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        if suggested && !picked { Image(systemName: "star.fill").imageScale(.small).foregroundStyle(.secondary) }
+                        Text(label).fontWeight(.medium).spinning(picked && busy && asks.count == 1, tint: .white)
+                    }
+                    Text(note).font(.footnote).foregroundStyle(picked ? .white.opacity(0.85) : .secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 4) {
+                    // The agent's own pick, as the Mac marks it.
+                    if suggested && !picked { Image(systemName: "star.fill").imageScale(.small).foregroundStyle(.secondary) }
+                    Text(label).spinning(picked && busy && asks.count == 1, tint: .white)
+                }
             }
         }
         .buttonStyle(picked ? AnyButtonStyle(.borderedProminent) : AnyButtonStyle(.bordered))

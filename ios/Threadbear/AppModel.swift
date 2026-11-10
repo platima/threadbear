@@ -141,6 +141,7 @@ final class AppModel {
     /// Whether the reply box's slash command palette can ask the runner
     /// for a thread's list (backend API 62, phone:slashCommands).
     var canUseSlashCommands: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.slashCommandsAPIVersion }
+    var canStop: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.stopAPIVersion }
     /// Each thread's slash commands once its runner has answered (SlashPaletteList).
     var slashCommands: [String: [SlashCommand]] = [:]
     /// Why a thread's list didn't come: its runner is away, or it failed.
@@ -1169,6 +1170,35 @@ final class AppModel {
             }
         }
     }
+
+    /// Threads whose Stop has been tapped and whose turn hasn't stopped
+    /// yet: Stop shows a spinner and takes no more taps meanwhile.
+    private(set) var stopping: Set<String> = []
+
+    /// Stop on a running thread (backend API 69). It stays a spinner until
+    /// the thread's row says the turn is over (`stopped(_:)`, from the
+    /// thread view), or the command fails, which says why.
+    func stop(threadId: String) {
+        guard let backend, !stopping.contains(threadId) else { return }
+        stopping.insert(threadId)
+        Task {
+            do {
+                let command = try await backend.interrupt(threadId: threadId)
+                for try await status in backend.command(command) {
+                    guard let status, status.state == .failed else { if status?.state == .done { return }; continue }
+                    stopping.remove(threadId)
+                    report(TransportError.server(status.note ?? "That Mac couldn't stop it."))
+                    return
+                }
+            } catch {
+                stopping.remove(threadId)
+                report(error)
+            }
+        }
+    }
+
+    /// The thread's turn is over: its Stop is done.
+    func stopped(_ threadId: String) { stopping.remove(threadId) }
 
     func clearError() { lastError = nil }
 

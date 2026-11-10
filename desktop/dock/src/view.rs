@@ -132,6 +132,12 @@ impl DockView {
         }
     }
 
+    /// Applies new options (the bars' size under the app's zoom, say).
+    pub fn set_options(&mut self, options: DockOptions, cx: &mut Context<Self>) {
+        self.options = Rc::new(options);
+        cx.notify();
+    }
+
     /// The dock's position in its window.
     fn dock_point(&self, position: Point<Pixels>) -> dl::Point {
         let origin = self.root_bounds.get().origin;

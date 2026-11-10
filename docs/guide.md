@@ -638,8 +638,8 @@ finds it as you left it. A thread on another Mac or the cloud gets a shell
 on this Mac in your home folder, with a line saying so, and so do an
 archived thread (its worktree may be another thread's by now) and the
 new-thread page. If the shell exits, New Shell starts another. A shell
-only starts when you ask for one, with ⌘J or a click on the empty panel,
-so looking through threads with it open starts nothing. A thread's shell
+only starts when you ask for one, with ⌘J, a click on the empty panel or
+a command's play icon (below), so looking through threads with it open starts nothing. A thread's shell
 stops when the thread is archived or deleted, and they all stop when you
 quit Threadbear. The Terminal is a panel like the others: drag it
 beside the thread, into a tab, or out into a window of its own.
@@ -652,6 +652,18 @@ Linux your login shell and the others in `/etc/shells`. The choice applies
 the next time a shell starts. End shell stops the one running, and Ctrl+J
 hides the panel without stopping it. It has no panel layout to drag about:
 it sits under the thread and its height can be dragged.
+
+A shell command an agent gives you (a ```` ```bash ````, `sh`, `zsh` or
+`shell` block) has a play icon and a copy icon at its top right. Play
+opens the Terminal with the command typed at the prompt and the keyboard
+there, and you press Return, so you see it before it runs. Pressing play
+on another block swaps it for the one still waiting. If something is
+already running in that shell, or you've typed on its prompt, nothing gets
+added: the command goes on the clipboard and a bubble says so (a shell
+without bracketed paste, like macOS's old bash, always copies). Play isn't there on a thread
+on another Mac or the cloud, or an archived one, as this Mac's shell
+wouldn't be in the right place; Copy still is. It's on the Mac app only.
+A block with control or invisible characters in it has no play icon.
 
 ## Highlights
 <!-- slug: highlights -->
@@ -1177,7 +1189,7 @@ letting go lands. A code block or table that can still scroll keeps the
 swipe. The search at the top of the inbox finds any thread, hibernating
 and archived ones too, by its title, last reply or project. What a thread needs from you shows under its reply with the
 likely answers as buttons (type in the box to say something else; the one you tap spins until the runner has it, and the card comes back if it's refused), and
-a thread that's done offers its suggested next steps and Archive, which takes you back to the inbox as its row slides away. Hibernate from a thread's ... menu does the same, with its row sinking towards the Hibernating heading. Clear the last thread from the inbox and the bear waves at you, the once. Pull the inbox down and let go to reconnect to your Mac's mirror, if the list ever looks stuck. A new thread from the phone starts in your default folder; pick its model and effort under the message, or leave them on Default. With more than one runner it starts on the first one that's online in your order, so a sleeping Mac doesn't hold it up; pick another under Runner, or change the order in Settings > Runners > Change the order. The sheet closes as soon as you tap Start, and a row at the top of the inbox says Starting until that Mac has made the thread, which then opens. If it couldn't start, the row says why; tap it to open it again as you left it, photos and choices too. Paste a photo straight into any message box, or add one with the photo button: it goes in where the cursor is as a chip, "Picture 1", as on the Mac, and pictures in your messages show as chips too. The photos you sent show over your message, where the Mac uploaded them for your website (on unless `"sync": { "pastedPictures": false }`); one that stayed on the Mac leaves a "[1 picture]" line instead. Pictures an agent puts in its reply or pins show in the thread, and animated GIFs play; tap one to see it full screen and pinch to zoom. An MP4 or MOV video an agent pins shows its first frame with a play button, and plays when you tap it. Anything over 10 MB, or from a thread that's been quiet for over two weeks, says it's on your Mac. To point one thread at another, use Copy Thread ID in its ... menu or the menu when you press and hold its row, and paste it into a message, here or on the Mac: it goes in as a link to that thread, with its title. When the Mac a thread runs on is asleep or offline, its message box says so, and what you send waits for it: each message shows faded with a Cancel under it until that Mac takes it, and Cancel puts its words back in the box. It can send notifications too,
+a thread that's done offers its suggested next steps and Archive, which takes you back to the inbox as its row slides away. Hibernate from a thread's ... menu does the same, with its row sinking towards the Hibernating heading. Clear the last thread from the inbox and the bear waves at you, the once. Pull the inbox down and let go to reconnect to your Mac's mirror, if the list ever looks stuck. A new thread from the phone starts in your default folder; pick its model and effort under the message, or leave them on Default. With more than one runner it starts on the first one that's online in your order, so a sleeping Mac doesn't hold it up; pick another under Runner, or change the order in Settings > Runners > Change the order. The sheet closes as soon as you tap Start, and a row at the top of the inbox says Starting until that Mac has made the thread, which then opens. If it couldn't start, the row says why; tap it to open it again as you left it, photos and choices too. While a thread is working and nothing's typed, Send turns into Stop, as on the Mac, here and on the website; it spins until the turn has stopped. Anything typed while it works goes into that turn instead. Paste a photo straight into any message box, or add one with the photo button: it goes in where the cursor is as a chip, "Picture 1", as on the Mac, and pictures in your messages show as chips too. The photos you sent show over your message, where the Mac uploaded them for your website (on unless `"sync": { "pastedPictures": false }`); one that stayed on the Mac leaves a "[1 picture]" line instead. Pictures an agent puts in its reply or pins show in the thread, and animated GIFs play; tap one to see it full screen and pinch to zoom. An MP4 or MOV video an agent pins shows its first frame with a play button, and plays when you tap it. Anything over 10 MB, or from a thread that's been quiet for over two weeks, says it's on your Mac. To point one thread at another, use Copy Thread ID in its ... menu or the menu when you press and hold its row, and paste it into a message, here or on the Mac: it goes in as a link to that thread, with its title. When the Mac a thread runs on is asleep or offline, its message box says so, and what you send waits for it: each message shows faded with a Cancel under it until that Mac takes it, and Cancel puts its words back in the box. It can send notifications too,
 though you don't need them for any of that. It pairs with your Mac by scanning a
 QR code: on the Mac, Settings (⌘,) > Phone & browser > Show the code, then
 scan it with the iPhone app. Keep the code to yourself: anyone who scans it

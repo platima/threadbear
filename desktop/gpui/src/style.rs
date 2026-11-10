@@ -4,6 +4,34 @@
 #![allow(dead_code)] // Filled in ahead of the views that use each value.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+// The window's zoom (TextZoom in Theme.swift): ⌘= and ⌘- scale everything
+// together, like a browser's zoom. Every point size in the window goes through
+// `px` below, so one number scales them all. A module that draws anything
+// does `use crate::style::px;` after its `use gpui_kit::*;`, which shadows
+// GPUI's own `px` for that file (a one-line change in each) and leaves a
+// raw `gpui_kit::px` only for the rare size that shouldn't scale, like a
+// hairline.
+static ZOOM_PERCENT: AtomicU32 = AtomicU32::new(100);
+
+pub fn zoom_percent() -> u32 {
+    ZOOM_PERCENT.load(Ordering::Relaxed)
+}
+
+pub fn set_zoom_percent(percent: u32) {
+    ZOOM_PERCENT.store(percent, Ordering::Relaxed);
+}
+
+/// `zoomed`: a design size at the window's zoom (`TypeScale.scaled`).
+pub fn zoomed(size: f32) -> f32 {
+    threadbear_core::zoom::scaled(size, zoom_percent())
+}
+
+/// GPUI's `px`, at the window's zoom.
+pub fn px(size: f32) -> Pixels {
+    gpui_kit::px(zoomed(size))
+}
 
 /// Text sizes, as TypeScale has them at 100% zoom.
 pub mod size {
@@ -174,6 +202,12 @@ pub fn faint_icon(cx: &App) -> Hsla {
     pick(cx, white(0.25), black(0.36))
 }
 
+/// The pane's row icons (`Theme.faintIcon`): a notch brighter here, as
+/// Lucide's thin strokes read fainter than SF Symbols.
+pub fn pane_icon(cx: &App) -> Hsla {
+    pick(cx, white(0.4), black(0.42))
+}
+
 /// `Theme.answerRowsFill`.
 pub fn answer_rows_fill(cx: &App) -> Hsla {
     pick(cx, white(0.02), black(0.015))
@@ -261,4 +295,17 @@ pub fn failed(cx: &App) -> Hsla {
 /// `.secondary` text (secondaryLabelColor).
 pub fn secondary_text(cx: &App) -> Hsla {
     pick(cx, white(0.55), black(0.5))
+}
+
+/// `SidebarMetrics.corner`: the rails' lit square.
+pub const RAIL_CORNER: f32 = 8.;
+
+/// The connection banner's warning fill (`.yellow.opacity(0.12)`).
+pub fn warning_fill(cx: &App) -> Hsla {
+    pick(cx, srgb(1., 0.8, 0., 0.12), srgb(1., 0.8, 0., 0.12))
+}
+
+/// The tick on the end-of-inbox note (`Color.green`).
+pub fn tick_green(cx: &App) -> Hsla {
+    pick(cx, srgb(0.2, 0.83, 0.4, 1.), srgb(0.2, 0.7, 0.3, 1.))
 }

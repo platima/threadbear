@@ -14,14 +14,17 @@ import UniformTypeIdentifiers
 struct HighlightsView: View {
     @Environment(AppModel.self) private var app
     let thread: ThreadSummary
-    @State private var editedOpen = false
-    /// "Show all" on Links and Changes, for the thread on show.
-    @State private var allLinks = false
-    @State private var allCommits = false
-    @State private var allSubagents = false
-    @State private var allStarted = false
+    /// The edited files open, and "Show all" on the long groups, for the
+    /// thread on show (the view is rebuilt per thread).
+    @State private var flags = HighlightsFlags()
 
     var body: some View {
+        // The scripted app reads and sets these (HighlightsFlags).
+        content.onAppear { HighlightsFlags.register(flags) }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if app.highlightsUnsupported {
             PaneNote(text: "This runner doesn't keep highlights yet.")
         } else if let fetched = app.highlights[thread.id] {
@@ -32,7 +35,7 @@ struct HighlightsView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        content(sections, projects: projects)
+                        rows(sections, projects: projects)
                     }
                     .padding(.bottom, zoomed(16))
                 }
@@ -53,7 +56,7 @@ struct HighlightsView: View {
     }
 
     @ViewBuilder
-    private func content(_ sections: HighlightSections, projects: [HighlightProjects.Row]) -> some View {
+    private func rows(_ sections: HighlightSections, projects: [HighlightProjects.Row]) -> some View {
         ForEach(toolPanels) { panel in
             ToolCard(panel: panel) { app.choosePanel(panel.id, in: thread.id) }
                 .padding(.horizontal, SidebarMetrics.outerInset)
@@ -126,9 +129,9 @@ struct HighlightsView: View {
             let all = SubagentRows.highlights(thread)
             SectionHeading(title: "Sub-agents", icon: "person.2", fold: fold(HighlightFold.subagents, count: all.count))
             if !isFolded(HighlightFold.subagents) {
-                let subagents = HighlightSections.capped(all, limit: HighlightSections.subagentLimit, showAll: allSubagents)
+                let subagents = HighlightSections.capped(all, limit: HighlightSections.subagentLimit, showAll: flags.allSubagents)
                 ForEach(subagents.shown) { subagentRow($0) }
-                if subagents.more > 0 { showAll(all.count) { allSubagents = true } }
+                if subagents.more > 0 { showAll(all.count) { flags.allSubagents = true } }
             }
         }
         // The threads it handed work to, or is waiting on, with where each
@@ -137,9 +140,9 @@ struct HighlightsView: View {
         if !started.isEmpty {
             SectionHeading(title: "Threads it started", icon: "pawprint", fold: fold(HighlightFold.startedThreads, count: started.count))
             if !isFolded(HighlightFold.startedThreads) {
-                let shown = HighlightSections.capped(started, limit: HighlightSections.subagentLimit, showAll: allStarted)
+                let shown = HighlightSections.capped(started, limit: HighlightSections.subagentLimit, showAll: flags.allStarted)
                 ForEach(shown.shown) { startedRow($0) }
-                if shown.more > 0 { showAll(started.count) { allStarted = true } }
+                if shown.more > 0 { showAll(started.count) { flags.allStarted = true } }
             }
         }
         if !sections.pinned.isEmpty {
@@ -157,17 +160,17 @@ struct HighlightsView: View {
         if !sections.links.isEmpty {
             SectionHeading(title: "Links", icon: "link", fold: fold(HighlightFold.links, count: sections.links.count))
             if !isFolded(HighlightFold.links) {
-                let links = HighlightSections.capped(sections.links, limit: HighlightSections.linkLimit, showAll: allLinks)
+                let links = HighlightSections.capped(sections.links, limit: HighlightSections.linkLimit, showAll: flags.allLinks)
                 ForEach(links.shown) { row($0) }
-                if links.more > 0 { showAll(sections.links.count) { allLinks = true } }
+                if links.more > 0 { showAll(sections.links.count) { flags.allLinks = true } }
             }
         }
         if !sections.commits.isEmpty || !sections.edited.isEmpty {
             SectionHeading(title: "Changes", icon: "arrow.triangle.branch", fold: fold(HighlightFold.changes, count: sections.commits.count + sections.edited.count))
             if !isFolded(HighlightFold.changes) {
-                let commits = HighlightSections.capped(sections.commits, limit: HighlightSections.commitLimit, showAll: allCommits)
+                let commits = HighlightSections.capped(sections.commits, limit: HighlightSections.commitLimit, showAll: flags.allCommits)
                 ForEach(commits.shown) { row($0) }
-                if commits.more > 0 { showAll(sections.commits.count) { allCommits = true } }
+                if commits.more > 0 { showAll(sections.commits.count) { flags.allCommits = true } }
                 if !sections.edited.isEmpty { edited(sections.edited) }
             }
         }
@@ -299,10 +302,10 @@ struct HighlightsView: View {
     /// its own app, since it's code to read in an editor, not to review.
     @ViewBuilder
     private func edited(_ paths: [String]) -> some View {
-        PaneRow(icon: editedOpen ? "chevron.down" : "chevron.right", title: HighlightText.editedCount(paths.count), quiet: true) {
-            withAnimation(.easeOut(duration: 0.15)) { editedOpen.toggle() }
+        PaneRow(icon: flags.editedOpen ? "chevron.down" : "chevron.right", title: HighlightText.editedCount(paths.count), quiet: true) {
+            withAnimation(.easeOut(duration: 0.15)) { flags.editedOpen.toggle() }
         }
-        if editedOpen {
+        if flags.editedOpen {
             ForEach(paths, id: \.self) { path in
                 PaneRow(icon: FileIcon.symbol(forPath: path), title: (path as NSString).lastPathComponent,
                         detail: HighlightText.folder(of: path, cwd: thread.cwd), indent: true) {
@@ -317,6 +320,30 @@ struct HighlightsView: View {
                 .iconContextMenu { FileMenu(path: path, thread: thread, title: (path as NSString).lastPathComponent) }
             }
         }
+    }
+}
+
+/// What a Highlights view has opened: the edited files and "Show all" on its
+/// long groups. A class, so the scripted app can read and set them
+/// (`highlight` in Automation, `pane` in AppDump); a view's own @State can't
+/// be reached from outside it.
+@Observable
+final class HighlightsFlags {
+    var editedOpen = false
+    var allLinks = false
+    var allCommits = false
+    var allSubagents = false
+    var allStarted = false
+
+    #if DEBUG
+    /// The one on screen, for the scripted app.
+    nonisolated(unsafe) static weak var current: HighlightsFlags?
+    #endif
+
+    static func register(_ flags: HighlightsFlags) {
+        #if DEBUG
+        current = flags
+        #endif
     }
 }
 
@@ -877,9 +904,28 @@ final class FilePreviewView: NSView {
     /// Kept for the next file Quick Look shows; closing it would end it for good.
     private var quickLook: QLPreviewView?
 
+    #if DEBUG
+    /// The one in the pane, for the scripted app (AppDump's `pane`).
+    nonisolated(unsafe) static weak var current: FilePreviewView?
+    /// What it's showing: "picture 1200x800", "video", "quickLook".
+    var debugShows: String {
+        switch content {
+        case .picture(let view):
+            let rep = view.image?.representations.first
+            return "picture \(rep?.pixelsWide ?? Int(view.image?.size.width ?? 0))x\(rep?.pixelsHigh ?? Int(view.image?.size.height ?? 0))"
+        case .video: return "video"
+        case .quickLook: return "quickLook"
+        case nil: return "nothing"
+        }
+    }
+    #endif
+
     /// Reads `url` afresh, even when it's the file already shown.
     func show(_ url: URL) {
         self.url = url
+        #if DEBUG
+        Self.current = self
+        #endif
         let type = UTType(filenameExtension: url.pathExtension)
         if type?.conforms(to: .audiovisualContent) == true {
             let player: AVPlayerView

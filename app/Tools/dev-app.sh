@@ -664,9 +664,13 @@ cmd_dump() {
 }
 
 cmd_rebuild() {
+  # --no-build quits and reopens the same binary, keeping its data and
+  # settings: a spec's "opened again" (features/ steps).
+  local no_build=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --id) ID="${2:?--id needs an id}"; shift ;;
+      --no-build) no_build=1 ;;
       *) die "unknown option for rebuild: $1" ;;
     esac
     shift
@@ -677,9 +681,11 @@ cmd_rebuild() {
   local status selection
   status="$(send '{"cmd":"status"}')" || exit 1
   selection="$(printf '%s' "$status" | sed -n 's/.*"selection":"\([^"]*\)".*/\1/p')"
-  echo "Building the debug app..."
-  # The running app stays up if the build fails.
-  build_binary "$I_ID" || exit 1
+  if [ "$no_build" = 0 ]; then
+    echo "Building the debug app..."
+    # The running app stays up if the build fails.
+    build_binary "$I_ID" || exit 1
+  fi
   # So reap leaves it while the old app's gone and the new one isn't up.
   set_field starter "$$"
   set_field starter_since "$(started_at $$)"

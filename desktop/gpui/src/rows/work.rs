@@ -9,6 +9,8 @@ use gpui_kit::base::SelectableText;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 use threadbear_core::reducer::{BackgroundStatus, BackgroundWork, Detail, Field, NumberedLine, Row, ToolItem, ToolKind, ToolPresentation, TurnGap, WorkGroup, WorkSummary};
 use threadbear_core::reducer::{ApprovalDecision, ApprovalItem, ApprovalText, DiffBuilder, SecretItem, TextItem};
 

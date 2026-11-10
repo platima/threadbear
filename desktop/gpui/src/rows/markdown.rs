@@ -8,6 +8,8 @@ use gpui_kit::base::{TextViewState, TextViewStyle};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+// The zoom-aware px (style.rs), in place of GPUI's.
+use crate::style::px;
 
 /// How far a list's text sits in from the text around it (listIndent).
 const LIST_INDENT: f32 = 30.;

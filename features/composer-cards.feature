@@ -64,3 +64,9 @@ Feature: The open card in the composer
     Then the follow-up "Turn on the lint rule that sorts imports" is ticked
     When I press Return
     Then the transcript shows my message "Turn on the lint rule that sorts imports"
+
+  @composer.recap @quiet-thread @gpui-pending
+  Scenario: A thread that has sat for a while says what it's for
+    When I open the thread "Ship the beta to TestFlight"
+    Then the recap box says "Gets the first beta out to testers."
+    And the recap box says "Waiting on you to accept the agreement"
