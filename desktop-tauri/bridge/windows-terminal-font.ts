@@ -4,11 +4,13 @@
 // unless it is told.
 //
 // What this reads, and only on Windows: Windows Terminal's settings.json, from the three
-// places it keeps it (the Store's stable and Preview packages, and an unpackaged copy).
-// It looks at the default profile's font and nothing else in the file, hands back a font
-// name that sanitiseFace accepts and a size, and never the file's text: not to the page, not
-// to a log. Anything wrong (no file, too big, not JSON, no font) is "none". It reads when
-// asked and keeps nothing.
+// places it keeps it (the Store's stable and Preview packages, and an unpackaged copy). The
+// first of those that is there and is valid settings is the one used, even if it names no
+// font (that is the file Windows Terminal reads, so its font is the default); one that is
+// missing, too big, unreadable or not JSON is passed over. It looks at the default profile's
+// font and nothing else in the file, hands back font names that sanitiseFaces accepts and a
+// size, and never the file's text: not to the page, not to a log. Anything wrong is "none".
+// It reads when asked and keeps nothing.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -64,7 +66,13 @@ export type FontSource = {
   localAppData?: string;
 };
 
-/** Windows Terminal's font: the first settings file that names one. `{}` anywhere but Windows, or when none does. */
+/**
+ * Windows Terminal's font, from the first settings file that is there and is settings (JSON, with
+ * comments, whose top level is an object): that is the file Windows Terminal reads, so a valid one
+ * that names no font means the font is its default, and the search ends with `{}`. A file that is
+ * missing, can't be read, is too big or isn't valid is passed over for the next place.
+ * `{}` anywhere but Windows, and when there is no such file.
+ */
 export function windowsTerminalFont(source: FontSource = {}): TerminalFont {
   if ((source.platform ?? process.platform) !== 'win32') return {};
   const base = 'localAppData' in source ? source.localAppData : process.env.LOCALAPPDATA;
@@ -73,8 +81,9 @@ export function windowsTerminalFont(source: FontSource = {}): TerminalFont {
     try {
       const text = readLimited(file);
       if (text === undefined) continue;
-      const font = pickFont(parseJsonc(text));
-      if (font.face) return font;
+      const settings = parseJsonc(text);
+      if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) continue;
+      return pickFont(settings);
     } catch {
       // this one is no use; the next might be
     }

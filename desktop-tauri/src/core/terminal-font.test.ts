@@ -4,34 +4,41 @@
 // page, the size, and how a choice is kept. Nothing here reads a file or the page.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_SIZE, FALLBACK_FACES, FONT_KEY, fontChoice, fontLabel, fontStack, parseFontChoice, pointsToPixels, resolveFont, serialiseFontChoice, setFontChoice, typedFontName } from './terminal-font.ts';
+import { DEFAULT_SIZE, FALLBACK_FACES, FONT_KEY, fontChoice, fontDraft, fontLabel, fontStack, parseFontChoice, pointsToPixels, resolveFont, serialiseFontChoice, setFontChoice, typedFontName } from './terminal-font.ts';
 
-const FALLBACKS = "'CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove NF', 'MesloLGM Nerd Font Mono', 'MesloLGS NF', 'JetBrainsMono Nerd Font Mono', 'FiraCode Nerd Font Mono', 'Hack Nerd Font Mono', 'Symbols Nerd Font Mono', 'Symbols Nerd Font', 'Cascadia Mono', 'Cascadia Code', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New', monospace";
+const PLAIN = "'Cascadia Mono', 'Cascadia Code', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New'";
+const NERD = "'CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove NF', 'MesloLGM Nerd Font Mono', 'MesloLGS NF', 'JetBrainsMono Nerd Font Mono', 'FiraCode Nerd Font Mono', 'Hack Nerd Font Mono', 'Symbols Nerd Font Mono', 'Symbols Nerd Font'";
+const FALLBACKS = `${PLAIN}, ${NERD}, monospace`;
 
-test('the stack: the chosen face in quotes, the Nerd Fonts and ordinary monospace fonts after it, then monospace', () => {
+test('the stack: the chosen face in quotes, the ordinary monospace fonts after it, then the Nerd Fonts, then monospace', () => {
   assert.equal(fontStack('Iosevka Term'), `'Iosevka Term', ${FALLBACKS}`);
   assert.equal(fontStack(), FALLBACKS);
   assert.equal(fontStack(undefined), FALLBACKS);
 });
 
-test('the Nerd Fonts are named before the plain ones, which a private use glyph needs', () => {
+test('the ordinary monospace fonts come before every Nerd Font, so the text is not drawn in one by default', () => {
   const at = (name: string) => FALLBACK_FACES.indexOf(name);
-  for (const nerd of ['CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove NF', 'MesloLGM Nerd Font Mono', 'MesloLGS NF', 'JetBrainsMono Nerd Font Mono', 'FiraCode Nerd Font Mono', 'Hack Nerd Font Mono']) {
-    assert.ok(at(nerd) >= 0 && at(nerd) < at('Cascadia Mono'), nerd);
-  }
+  const plain = ['Cascadia Mono', 'Cascadia Code', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New'];
+  const nerd = ['CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove NF', 'MesloLGM Nerd Font Mono', 'MesloLGS NF', 'JetBrainsMono Nerd Font Mono', 'FiraCode Nerd Font Mono', 'Hack Nerd Font Mono', 'Symbols Nerd Font Mono', 'Symbols Nerd Font'];
+  for (const p of plain) for (const n of nerd) assert.ok(at(p) >= 0 && at(n) > at(p), `${p} before ${n}`);
+  // The generic family is last of all, so a glyph none of them has still gets the system's own monospace font.
+  assert.ok(fontStack().endsWith(', monospace'));
+  assert.equal(FALLBACK_FACES.length, plain.length + nerd.length);
   assert.ok(at('Consolas') > at('Cascadia Code'));
   assert.ok(at('Courier New') > at('Consolas'));
 });
 
-test('a face that is already a fallback is not named twice, whatever its case', () => {
+test('a face that is already a fallback is not named twice, whatever its case, and keeps the place the person gave it', () => {
   assert.equal(fontStack('Cascadia Code'), `'Cascadia Code', ${FALLBACKS.replace("'Cascadia Code', ", '')}`);
   assert.equal(fontStack('caskaydiacove nf').match(/caskaydiacove nf/gi)?.length, 1);
   assert.equal(fontStack('CaskaydiaCove NF').split("'CaskaydiaCove NF'").length, 2);
+  // A Nerd Font the person chose leads the stack, as it is theirs; the same one is not repeated further on.
+  assert.ok(fontStack('CaskaydiaCove NF').startsWith("'CaskaydiaCove NF', 'Cascadia Mono', "));
 });
 
 test("every face in a list is in the stack, in the person's order, ahead of the fallbacks", () => {
   const stack = fontStack(['Iosevka Term', 'Symbols Nerd Font Mono']);
-  assert.ok(stack.startsWith("'Iosevka Term', 'Symbols Nerd Font Mono', 'CaskaydiaCove Nerd Font Mono', "), stack);
+  assert.ok(stack.startsWith("'Iosevka Term', 'Symbols Nerd Font Mono', 'Cascadia Mono', "), stack);
   assert.equal(stack.split("'Symbols Nerd Font Mono'").length, 2, 'named once');
   // A list as text, as Windows Terminal writes it, is the same list.
   assert.equal(fontStack('Iosevka Term, Symbols Nerd Font Mono'), stack);
@@ -41,13 +48,24 @@ test("every face in a list is in the stack, in the person's order, ahead of the 
 
 test('Symbols Nerd Font is among the fallbacks, for a person whose only Nerd Font is that one', () => {
   assert.ok(FALLBACK_FACES.includes('Symbols Nerd Font Mono'));
-  assert.ok(FALLBACK_FACES.indexOf('Symbols Nerd Font Mono') < FALLBACK_FACES.indexOf('Cascadia Mono'));
+  assert.ok(FALLBACK_FACES.includes('Symbols Nerd Font'));
+  assert.ok(FALLBACK_FACES.indexOf('Symbols Nerd Font Mono') > FALLBACK_FACES.indexOf('Courier New'));
 });
 
 test('a face that is not a plain name never reaches the stack', () => {
   for (const hostile of ['x\'; } body { display: none } a { font-family: \'y', 'a"b', 'a\\b', 'a\nb', 'a;b', '</style>', '']) {
     assert.equal(fontStack(hostile), FALLBACKS, JSON.stringify(hostile));
   }
+});
+
+test('a name with a + or & in it, such as M+ 1m, is in the stack, in its quotes', () => {
+  assert.equal(fontStack('M+ 1m'), `'M+ 1m', ${FALLBACKS}`);
+  assert.equal(fontStack('Cascadia Code & Friends, M+ 1m').split(', ').slice(0, 4).join(', '), "'Cascadia Code & Friends', 'M+ 1m', 'Cascadia Mono', 'Cascadia Code'");
+  assert.equal(resolveFont({ kind: 'custom', name: 'M+ 1m' }, undefined).face, 'M+ 1m');
+  assert.equal(resolveFont({ kind: 'wt' }, { face: 'M+ 1m', size: 12 }).family, `'M+ 1m', ${FALLBACKS}`);
+  // But a + or & does not let a name out of its quotes.
+  assert.equal(fontStack("M+ 1m'; } a { color: red"), FALLBACKS);
+  assert.equal(fontStack('a&b;'), FALLBACKS);
 });
 
 test("Windows Terminal's points are 4/3 pixels, in halves, held between 8 and 32", () => {
@@ -64,20 +82,21 @@ test("Windows Terminal's points are 4/3 pixels, in halves, held between 8 and 32
 test('same as Windows Terminal: its face and its size', () => {
   const r = resolveFont({ kind: 'wt' }, { face: 'CaskaydiaCove Nerd Font Mono', size: 11 });
   assert.deepEqual(r, { family: fontStack('CaskaydiaCove Nerd Font Mono'), size: 14.5, kind: 'wt', face: 'CaskaydiaCove Nerd Font Mono' });
-  assert.equal(r.family, FALLBACKS, 'a face that is the first fallback anyway is named once');
+  assert.equal(r.family.split("'CaskaydiaCove Nerd Font Mono'").length, 2, 'a face that is a fallback anyway is named once');
+  assert.ok(r.family.startsWith("'CaskaydiaCove Nerd Font Mono', 'Cascadia Mono', "), 'at the place the person has it');
   const other = resolveFont({ kind: 'wt' }, { face: 'Iosevka Term NF', size: 12 });
-  assert.ok(other.family.startsWith("'Iosevka Term NF', 'CaskaydiaCove Nerd Font Mono', "));
+  assert.ok(other.family.startsWith("'Iosevka Term NF', 'Cascadia Mono', "));
 });
 
 test("same as Windows Terminal with several faces draws in all of them, and the label names the first", () => {
   const found = { face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'], size: 12 };
   const r = resolveFont({ kind: 'wt' }, found);
   assert.equal(r.face, 'Cascadia Code');
-  assert.ok(r.family.startsWith("'Cascadia Code', 'Symbols Nerd Font Mono', "), r.family);
+  assert.ok(r.family.startsWith("'Cascadia Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', "), r.family);
   assert.equal(r.size, 16);
   assert.equal(fontLabel(r), 'Font: Cascadia Code');
   // The list is checked here as well as in the bridge, and a face alone still works (an older bridge).
-  assert.ok(resolveFont({ kind: 'wt' }, { ...found, faces: ['Cascadia Code', 'x"; }', 'Symbols Nerd Font Mono'] }).family.startsWith("'Cascadia Code', 'Symbols Nerd Font Mono', "));
+  assert.ok(resolveFont({ kind: 'wt' }, { ...found, faces: ['Cascadia Code', 'x"; }', 'Symbols Nerd Font Mono'] }).family.startsWith("'Cascadia Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', "));
   assert.equal(resolveFont({ kind: 'wt' }, { face: 'Cascadia Code' }).family, fontStack('Cascadia Code'));
   assert.equal(resolveFont({ kind: 'wt' }, { face: 'Cascadia Code', faces: [] }).family, fontStack('Cascadia Code'));
 });
@@ -109,7 +128,7 @@ test('a list typed by the person is used whole, as Windows Terminal takes one', 
   const r = resolveFont({ kind: 'custom', name: 'Cascadia Code, Symbols Nerd Font Mono' }, undefined);
   assert.equal(r.face, 'Cascadia Code');
   assert.equal(r.size, DEFAULT_SIZE);
-  assert.ok(r.family.startsWith("'Cascadia Code', 'Symbols Nerd Font Mono', "), r.family);
+  assert.ok(r.family.startsWith("'Cascadia Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', "), r.family);
 });
 
 test('what is typed in the name box: the usable names, and whether that is bad or a change', () => {
@@ -120,8 +139,62 @@ test('what is typed in the name box: the usable names, and whether that is bad o
   assert.deepEqual(typedFontName('', 'Fira Code'), { name: '', bad: false, changed: true }, 'emptied: not bad, and a change');
   assert.deepEqual(typedFontName('   ', ''), { name: '', bad: false, changed: false });
   assert.deepEqual(typedFontName('a"; }', 'Fira Code'), { name: '', bad: true, changed: true });
-  // Escape puts the old name back before the box blurs, so what the blur commits is no change.
-  assert.deepEqual(typedFontName('Fira Code', 'Fira Code'), { name: 'Fira Code', bad: false, changed: false });
+});
+
+// The name box cannot be driven here (no DOM), so what it does with the text is in fontDraft, and the
+// box's handlers only call it. These play its sequences in the order the box's events come.
+test('Escape in the name box: the edit is cancelled, and the blur that follows it commits nothing', () => {
+  const drawn: string[] = [];
+  const draft = fontDraft('Fira Code', (text) => drawn.push(text));
+  draft.set('Iosevka Term'); // typing
+  assert.equal(draft.text, 'Iosevka Term', 'held at once, whether or not the page has drawn it');
+  const commits: ReturnType<typeof draft.commit>[] = [];
+  // Escape: the old name goes back, and then the focus moves, which blurs the box at once.
+  draft.cancel('Fira Code', () => commits.push(draft.commit('Fira Code')));
+  assert.equal(commits.length, 1, 'the blur happened inside the focus move');
+  assert.deepEqual(commits[0], { name: 'Fira Code', bad: false, changed: false }, 'so the blur finds no change to keep');
+  assert.equal(draft.text, 'Fira Code');
+  assert.equal(drawn.at(-1), 'Fira Code', 'and the page is told to draw the old name');
+});
+
+test('Escape sets the old name before it leaves the box: leaving first would let the blur commit the edit', () => {
+  const draft = fontDraft('Fira Code');
+  draft.set('Iosevka Term');
+  let held = '';
+  draft.cancel('Fira Code', () => (held = draft.text));
+  assert.equal(held, 'Fira Code', 'what the blur sees is the old name');
+  // What goes wrong if the old name is only drawn later: the blur commits the text that was being edited.
+  const late = fontDraft('Fira Code');
+  late.set('Iosevka Term');
+  assert.deepEqual(late.commit('Fira Code'), { name: 'Iosevka Term', bad: false, changed: true }, 'this is the change Escape must not leave behind');
+});
+
+test('Escape on an edit that was never committed, or after one that was, puts back the name in use', () => {
+  const draft = fontDraft('');
+  draft.set('Hack NF');
+  assert.equal(draft.commit('').changed, true);
+  draft.set('Hack NF, Symbols Nerd Font Mono'); // another edit
+  draft.cancel('Hack NF');
+  assert.equal(draft.text, 'Hack NF');
+  assert.equal(draft.commit('Hack NF').changed, false);
+  // Escape with the box emptied puts a name back, and does not commit an empty one.
+  draft.set('');
+  draft.cancel('Hack NF', () => assert.equal(draft.commit('Hack NF').changed, false));
+});
+
+test('Enter or leaving the box: a usable name is tidied in place, a bad one is left for the person to fix', () => {
+  const drawn: string[] = [];
+  const draft = fontDraft('', (text) => drawn.push(text));
+  draft.set('  Fira   Code ,  Symbols Nerd Font Mono');
+  assert.deepEqual(draft.commit(''), { name: 'Fira Code, Symbols Nerd Font Mono', bad: false, changed: true });
+  assert.equal(draft.text, 'Fira Code, Symbols Nerd Font Mono');
+  assert.equal(drawn.at(-1), 'Fira Code, Symbols Nerd Font Mono');
+  draft.set('a"; }');
+  assert.deepEqual(draft.commit('Fira Code'), { name: '', bad: true, changed: true });
+  assert.equal(draft.text, 'a"; }', 'what was typed stays in the box');
+  draft.set('   ');
+  assert.deepEqual(draft.commit('Fira Code'), { name: '', bad: false, changed: true }, 'emptied is a change, not a bad name');
+  assert.equal(draft.text, '');
 });
 
 test('a typed name with nothing in it, or nothing usable, is the default stack, said so', () => {
@@ -137,6 +210,21 @@ test('same as Windows Terminal chosen, and then no font there: the default, said
   assert.equal(r.kind, 'default');
   assert.match(r.problem!, /No font is set in Windows Terminal/);
   assert.equal(resolveFont({ kind: 'wt' }, { size: 12 }).kind, 'default');
+});
+
+test('same as Windows Terminal chosen before the bridge has answered: the default, and nothing said yet', () => {
+  const r = resolveFont({ kind: 'wt' }, undefined, false);
+  assert.deepEqual(r, { family: fontStack(), size: DEFAULT_SIZE, kind: 'default' });
+  assert.equal('problem' in r, false);
+  // Once it has answered with nothing, that is said; with a font, that is followed.
+  assert.match(resolveFont({ kind: 'wt' }, undefined, true).problem!, /No font is set in Windows Terminal/);
+  assert.equal(resolveFont({ kind: 'wt' }, { face: 'Fira Code', size: 12 }, true).kind, 'wt');
+  // The other choices don't wait for it.
+  assert.deepEqual(resolveFont({ kind: 'default' }, undefined, false), { family: fontStack(), size: DEFAULT_SIZE, kind: 'default' });
+  assert.equal(resolveFont({ kind: 'custom', name: 'Fira Code' }, undefined, false).face, 'Fira Code');
+  assert.deepEqual(resolveFont(undefined, undefined, false), { family: fontStack(), size: DEFAULT_SIZE, kind: 'default' });
+  // A font that is known is followed, whatever the flag says.
+  assert.equal(resolveFont({ kind: 'wt' }, { face: 'Fira Code' }, false).kind, 'wt');
 });
 
 test("a face from the bridge that is not a plain name is not used, though it is sent", () => {

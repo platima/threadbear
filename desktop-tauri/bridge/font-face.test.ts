@@ -78,9 +78,16 @@ describe('JSON with comments and trailing commas', () => {
 
 describe('what may be a font face', () => {
   test('ordinary names are kept as written', () => {
-    for (const name of ['Cascadia Code', 'CaskaydiaCove Nerd Font Mono', 'JetBrainsMono NF', 'MesloLGS NF', 'Fira Code', 'Cascadia Code (Variable)', 'IBM Plex Mono', 'Source_Code-Pro', 'Noto Sans Mono CJK JP', 'Consolas', 'Hack Nerd Font Mono 2.0', 'ＭＳ ゴシック', 'Lucida Console']) {
+    for (const name of ['Cascadia Code', 'CaskaydiaCove Nerd Font Mono', 'JetBrainsMono NF', 'MesloLGS NF', 'Fira Code', 'Cascadia Code (Variable)', 'IBM Plex Mono', 'Source_Code-Pro', 'Noto Sans Mono CJK JP', 'Consolas', 'Hack Nerd Font Mono 2.0', 'ＭＳ ゴシック', 'Lucida Console', 'M+ 1m', 'M+ 1code', 'Cascadia Code & Friends', 'Fira Code+Symbols']) {
       assert.equal(sanitiseFace(name), name, name);
     }
+  });
+
+  test('a + or & in a name is kept, and a list of such names is split only at its commas', () => {
+    assert.deepEqual(sanitiseFaces('M+ 1m, Symbols Nerd Font Mono'), ['M+ 1m', 'Symbols Nerd Font Mono']);
+    assert.deepEqual(pickFont({ profiles: { defaults: { font: { face: 'M+ 1m', size: 12 } } } }), { face: 'M+ 1m', size: 12 });
+    // Only symbols is not a name: it needs a letter or a digit.
+    for (const v of ['+', '&', '+&', ' + & ']) assert.equal(sanitiseFace(v), undefined, v);
   });
 
   test('blanks around a name and inside it are tidied', () => {
@@ -128,7 +135,15 @@ describe('what may be a font face', () => {
       '$(x)',
       '%PATH%',
       'a|b',
-      'a&b',
+      // The + and & are allowed, but not as a way to something else.
+      'a+b;c',
+      "M+ 1m'; } a { color: red",
+      'M+ 1m"; } a { color: red',
+      'a&b;',
+      'a&#59; b',
+      'a&b\nc',
+      'a+b/*c*/',
+      'a+b\\',
     ];
     for (const name of hostile) assert.equal(sanitiseFace(name), undefined, JSON.stringify(name));
   });

@@ -60,7 +60,7 @@ describe('where it looks', () => {
     assert.deepEqual(windowsTerminalFont(win(base)), { face: 'JetBrainsMono NF' });
   });
 
-  test('the stable file is preferred when more than one names a font', () => {
+  test('the stable file is preferred when more than one is there', () => {
     const base = pc();
     put(base, STABLE, withFont('Stable Font'));
     put(base, PREVIEW, withFont('Preview Font'));
@@ -68,12 +68,40 @@ describe('where it looks', () => {
     assert.equal(windowsTerminalFont(win(base)).face, 'Stable Font');
   });
 
-  test('a file that names no font, or cannot be used, does not hide the next one', () => {
+  test('a file that is missing, not valid, not settings or not readable is passed over for the next one', () => {
+    // Not JSON, then a folder where a file should be, then the one that counts.
     const base = pc();
-    put(base, STABLE, '{ "defaultProfile": "x", "profiles": { "list": [] } }');
-    put(base, PREVIEW, '{ not json');
+    put(base, STABLE, '{ not json');
+    fs.mkdirSync(settingsFiles(base)[PREVIEW]!, { recursive: true });
     put(base, UNPACKAGED, withFont('Third Font'));
     assert.equal(windowsTerminalFont(win(base)).face, 'Third Font');
+    // Valid JSON that is not a settings object is no better.
+    for (const text of ['null', '[]', '"Fira Code"', '5', '']) {
+      const other = pc();
+      put(other, STABLE, text);
+      put(other, PREVIEW, withFont('Preview Font'));
+      assert.equal(windowsTerminalFont(win(other)).face, 'Preview Font', JSON.stringify(text));
+    }
+  });
+
+  test('a valid file that names no font ends the search: it is the file Windows Terminal reads', () => {
+    const base = pc();
+    put(base, STABLE, '{ "defaultProfile": "x", "profiles": { "list": [] } }');
+    put(base, PREVIEW, withFont('Preview Font'));
+    put(base, UNPACKAGED, withFont('Unpackaged Font'));
+    assert.deepEqual(windowsTerminalFont(win(base)), {});
+    // An empty object, one after a comment, and defaults with nothing in them are valid too.
+    for (const text of ['{}', '// nothing set\n{ }\n', '{ "profiles": { "defaults": {} } }']) {
+      const other = pc();
+      put(other, STABLE, text);
+      put(other, PREVIEW, withFont('Preview Font'));
+      assert.deepEqual(windowsTerminalFont(win(other)), {}, JSON.stringify(text));
+    }
+    // The same for a later file: the first valid one ends it.
+    const later = pc();
+    put(later, PREVIEW, '{ "profiles": { "defaults": {} } }');
+    put(later, UNPACKAGED, withFont('Unpackaged Font'));
+    assert.deepEqual(windowsTerminalFont(win(later)), {});
   });
 
   test('a settings file with a byte order mark and Windows line endings is read', () => {

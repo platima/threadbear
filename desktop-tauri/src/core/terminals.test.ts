@@ -305,6 +305,32 @@ test("Windows Terminal's font is asked for, and kept as the bridge said it", () 
   r.sessions.close();
 });
 
+test('whether the bridge has answered about the font is kept, even for an answer that says there is none', () => {
+  const r = rig();
+  assert.equal(r.sessions.getSnapshot().wtAnswered, false, 'not at construction');
+  r.sessions.loadFont();
+  r.t.open();
+  assert.equal(r.sessions.getSnapshot().wtAnswered, false, 'asked is not answered');
+  const v = r.sessions.getSnapshot().version;
+  r.say({ t: 'font' });
+  assert.equal(r.sessions.getSnapshot().wtAnswered, true, 'an answer of none is an answer');
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined);
+  assert.equal(r.sessions.getSnapshot().version, v + 1, 'and the window is told');
+  r.say({ t: 'font' });
+  assert.equal(r.sessions.getSnapshot().version, v + 1, 'the same answer again is not news');
+  r.say({ t: 'font', face: 'Fira Code' });
+  assert.equal(r.sessions.getSnapshot().wtAnswered, true);
+  r.sessions.close();
+  // An answer with nothing usable in it still counts as one.
+  const bad = rig();
+  bad.sessions.loadFont();
+  bad.t.open();
+  bad.say({ t: 'font', face: 'x"; }' });
+  assert.equal(bad.sessions.getSnapshot().wtAnswered, true);
+  assert.equal(bad.sessions.getSnapshot().wtFont, undefined);
+  bad.sessions.close();
+});
+
 test('a font answer is checked again: only a plain name and a sensible size are kept', () => {
   const r = rig();
   r.sessions.loadFont();

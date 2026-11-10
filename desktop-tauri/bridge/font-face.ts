@@ -23,9 +23,10 @@ export const MAX_FACE_LENGTH = 100;
 /** The most names of a list that are kept. */
 export const MAX_FACES = 6;
 
-// Letters and digits in any script, spaces, and - . _ ( ). Nothing that can end a quoted
+// Letters and digits in any script, spaces, and - . _ ( ) + &. The + and & are for names such
+// as "M+ 1m"; inside a quoted CSS string they are only text. Nothing that can end a quoted
 // CSS string, start another property or a comment, or run onto a second line.
-const FACE = /^[\p{L}\p{Nd}_. ()-]+$/u;
+const FACE = /^[\p{L}\p{Nd}_. ()+&-]+$/u;
 const HAS_WORD = /[\p{L}\p{Nd}]/u;
 
 /**

@@ -653,7 +653,8 @@ the next time a shell starts. End shell stops the one running, and Ctrl+J
 hides the panel without stopping it. It has no panel layout to drag about:
 it sits under the thread and its height can be dragged.
 
-The Font menu in the header says which font the terminal is drawing in, and
+The Windows and Linux app's Terminal has a Font menu in its header (the Mac
+app's Terminal has none). It says which font the terminal is drawing in, and
 changes it at once, on the shells already open too. On Windows the first choice
 is Same as Windows Terminal, which uses the font (and size) your Windows
 Terminal default profile is set to, so the symbols a prompt such as oh-my-posh
@@ -665,10 +666,13 @@ appears and press Enter, or Escape to put the old name back. Name several,
 separated by commas, as Windows Terminal does (`Cascadia Code, Symbols Nerd
 Font Mono`): the first draws the text and the others the symbols it lacks.
 Same as Windows Terminal keeps every font in that list, not only the first.
-Prompt symbols need a Nerd Font, and the terminal looks in the common ones
-(CaskaydiaCove, MesloLG, JetBrainsMono, FiraCode, Hack and the symbols-only
-Symbols Nerd Font) after the fonts you picked, so one of those installed is
-enough even if you pick Default. The choice is kept.
+Prompt symbols need a Nerd Font. After the fonts you picked, the terminal
+tries Cascadia Mono and the other ordinary monospace fonts, and then the
+common Nerd Fonts (CaskaydiaCove, MesloLG, JetBrainsMono, FiraCode, Hack and
+the symbols-only Symbols Nerd Font). It goes along that list one symbol at a
+time, so the text is drawn in an ordinary font and only the symbols those lack
+come from a Nerd Font: one of them installed is enough even if you pick
+Default. The choice is kept.
 
 A shell command an agent gives you (a ```` ```bash ````, `sh`, `zsh` or
 `shell` block) has a play icon and a copy icon at its top right. Play

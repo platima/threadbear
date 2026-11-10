@@ -58,6 +58,11 @@ export type Snapshot = {
   fontChoice?: FontChoice;
   /** The font Windows Terminal is set to, as the bridge last said. Undefined until it has, and when there is none. */
   wtFont?: FoundFont;
+  /**
+   * Whether the bridge has answered about Windows Terminal's font yet. It tells "not asked or not
+   * answered" from "answered: there is none", so a window that has not heard yet says nothing about it.
+   */
+  wtAnswered: boolean;
   version: number;
 };
 
@@ -124,7 +129,7 @@ export class TerminalSessions {
   constructor(connect: () => Transport, store?: KeyValue) {
     this.connect = connect;
     this.store = store;
-    this.snap = { sessions: new Map(), choice: shellChoice(store), fontChoice: fontChoice(store), version: 0 };
+    this.snap = { sessions: new Map(), choice: shellChoice(store), fontChoice: fontChoice(store), wtAnswered: false, version: 0 };
   }
 
   subscribe = (l: () => void): (() => void) => {
@@ -234,8 +239,9 @@ export class TerminalSessions {
         const size = sanitiseSize(m.size);
         const before = this.snap.wtFont;
         const same = before?.face === face && before?.size === size && (before?.faces ?? []).join(',') === (faces.length > 1 ? faces : []).join(',');
-        if (!same) {
-          this.publish({ wtFont: face || size !== undefined ? { ...(face ? { face } : {}), ...(faces.length > 1 ? { faces } : {}), ...(size !== undefined ? { size } : {}) } : undefined });
+        // The first answer is news even when it says there is no font: it ends the "not heard yet".
+        if (!same || !this.snap.wtAnswered) {
+          this.publish({ wtAnswered: true, wtFont: face || size !== undefined ? { ...(face ? { face } : {}), ...(faces.length > 1 ? { faces } : {}), ...(size !== undefined ? { size } : {}) } : undefined });
         }
         break;
       }
@@ -303,7 +309,8 @@ export class TerminalSessions {
   /**
    * Asks the bridge which font Windows Terminal is set to (it reads the file when asked, so this
    * is called when the Terminal opens and when the person picks that font). The answer arrives
-   * as wtFont; a bridge that doesn't know the question never answers, which is the same as none.
+   * as wtFont, and wtAnswered says it has come. A bridge that doesn't know the question never
+   * answers, and the window then draws the default without a note about Windows Terminal.
    */
   loadFont(): void {
     this.send({ t: 'font' });
