@@ -131,6 +131,9 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .composer .bar select, .composer .bar input { padding: 2px 6px; font-size: 12px; }
 .banner { background: var(--warn); color: #000; padding: 6px 16px; font-size: 13px; }
 .banner.bad { background: var(--bad); color: #fff; }
+/* What the Start the runner button reports sits in the banner, which is the same red as .error
+   (var(--bad)): left alone, a failure was red text on red and could not be read. */
+.banner .error, .banner .note { color: inherit; font-weight: 600; }
 .banner .runnerChoice { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.35); }
 .banner .runnerChoice p { margin: 0 0 6px; max-width: 70ch; }
 .banner .runnerChoice button { margin-right: 6px; }

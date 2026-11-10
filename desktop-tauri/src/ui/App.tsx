@@ -49,19 +49,51 @@ export function App({ store }: { store: AppStore }) {
   const [starting, setStarting] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const [startProblem, setStartProblem] = useState<string>();
+  // What the shell said it did ("Started the runner.", "The runner is already running."...), so a
+  // start that changed nothing is not silent: it stays until the connection comes up.
+  const [startNote, setStartNote] = useState<string>();
+  // The connection has been closed since it was last open. The banner's button and choice are kept
+  // for as long as the connection is down, through the "connecting" of each retry, and not torn down
+  // and rebuilt on every one.
+  const [sawClosed, setSawClosed] = useState(false);
+  // Which click's answer may still be shown. A connection that opens while the shell is still
+  // answering makes that answer stale (it would bring back the note, the error or the choice the
+  // open just cleared, and the next disconnect would show them), so opening moves this on and each
+  // click only shows its answer if it is still the current one.
+  const attempt = useRef(0);
+  useEffect(() => {
+    if (snap.conn === 'closed') setSawClosed(true);
+    if (snap.conn === 'open') {
+      // Connected, however it came about: nothing from the last click is still true.
+      attempt.current += 1;
+      setSawClosed(false);
+      setChoosing(false);
+      setStartProblem(undefined);
+      setStartNote(undefined);
+    }
+  }, [snap.conn]);
   const start = async (way?: RunnerWay) => {
+    const mine = ++attempt.current;
     setStarting(true);
     setChoosing(false);
     setStartProblem(undefined);
+    setStartNote(undefined);
     if (way) {
-      setStartProblem(await startRunner(way));
+      const answer = await startRunner(way);
       setStarting(false);
+      if (mine !== attempt.current) return;
+      setStartProblem(answer.problem);
+      setStartNote(answer.note);
       return;
     }
     const clicked = await startClick();
     setStarting(false);
+    if (mine !== attempt.current) return;
     if (clicked.kind === 'choose') setChoosing(true);
-    else setStartProblem(clicked.problem);
+    else {
+      setStartProblem(clicked.problem);
+      setStartNote(clicked.note);
+    }
   };
   const [tour, setTour] = useState(false);
   // The Terminal: its panel under the page, and a counter that asks the screen to take the keyboard.
@@ -179,17 +211,18 @@ export function App({ store }: { store: AppStore }) {
         {offline && (
           <div className={snap.conn === 'closed' ? 'banner bad' : 'banner'}>
             {snap.conn === 'connecting' ? 'Connecting to the runner...' : `Not connected to the runner${snap.connWhy ? `: ${snap.connWhy}` : ''}. Trying again.`}
-            {snap.conn === 'closed' && /^no runner token/i.test(snap.connWhy ?? '') && " That means the runner isn't running, so there is nothing to connect to."}
-            {snap.conn === 'closed' && isNative() && (
+            {snap.conn === 'closed' && !startNote && /^no runner token/i.test(snap.connWhy ?? '') && " That means the runner isn't running, so there is nothing to connect to."}
+            {(snap.conn === 'closed' || sawClosed) && isNative() && (
               <>
                 {' '}
                 <button className="ghost" disabled={starting} aria-busy={starting} onClick={() => void start()} title={starting ? 'Working on it: waiting for the runner to start' : 'Start the runner, or choose how it should start if none is set up'}>
                   {starting ? 'Starting...' : 'Start the runner'}
                 </button>
-                {startProblem && <span className="error"> {startProblem}</span>}
+                {startNote && <span className="note" role="status"> {startNote}</span>}
+                {startProblem && <span className="error" role="alert"> {startProblem}</span>}
               </>
             )}
-            {snap.conn === 'closed' && isNative() && choosing && (
+            {offline && isNative() && choosing && (
               <div className="runnerChoice">
                 <p>{runnerChoiceText()}</p>
                 {RUNNER_WAYS.map((w) => (
