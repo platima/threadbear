@@ -508,8 +508,12 @@ fn offer_runner(app: &AppHandle, asked: bool) {
 // and only logged otherwise. Whether it started.
 fn start_registered(app: &AppHandle, tell: bool) -> bool {
     match runner_script(&["--start".to_string()]) {
-        Ok((0, _)) => true,
+        Ok((0, _)) => {
+            log_shell("start the runner task: started");
+            true
+        }
         Ok((_, text)) | Err(text) => {
+            log_shell(&format!("start the runner task: failed: {text}"));
             if tell {
                 app.dialog()
                     .message(format!("The runner could not be started.\n\n{text}"))
@@ -539,39 +543,94 @@ fn offer_runner_while_open(app: &AppHandle) {
     offer_on_demand(app, true);
 }
 
-// The page's "Start the runner" button, for when it can't reach a runner: one that is
-// set up is started, and with none the person is offered the kind that runs only while
-// the app is open. It answers only when that is done or declined, so the page can show
-// it is working until then and not take a second click; a failure comes back as words
-// for the page.
+// One line in shell.log, in the folder this program keeps its notes in, so what it did
+// about the runner can be read afterwards. The program has no console, and when the
+// page's Start the runner button once did nothing there was nothing to look at. The
+// time is seconds since 1970. The file starts over past 200 KB (the old one is kept
+// as shell.log.old), and only the runner's start and set-up are written to it: no
+// text from the page and no thread.
+fn log_shell(line: &str) {
+    let Some(dir) = state_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("shell.log");
+    if std::fs::metadata(&file).map(|m| m.len() > 200_000).unwrap_or(false) {
+        let _ = std::fs::rename(&file, dir.join("shell.log.old"));
+    }
+    if let Ok(mut out) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
+        use std::io::Write;
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(out, "{secs} {line}");
+    }
+}
+
+// How the runner is set up, for the page's Start the runner button, which asks before it
+// does anything: "sign-in", "on-demand", or "none" (no task of ours, or the script could
+// not say). With none the page offers the two ways itself, in its own window, so the
+// choice cannot be left waiting in a window of the shell's that nobody sees.
 #[tauri::command]
-async fn start_runner(app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || start_or_set_up(&app))
+async fn runner_setup() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mode = runner_mode();
+        log_shell(&format!("runner setup asked: {mode:?}"));
+        let word = match mode {
+            RunnerMode::SignIn => "sign-in",
+            RunnerMode::OnDemand => "on-demand",
+            RunnerMode::None => "none",
+        };
+        word.to_string()
+    })
+    .await
+    .map_err(|e| format!("The shell could not look at the runner ({e})."))
+}
+
+// What the page may ask `start_runner` for, as the arguments for the runner's install
+// script. The page names one of three ways and the shell decides what is run: "start" an
+// existing task, or set the runner up "on-demand" (only while the app is open) or at
+// "sign-in", which sets it up and starts it. Anything else is refused.
+fn start_args(how: &str) -> Option<Vec<String>> {
+    match how {
+        "start" => Some(vec!["--start".to_string()]),
+        "on-demand" => Some(vec!["--on-demand".to_string()]),
+        "sign-in" => Some(Vec::new()),
+        _ => None,
+    }
+}
+
+// The page's "Start the runner" button, after it has asked how the runner is set up
+// (`runner_setup`) and, with none set up, which way the person chose. It answers when
+// that is done, so the page can show it is working until then and not take a second
+// click; a failure comes back as words for the page.
+#[tauri::command]
+async fn start_runner(how: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || start_runner_now(&how))
         .await
         .map_err(|e| format!("The runner could not be started ({e})."))?
 }
 
-fn start_or_set_up(app: &AppHandle) -> Result<(), String> {
-    if runner_mode() != RunnerMode::None {
-        return match runner_script(&["--start".to_string()]) {
-            Ok((0, _)) => Ok(()),
-            Ok((_, text)) | Err(text) => Err(format!("The runner could not be started.\n\n{text}")),
-        };
+fn start_runner_now(how: &str) -> Result<(), String> {
+    let Some(args) = start_args(how) else {
+        return Err(format!("The runner cannot be started by \"{how}\"."));
+    };
+    if how != "start" {
+        forget_declined();
     }
-    let yes = app
-        .dialog()
-        .message(on_demand_text())
-        .title("Run the runner while Threadbear is open?")
-        .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancelCustom("Only while open".into(), "No thanks".into()))
-        .blocking_show();
-    if !yes {
-        return Ok(());
-    }
-    forget_declined();
-    match runner_script(&["--on-demand".to_string()]) {
-        Ok((0, _)) => Ok(()),
-        Ok((_, text)) | Err(text) => Err(format!("The runner could not be set up.\n\n{text}")),
+    log_shell(&format!("start the runner, {how}: running the install script"));
+    match runner_script(&args) {
+        Ok((0, _)) => {
+            log_shell(&format!("start the runner, {how}: done"));
+            Ok(())
+        }
+        Ok((code, text)) => {
+            log_shell(&format!("start the runner, {how}: the script said {code}: {text}"));
+            Err(format!("The runner could not be {}.\n\n{text}", if how == "start" { "started" } else { "set up" }))
+        }
+        Err(text) => {
+            log_shell(&format!("start the runner, {how}: {text}"));
+            Err(format!("The runner could not be {}.\n\n{text}", if how == "start" { "started" } else { "set up" }))
+        }
     }
 }
 
@@ -860,7 +919,7 @@ pub fn run() {
         .manage(UiStarted(AtomicBool::new(false)))
         // What the page may ask of the shell besides the plugins' own commands
         // (capabilities/default.json): the "Exit on close" box and "Start the runner".
-        .invoke_handler(tauri::generate_handler![get_exit_on_close, set_exit_on_close, start_runner, open_claude_login])
+        .invoke_handler(tauri::generate_handler![get_exit_on_close, set_exit_on_close, runner_setup, start_runner, open_claude_login])
         .setup(move |app| {
             // --quit with nothing running: there is nothing to end, so do not
             // start. (With a copy running, the plugin hands this launch's
@@ -932,6 +991,18 @@ mod tests {
         assert_eq!(parse_runner_mode(""), RunnerMode::None);
         assert_eq!(parse_runner_mode("sign-in on-demand"), RunnerMode::None);
         assert_eq!(parse_runner_mode("ERROR: something"), RunnerMode::None);
+    }
+
+    #[test]
+    fn the_page_may_ask_for_three_ways_to_start_the_runner_and_nothing_else() {
+        assert_eq!(start_args("start"), Some(vec!["--start".to_string()]));
+        assert_eq!(start_args("on-demand"), Some(vec!["--on-demand".to_string()]));
+        // Setting it up at sign-in is the script with no option.
+        assert_eq!(start_args("sign-in"), Some(Vec::new()));
+        // The page can't have the script do any of its other things.
+        for other in ["", "--uninstall", "--stop", "uninstall", "start ", "Start"] {
+            assert_eq!(start_args(other), None, "{other:?} should be refused");
+        }
     }
 
     #[test]

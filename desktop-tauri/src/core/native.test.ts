@@ -1,7 +1,7 @@
 // node --test desktop-tauri/src/core/native.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { getExitOnClose, openClaudeLogin, openExternal, setExitOnClose, startRunner } from './native.ts';
+import { SHELL_SILENT, getExitOnClose, openClaudeLogin, openExternal, runnerSetup, setExitOnClose, startRunner } from './native.ts';
 
 test('a link is opened through the shell, as the address given', async () => {
   const calls: { command: string; args?: Record<string, unknown> }[] = [];
@@ -53,11 +53,43 @@ test('the exit-on-close choice is asked for and set through the shell, and a ref
 });
 
 test('starting the runner is a request the shell answers when it is done, and a failure comes back as its words', async () => {
-  const calls: string[] = [];
-  assert.equal(await startRunner({ call: async (c) => { calls.push(c); return undefined as never; } }), undefined);
-  assert.deepEqual(calls, ['start_runner']);
-  assert.equal(await startRunner({ call: async () => { throw 'The runner could not be started.\n\nAccess is denied.'; } }), 'The runner could not be started.\n\nAccess is denied.');
-  assert.equal(await startRunner({ call: async () => { throw new Error('gone'); } }), 'gone');
+  const calls: { command: string; args?: Record<string, unknown> }[] = [];
+  const on = async (command: string, args?: Record<string, unknown>) => {
+    calls.push({ command, args });
+    return undefined as never;
+  };
+  assert.equal(await startRunner('start', { call: on }), undefined);
+  assert.equal(await startRunner('on-demand', { call: on }), undefined);
+  assert.equal(await startRunner('sign-in', { call: on }), undefined);
+  // With no word, it starts a runner that is set up.
+  assert.equal(await startRunner(undefined, { call: on }), undefined);
+  assert.deepEqual(calls.map((c) => c.args), [{ how: 'start' }, { how: 'on-demand' }, { how: 'sign-in' }, { how: 'start' }]);
+  assert.ok(calls.every((c) => c.command === 'start_runner'));
+  assert.equal(await startRunner('start', { call: async () => { throw 'The runner could not be started.\n\nAccess is denied.'; } }), 'The runner could not be started.\n\nAccess is denied.');
+  assert.equal(await startRunner('start', { call: async () => { throw new Error('gone'); } }), 'gone');
+});
+
+test('a shell that never answers about the runner is given up on, with the words that say where to look', async () => {
+  const never = () => new Promise<never>(() => {});
+  assert.equal(await startRunner('start', { call: never, waitMs: 20 }), SHELL_SILENT);
+  assert.match(SHELL_SILENT, /shell\.log/);
+  assert.match(SHELL_SILENT, /--runner --on-demand/);
+  // Not knowing how the runner is set up is "don't know", not "none".
+  assert.equal(await runnerSetup({ call: never, waitMs: 20 }), undefined);
+});
+
+test('how the runner is set up is asked of the shell, and only its three words count', async () => {
+  const says = (word: unknown) => async (command: string) => {
+    assert.equal(command, 'runner_setup');
+    return word as never;
+  };
+  assert.equal(await runnerSetup({ call: says('none') }), 'none');
+  assert.equal(await runnerSetup({ call: says('sign-in') }), 'sign-in');
+  assert.equal(await runnerSetup({ call: says('on-demand') }), 'on-demand');
+  assert.equal(await runnerSetup({ call: says('something else') }), undefined);
+  assert.equal(await runnerSetup({ call: says(undefined) }), undefined);
+  assert.equal(await runnerSetup({ call: async () => { throw 'no'; } }), undefined);
+  assert.equal(await runnerSetup({ call: null }), undefined);
 });
 
 test('on Linux the shell has no exit-on-close choice to give, and that is not "off"', async () => {
@@ -84,7 +116,7 @@ test('a sign-in terminal is asked for by name, with the login\'s folder only whe
 test('outside the shell the exit-on-close choice and the runner start do nothing and say what they can', async () => {
   assert.equal(await getExitOnClose({ call: null }), undefined);
   assert.match((await setExitOnClose(true, { call: null })) ?? '', /installed app/);
-  assert.match((await startRunner({ call: null })) ?? '', /installed app/);
+  assert.match((await startRunner('start', { call: null })) ?? '', /installed app/);
 });
 
 test('outside the shell it does nothing and says nothing', async () => {

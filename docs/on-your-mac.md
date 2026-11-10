@@ -547,7 +547,14 @@ said otherwise.
   `%LOCALAPPDATA%\Threadbear\declined-runner-task`. The tray menu's "Start the
   runner at sign-in..." and "Start the runner only while Threadbear is open..."
   ask again and switch from one kind to the other, and the connection banner's
-  "Start the runner" button starts a set-up runner or offers the second kind.
+  "Start the runner" button starts a set-up runner or, with none, shows the two
+  ways to set one up in the window itself (it asks the shell `runner_setup`,
+  then `start_runner` with `start`, `on-demand` or `sign-in`, and the shell
+  maps each to one fixed option of the same script). What the shell does about
+  the runner is noted, one line each with the time in seconds since 1970, in
+  `%LOCALAPPDATA%\Threadbear\shell.log` (`~/.local/state/Threadbear/shell.log`
+  on Linux; it starts over past 200 KB and keeps the old one as
+  `shell.log.old`), with no text from the window.
   Each time the app opens with the task registered it runs `--runner --start`,
   so the runner comes back after an update. `Threadbear.exe --runner
   [--installed | --start | --stop | --status | --uninstall | --dry-run |
