@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AppStore, Snapshot } from '../../core/store.ts';
+import { pairingOffNote } from './devices-words.ts';
 import { dateWords } from './ops-format.ts';
 import { QrCode } from './qr.tsx';
 import { useAction, useRequest } from './ops-rpc.ts';
@@ -54,7 +55,7 @@ export function DevicesSection({ store, snap }: { store: AppStore; snap: Snapsho
     <>
       <Problem error={req.error} what="Phones and browsers" />
       {snap.conn !== 'open' && <Note>The runner isn't connected, so there is nothing to pair with yet. Once it is, the button below works.</Note>}
-      {off && <Note>Pairing needs the sync backend, and it's off: {reason}</Note>}
+      {off && <Note>{pairingOffNote(reason ?? '')}</Note>}
 
       <Card>
         <h3>Pair something new</h3>

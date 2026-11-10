@@ -67,6 +67,17 @@ user's data and service for them to decide about (`systemctl --user disable
 workflow installs it on an Ubuntu runner, starts the window from `/usr/bin` as
 an ordinary user, and removes it again.
 
+## Pairing a phone or a browser
+
+Settings > Phone & browser stays greyed ("no sync.url in runner.json") until the
+sync backend exists. It is a Convex deployment in your own account, and
+`node scripts/setup-sync.mjs`, run from a clone of the repository, makes it and
+restarts the runner (it asks first, and `--dry-run` shows what it would do).
+docs/pairing.md has the steps, what it creates, what it costs and how to undo it.
+It needs Node 24 or newer, git, tar and flock (util-linux). A server install with
+`install-runner.sh` (INSTALL.md, section 6) joins a backend that a Mac set up
+instead.
+
 ## What it needs
 
 WebKitGTK 4.1 (Debian and Ubuntu: `libwebkit2gtk-4.1-0`), a desktop session,

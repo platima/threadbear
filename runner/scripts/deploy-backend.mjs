@@ -14,26 +14,35 @@
 // (docs/self-hosting.md) has its admin URL and key in
 // <home>/secrets/convex-self-hosted.env instead (src/convex-admin.ts). What
 // it last deployed is in <home>/backend.json. Node built-ins only, like
-// deploy.mjs (convex-admin.ts is too).
+// deploy.mjs (convex-admin.ts, node-tools.ts and file-lock.ts are too).
+//
+// On Windows (scripts/setup-sync.mjs runs it there, once) it keeps two deploys
+// apart with a lock file (src/file-lock.ts) in place of lockf and flock, runs
+// npm and the Convex programs without npm.cmd and npx.cmd (src/node-tools.ts),
+// and unpacks the commit with the tar in System32.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConvexAdminError, convexEnv, prodArgs, readConvexAdmin } from '../src/convex-admin.ts';
+import { LockTimeout, takeFileLock } from '../src/file-lock.ts';
+import { npmCommand, npxCommand, pathWith, tarProgram } from '../src/node-tools.ts';
+import { dataDirFor } from '../src/platform.ts';
 
 const HELP = `deploy-backend.mjs: deploy convex/ and web/ at a commit to the runner's Convex deployment, if they changed.
 
 Options:
   --commit REV   what to deploy (default HEAD of the repo this script is in)
   --repo DIR     the repo (default the one this script is in)
-  --home DIR     data dir (default $THREADBEAR_HOME, else ~/Library/Application Support/Threadbear)
+  --home DIR     data dir (default $THREADBEAR_HOME, else the runner's data folder:
+                 ~/Library/Application Support/Threadbear, or %APPDATA%\\Threadbear on Windows)
   --force        deploy even if nothing changed
   --dry-run      say what would be deployed and change nothing
   --status       print what was last deployed and stop
 `;
 
-const DEFAULT_HOME = path.join(os.homedir(), 'Library', 'Application Support', 'Threadbear');
+const DEFAULT_HOME = dataDirFor();
 // What each part is built from. The root package files are the Convex
 // dependency's version, so they count for both.
 const FUNCTION_PATHS = ['convex', 'convex.json', 'package.json', 'package-lock.json'];
@@ -130,6 +139,17 @@ function lockTool(file, cmd, { wait }) {
 // undefined when this is already that copy.
 function underLock(home, argv) {
   if (process.env[LOCKED_ENV] === '1') return undefined;
+  // Windows has no lockf or flock: a lock file does the job in this process.
+  if (process.platform === 'win32') {
+    try {
+      const release = takeFileLock(path.join(home, 'backend.winlock'), { say, waitMs: LOCK_WAIT_SECS * 1000 });
+      process.on('exit', release);
+    } catch (e) {
+      if (e instanceof LockTimeout) throw new Fail(e.message);
+      throw e;
+    }
+    return undefined;
+  }
   const file = path.join(home, 'backend.flock');
   const again = [process.execPath, import.meta.filename, ...argv];
   const tool = lockTool(file, again, { wait: LOCK_WAIT_SECS });
@@ -178,13 +198,14 @@ function waitForOldLock(home) {
   }
 }
 
-// Runs a step with its output in a log file, printed only if it fails.
-function step(name, cmd, args, opts) {
+// Runs a step (a node-tools.ts command) with its output in a log file,
+// printed only if it fails.
+function step(name, command, opts) {
   process.stdout.write(`${name}... `);
   const started = Date.now();
   const logFile = path.join(os.tmpdir(), `threadbear-backend-${process.pid}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.log`);
   const fd = fs.openSync(logFile, 'w');
-  const r = spawnSync(cmd, args, { ...opts, stdio: ['ignore', fd, fd] });
+  const r = spawnSync(command.file, command.args, { ...opts, ...(command.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}), stdio: ['ignore', fd, fd] });
   fs.closeSync(fd);
   const secs = `${((Date.now() - started) / 1000).toFixed(1)}s`;
   if (r.status === 0) {
@@ -279,14 +300,14 @@ function main(argv) {
   process.on('exit', () => fs.rmSync(tmp, { recursive: true, force: true }));
   const archive = spawnSync('git', ['-C', repo, 'archive', '--format=tar', commit, '--', ...EXPORT_PATHS], { maxBuffer: 512 * 1024 * 1024 });
   if (archive.status !== 0) throw new Fail(`git archive failed: ${String(archive.stderr).trim()}`);
-  const untar = spawnSync('tar', ['-x', '-C', tmp], { input: archive.stdout });
-  if (untar.status !== 0) throw new Fail(`tar failed: ${String(untar.stderr).trim()}`);
+  const untar = spawnSync(tarProgram(), ['-x', '-C', tmp], { input: archive.stdout });
+  if (untar.status !== 0) throw new Fail(`tar failed: ${String(untar.stderr || untar.error?.message).trim()}`);
 
   // Only the key picks the deployment: anything left over from a checkout's
   // .env.local or a thread's environment could point somewhere else.
-  const env = convexEnv(admin, { ...process.env, PATH: `${path.dirname(process.execPath)}:${process.env.PATH ?? ''}` });
-  const npm = path.join(path.dirname(process.execPath), 'npm');
-  const npx = path.join(path.dirname(process.execPath), 'npx');
+  const env = convexEnv(admin, pathWith(process.env, path.dirname(process.execPath)));
+  const npm = (args) => npmCommand(process.execPath, args);
+  const npx = (name, args) => npxCommand(process.execPath, tmp, name, args);
   const opts = { cwd: tmp, env };
 
   const failed = (part, e) => {
@@ -294,13 +315,13 @@ function main(argv) {
     throw e;
   };
   try {
-    step('Installing packages', npm, ['ci', '--no-audit', '--no-fund', '--prefer-offline'], opts);
+    step('Installing packages', npm(['ci', '--no-audit', '--no-fund', '--prefer-offline']), opts);
   } catch (e) {
     failed('packages', e);
   }
   if (todo.functions) {
     try {
-      step(`Deploying the Convex functions at ${short}`, npx, ['convex', 'deploy', '--typecheck', 'enable'], opts);
+      step(`Deploying the Convex functions at ${short}`, npx('convex', ['deploy', '--typecheck', 'enable']), opts);
     } catch (e) {
       failed('functions', e);
     }
@@ -308,7 +329,7 @@ function main(argv) {
   }
   if (todo.site) {
     try {
-      step(`Uploading the website at ${short}`, npx, ['static-hosting', 'upload', '--build', '--build-command', 'npm run web:build', '--dist', 'web/dist', ...prodArgs(admin)], opts);
+      step(`Uploading the website at ${short}`, npx('static-hosting', ['upload', '--build', '--build-command', 'npm run web:build', '--dist', 'web/dist', ...prodArgs(admin)]), opts);
     } catch (e) {
       failed('website', e);
     }

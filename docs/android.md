@@ -2,6 +2,11 @@
 
 Two ways, and the first needs nothing built.
 
+Both ways need a Convex deployment of your own for the computer to pair with. On
+Windows and Linux, `node scripts/setup-sync.mjs` from a clone of the repository
+makes one and turns on the "Show a code" button; docs/pairing.md says how, what it
+creates, what it costs and how to undo it.
+
 ## 1. The website, installed
 
 `web/` (docs/website.md) is a client of the phone API and is laid out for a

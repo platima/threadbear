@@ -22,6 +22,34 @@ File references are where to look.
   If that login goes missing or expires, the Convex panel's Sign in to
   Convex button runs `convex login` again from the runner, which writes
   the same file; you approve it in your browser on auth.convex.dev.
+- **The same Convex backend, on Windows and Linux** (`scripts/setup-sync.mjs`,
+  docs/pairing.md): run by hand from a clone of the repository, never by the
+  app or the runner, with `--dry-run` to see the plan first and a "Go ahead?"
+  before it does anything. It reads `~/.convex/config.json` only to see whether
+  a Convex login is there (it never prints it), reads and merges `sync.url` and
+  `sync.name` into `runner.json` (a file it can't read is left alone), and
+  writes `secrets/convex-deploy.env` (a deploy key, made by `convex deployment
+  token create`), `secrets/convex-key` (the main runner key, also set as
+  `RUNNER_KEY` on your deployment) and `secrets/made-deploy-keys` in the data
+  folder, with mode 0600 where the system has modes and the profile folder's
+  own permissions on Windows (it refuses a data folder outside the profile
+  without a yes). In the clone it runs `npm ci` and leaves the `.env.local`
+  that `convex dev` writes. It runs the Convex command line (its own
+  `node_modules`, logged in through your browser at auth.convex.dev, which the
+  command line opens), then `runner/scripts/deploy-backend.mjs`, which unpacks
+  the clone's commit with `tar` into a temporary folder, runs `npm ci` there
+  and deploys `convex/` and `web/` to your production deployment, taking a
+  lock file (`backend.winlock` in the data folder, and for a moment
+  `backend.winlock.reclaim` when it takes over one a crash left) on Windows
+  while it does. It
+  talks to your Convex deployment, api.convex.dev, auth.convex.dev and
+  registry.npmjs.org. On Windows it starts npm with `node npm-cli.js` where it
+  can, and otherwise `npm.cmd` through `cmd.exe`. At the end it can restart the
+  runner (after asking) with `install-windows.mjs --stop` and `--start`, or
+  `install-linux.mjs`, but never from inside a Threadbear thread, where it only
+  says how (it goes by `THREADBEAR_THREAD_ID` in its environment). On a Mac it
+  does nothing and says to use `./threadbear setup`. Self-hosted Convex stays
+  Mac-only.
 - **Or a self-hosted backend** (`setup --self-hosted`, docs/self-hosting.md;
   Convex cloud is the one we recommend): no Convex login or deploy key.
   Instead two Docker containers, `threadbear-convex` (Convex's open source
