@@ -317,6 +317,22 @@ test('a font answer is checked again: only a plain name and a sensible size are 
   assert.equal(r.sessions.getSnapshot().wtFont, undefined);
 });
 
+test("a list of faces is kept whole, checked again, and a changed list is a change", () => {
+  const r = rig();
+  r.sessions.loadFont();
+  r.t.open();
+  r.say({ t: 'font', face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono', 'x"; }'], size: 12 });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont, { face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'], size: 12 });
+  const v = r.sessions.getSnapshot().version;
+  r.say({ t: 'font', face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'], size: 12 });
+  assert.equal(r.sessions.getSnapshot().version, v, 'the same list again changes nothing');
+  r.say({ t: 'font', face: 'Cascadia Code', faces: ['Cascadia Code', 'Hack NF'], size: 12 });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont?.faces, ['Cascadia Code', 'Hack NF'], 'only the second face changed, and it is still seen');
+  r.say({ t: 'font', face: 'Cascadia Code', size: 12 });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont, { face: 'Cascadia Code', size: 12 }, 'back to one face');
+  r.sessions.close();
+});
+
 test('the same font said again changes nothing the window would redraw for', () => {
   const r = rig();
   r.sessions.loadFont();

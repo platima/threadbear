@@ -8,12 +8,16 @@
 // Nothing here touches the DOM, so it is tested in Node (the drawing is ui/TerminalDock.tsx, and
 // the asking is core/terminals.ts). The choice is kept in localStorage, like the shell's.
 
-import { sanitiseFace } from '../../bridge/font-face.ts';
+import { sanitiseFaces } from '../../bridge/font-face.ts';
 
+/** A custom choice's `name` is one font name, or a comma-separated list of them as Windows Terminal takes. */
 export type FontChoice = { kind: 'wt' } | { kind: 'default' } | { kind: 'custom'; name: string };
 
-/** What the bridge found in Windows Terminal's settings: a face, and a size in points. */
-export type FoundFont = { face?: string; size?: number };
+/**
+ * What the bridge found in Windows Terminal's settings: a face (the first it lists), all of them
+ * in its order when there is more than one, and a size in points.
+ */
+export type FoundFont = { face?: string; faces?: string[]; size?: number };
 
 export const DEFAULT_SIZE = 13;
 export const MIN_SIZE = 8;
@@ -30,6 +34,10 @@ export const FALLBACK_FACES = [
   'JetBrainsMono Nerd Font Mono',
   'FiraCode Nerd Font Mono',
   'Hack Nerd Font Mono',
+  // Only symbols: the font people set second in Windows Terminal ("Cascadia Code, Symbols Nerd Font
+  // Mono") so a prompt's glyphs come from it. It has no letters, so where it sits changes nothing else.
+  'Symbols Nerd Font Mono',
+  'Symbols Nerd Font',
   'Cascadia Mono',
   'Cascadia Code',
   'Consolas',
@@ -38,11 +46,14 @@ export const FALLBACK_FACES = [
   'Courier New',
 ];
 
-/** The CSS font-family: the face (quoted) if there is one, then the fallbacks, then whatever monospace the system has. */
-export function fontStack(face?: string): string {
-  // The name is checked again here: this string goes into the page's style.
-  const own = sanitiseFace(face);
-  const names = [...(own ? [own] : []), ...FALLBACK_FACES];
+/**
+ * The CSS font-family: the person's faces (quoted), in their order, if there are any, then the
+ * fallbacks, then whatever monospace the system has. Each of their faces counts, not just the
+ * first: a Nerd Font listed second is where a prompt's symbols come from.
+ */
+export function fontStack(face?: string | readonly string[]): string {
+  // The names are checked again here: this string goes into the page's style.
+  const names = [...sanitiseFaces(face), ...FALLBACK_FACES];
   const seen = new Set<string>();
   const quoted: string[] = [];
   for (const name of names) {
@@ -67,6 +78,22 @@ export function pointsToPixels(points: number): number {
 type KeyValue = Pick<Storage, 'getItem' | 'setItem'>;
 export const FONT_KEY = 'threadbear.terminalFont';
 
+/** The usable names in a typed font name or list, as one comma-separated text: '' when none is. */
+export function fontNames(text: string): string {
+  return sanitiseFaces(text).join(', ');
+}
+
+/**
+ * What to do with the text in the font name box when the person has finished with it (Enter, or
+ * leaving the box): the names to keep, whether there was text but none of it could be used, and
+ * whether that is a change from the name already in use. Empty text is a name not yet typed, not a bad one.
+ */
+export function typedFontName(typed: string, current: string): { name: string; bad: boolean; changed: boolean } {
+  const text = typed.trim();
+  const name = text === '' ? '' : fontNames(text);
+  return { name, bad: text !== '' && name === '', changed: name !== current };
+}
+
 export function serialiseFontChoice(choice: FontChoice): string {
   return choice.kind === 'custom' ? `custom:${choice.name}` : choice.kind;
 }
@@ -76,7 +103,7 @@ export function parseFontChoice(stored: string | null | undefined): FontChoice |
   if (stored === 'wt') return { kind: 'wt' };
   if (stored === 'default') return { kind: 'default' };
   // A name that has since failed the check (or was never one) counts as a name not yet typed.
-  if (typeof stored === 'string' && stored.startsWith('custom:')) return { kind: 'custom', name: sanitiseFace(stored.slice('custom:'.length)) ?? '' };
+  if (typeof stored === 'string' && stored.startsWith('custom:')) return { kind: 'custom', name: fontNames(stored.slice('custom:'.length)) };
   return undefined;
 }
 
@@ -128,18 +155,21 @@ export type ResolvedFont = {
  * person has no size of its own.
  */
 export function resolveFont(choice: FontChoice | undefined, found: FoundFont | undefined): ResolvedFont {
-  const face = sanitiseFace(found?.face);
+  // Every face Windows Terminal lists is used, in its order; the first is the one the label names.
+  const listed = sanitiseFaces(found?.faces);
+  const faces = listed.length ? listed : sanitiseFaces(found?.face);
+  const face = faces[0];
   const wanted: FontChoice = choice ?? (face ? { kind: 'wt' } : { kind: 'default' });
   const plain = (extra: Partial<ResolvedFont> = {}): ResolvedFont => ({ family: fontStack(), size: DEFAULT_SIZE, kind: 'default', ...extra });
   if (wanted.kind === 'wt') {
     if (!face) return plain({ problem: 'No font is set in Windows Terminal on this PC, so the default is used.' });
     const points = found?.size;
-    return { family: fontStack(face), size: typeof points === 'number' && Number.isFinite(points) && points > 0 ? pointsToPixels(points) : DEFAULT_SIZE, kind: 'wt', face };
+    return { family: fontStack(faces), size: typeof points === 'number' && Number.isFinite(points) && points > 0 ? pointsToPixels(points) : DEFAULT_SIZE, kind: 'wt', face };
   }
   if (wanted.kind === 'custom') {
-    const name = sanitiseFace(wanted.name);
-    if (!name) return plain({ kind: 'custom', problem: wanted.name ? "That isn't a font name the Terminal can use." : undefined });
-    return { family: fontStack(name), size: DEFAULT_SIZE, kind: 'custom', face: name };
+    const names = sanitiseFaces(wanted.name);
+    if (!names.length) return plain({ kind: 'custom', problem: wanted.name ? "That isn't a font name the Terminal can use." : undefined });
+    return { family: fontStack(names), size: DEFAULT_SIZE, kind: 'custom', face: names[0] };
   }
   return plain();
 }

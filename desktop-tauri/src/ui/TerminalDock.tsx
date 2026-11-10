@@ -3,9 +3,8 @@ import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import { sanitiseFace } from '../../bridge/font-face.ts';
 import { HOME_KEY, choiceLabel, terminals, type Target, type TerminalSessions } from '../core/terminals.ts';
-import { fontLabel, resolveFont, type FontChoice, type ResolvedFont } from '../core/terminal-font.ts';
+import { fontLabel, fontNames, resolveFont, typedFontName, type FontChoice, type ResolvedFont } from '../core/terminal-font.ts';
 import { isNative, openExternal } from '../core/native.ts';
 import { Menu, type MenuItem } from './thread/Menu.tsx';
 import './thread/terminal.css';
@@ -172,7 +171,14 @@ export function TerminalDock({ target, close, focusTick }: { target: Target; clo
   // The screens made or fitted later read this, not the font of the render that made the effect.
   const fontNow = useRef(font);
   fontNow.current = font;
-  const [draft, setDraft] = useState(fontPicked?.kind === 'custom' ? fontPicked.name : '');
+  const [draft, setDraftText] = useState(fontPicked?.kind === 'custom' ? fontPicked.name : '');
+  // What is in the name box right now. The box's own handlers (Escape, then the blur that moving
+  // the focus causes straight away) must see the text as it was just set, before React has drawn it.
+  const draftNow = useRef(draft);
+  const setDraft = (text: string) => {
+    draftNow.current = text;
+    setDraftText(text);
+  };
   const [badName, setBadName] = useState(false);
   const nameBox = useRef<HTMLInputElement>(null);
   const [nameWanted, wantName] = useState(false);
@@ -251,15 +257,17 @@ export function TerminalDock({ target, close, focusTick }: { target: Target; clo
     setBadName(false);
     void sessions.setFont(c);
   };
-  // The typed name is used when Enter is pressed or the box is left. One that isn't a plain font name is not used.
+  // The typed name (or comma-separated list of names, as Windows Terminal takes one) is used when
+  // Enter is pressed or the box is left. Text with no plain font name in it is not used. It reads
+  // the text from draftNow, not from the render: Escape puts the old name back and moves the focus
+  // in the same moment, and the blur that causes must not find the edit it is cancelling.
   const commitName = () => {
     if (fontPicked?.kind !== 'custom') return;
-    const typed = draft.trim();
-    const name = typed === '' ? '' : sanitiseFace(typed);
-    setBadName(name === undefined);
-    if (name === undefined) return;
+    const { name, bad, changed } = typedFontName(draftNow.current, fontPicked.name);
+    setBadName(bad);
+    if (bad) return;
     setDraft(name);
-    if (name !== fontPicked.name) pickFont({ kind: 'custom', name });
+    if (changed) pickFont({ kind: 'custom', name });
   };
   const fontItems: MenuItem[] = [
     // Windows Terminal's own is offered where the bridge found one (so never on Linux), and where it
@@ -269,7 +277,7 @@ export function TerminalDock({ target, close, focusTick }: { target: Target; clo
           {
             key: 'wt',
             label: 'Same as Windows Terminal',
-            note: found?.face ? `${found.face}${found.size ? `, ${found.size} pt` : ''}` : 'No font is set in Windows Terminal on this PC',
+            note: found?.face ? `${found.faces?.join(', ') ?? found.face}${found.size ? `, ${found.size} pt` : ''}` : 'No font is set in Windows Terminal on this PC',
             on: font.kind === 'wt',
             disabled: !found?.face,
             onPick: () => pickFont({ kind: 'wt' }),
@@ -283,7 +291,7 @@ export function TerminalDock({ target, close, focusTick }: { target: Target; clo
       note: 'The name of a font installed on this PC',
       on: font.kind === 'custom',
       onPick: () => {
-        pickFont({ kind: 'custom', name: sanitiseFace(draft) ?? '' });
+        pickFont({ kind: 'custom', name: fontNames(draftNow.current) });
         wantName(true);
       },
     },
@@ -348,11 +356,11 @@ export function TerminalDock({ target, close, focusTick }: { target: Target; clo
             className={`termFontName${badName ? ' bad' : ''}`}
             type="text"
             value={draft}
-            maxLength={100}
+            maxLength={400}
             spellCheck={false}
             placeholder="Font name"
             aria-label="Terminal font name"
-            title="The name of a font installed on this PC, as Windows lists it, for example JetBrainsMono Nerd Font. Press Enter to use it."
+            title="The name of a font installed on this PC, as Windows lists it, for example JetBrainsMono Nerd Font. Name several, separated by commas, as Windows Terminal does: the first draws the text and the others the symbols it lacks. Press Enter to use it, or Escape to put the old name back."
             onChange={(e) => {
               setDraft(e.target.value);
               setBadName(false);
@@ -361,6 +369,8 @@ export function TerminalDock({ target, close, focusTick }: { target: Target; clo
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitName();
               else if (e.key === 'Escape') {
+                // Put the old name back first (draftNow too): the focus moving below makes the box blur
+                // at once, and the blur uses what is in the box then.
                 setDraft(fontPicked.name);
                 setBadName(false);
                 instances.get(target.key)?.term.focus();

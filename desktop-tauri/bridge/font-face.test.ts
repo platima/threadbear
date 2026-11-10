@@ -4,7 +4,7 @@
 // font's name. Everything here is text in, text out: no file is read.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { parseJsonc, pickFont, sanitiseFace, sanitiseSize, stripJsonc } from './font-face.ts';
+import { parseJsonc, pickFont, sanitiseFace, sanitiseFaces, sanitiseSize, stripJsonc } from './font-face.ts';
 
 describe('JSON with comments and trailing commas', () => {
   test('line and block comments are dropped', () => {
@@ -93,6 +93,15 @@ describe('what may be a font face', () => {
     assert.equal(sanitiseFace(' , Fira Code'), 'Fira Code');
   });
 
+  test('the whole list is kept for the stack: every usable name, in order, once, at most six', () => {
+    assert.deepEqual(sanitiseFaces('Cascadia Code, Symbols Nerd Font Mono'), ['Cascadia Code', 'Symbols Nerd Font Mono']);
+    assert.deepEqual(sanitiseFaces('Fira Code,a"; },  fira   code ,Hack NF'), ['Fira Code', 'Hack NF'], 'an unusable one and a repeat (in any case) go');
+    assert.deepEqual(sanitiseFaces(['Fira Code', 'Cascadia Code, Hack NF', 7, null, {}]), ['Fira Code', 'Cascadia Code', 'Hack NF'], 'an array of texts, each a list; other things are skipped');
+    assert.deepEqual(sanitiseFaces('a, b, c, d, e, f, g, h'), ['a', 'b', 'c', 'd', 'e', 'f']);
+    for (const v of ['', ',', undefined, null, 5, {}, [], [5], 'x"; }', 'a'.repeat(1_000_000)]) assert.deepEqual(sanitiseFaces(v), [], String(v).slice(0, 20));
+    assert.deepEqual(sanitiseFaces([['Fira Code']]), [], 'no digging into nested arrays');
+  });
+
   test('a hostile name is refused, whatever it tries', () => {
     const hostile = [
       "x'; } body { background: url(http://evil.test/p) } a { font-family: 'y",
@@ -164,6 +173,19 @@ describe('the default profile', () => {
       },
     };
     assert.deepEqual(pickFont(settings), { face: 'Mine NF', size: 11 });
+  });
+
+  test('a list of faces is kept whole, in order: the second font is where a prompt\'s symbols come from', () => {
+    const face = 'Cascadia Code, Symbols Nerd Font Mono';
+    assert.deepEqual(pickFont({ defaultProfile: GUID, profiles: { list: [{ guid: GUID, font: { face, size: 12 } }] } }), { face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'], size: 12 });
+    assert.deepEqual(pickFont({ profiles: { defaults: { font: { face } } } }), { face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'] });
+    assert.deepEqual(pickFont({ profiles: { defaults: { fontFace: face } } }), { face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'] }, 'the older spelling too');
+    // One name is as before: no list beside it.
+    assert.deepEqual(pickFont({ profiles: { defaults: { font: { face: 'Cascadia Code' } } } }), { face: 'Cascadia Code' });
+    // A profile's list replaces the defaults' list, not adds to it.
+    assert.deepEqual(pickFont({ defaultProfile: GUID, profiles: { defaults: { font: { face: 'A, B' } }, list: [{ guid: GUID, font: { face: 'C' } }] } }), { face: 'C' });
+    // Unusable names in a list are left out of it.
+    assert.deepEqual(pickFont({ profiles: { defaults: { font: { face: 'Cascadia Code, x"; }, Symbols Nerd Font Mono' } } } }), { face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'] });
   });
 
   test('the guid matches whatever its case, and with or without the braces Windows Terminal writes', () => {

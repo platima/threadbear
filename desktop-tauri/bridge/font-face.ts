@@ -7,13 +7,21 @@
 // which JSON.parse refuses, so parseJsonc cleans those out first.
 
 export type TerminalFont = {
-  /** A font family name, as sanitiseFace allows it. */
+  /** A font family name, as sanitiseFace allows it: the first of `faces` when there are several. */
   face?: string;
+  /**
+   * Every acceptable name Windows Terminal lists, in its order, each once. Only there when it lists
+   * more than one: a Nerd Font that comes second ("Cascadia Code, Symbols Nerd Font Mono") is
+   * where a prompt's symbols come from, so the first alone would lose them.
+   */
+  faces?: string[];
   /** Windows Terminal's font size, in points. */
   size?: number;
 };
 
 export const MAX_FACE_LENGTH = 100;
+/** The most names of a list that are kept. */
+export const MAX_FACES = 6;
 
 // Letters and digits in any script, spaces, and - . _ ( ). Nothing that can end a quoted
 // CSS string, start another property or a comment, or run onto a second line.
@@ -21,19 +29,38 @@ const FACE = /^[\p{L}\p{Nd}_. ()-]+$/u;
 const HAS_WORD = /[\p{L}\p{Nd}]/u;
 
 /**
- * A font name that is safe to show and to put in quotes in a CSS font-family, or undefined.
- * Windows Terminal takes a comma-separated list of fonts for `face`; the first name in it that
- * is acceptable is the one kept. A name with anything else in it, or over 100 characters, is
- * not kept at all (cut short it would be a different font).
+ * The font names in a comma-separated list (or in each text of an array of them) that are safe to
+ * show and to put in quotes in a CSS font-family, in order, each once whatever its case, at most
+ * MAX_FACES of them. Windows Terminal takes a list like this for `face`, and tries the fonts in
+ * turn for each glyph. A name with anything else in it, or over 100 characters, is left out
+ * (cut short it would be a different font).
+ */
+export function sanitiseFaces(value: unknown): string[] {
+  const texts = Array.isArray(value) ? value.slice(0, MAX_FACES * 4) : [value];
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const text of texts) {
+    if (typeof text !== 'string' || text.length > MAX_FACE_LENGTH * 4) continue;
+    for (const part of text.split(',')) {
+      // Runs of spaces are tidied. A tab or a line break is not a space, and fails the check below.
+      const name = part.replace(/ {2,}/g, ' ').replace(/^ | $/g, '');
+      if (name.length === 0 || name.length > MAX_FACE_LENGTH || !FACE.test(name) || !HAS_WORD.test(name)) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      names.push(name);
+      if (names.length === MAX_FACES) return names;
+    }
+  }
+  return names;
+}
+
+/**
+ * The first acceptable font name in a text, or undefined (a list's first name is the font
+ * Windows Terminal draws in; the rest are fallbacks, which sanitiseFaces keeps).
  */
 export function sanitiseFace(value: unknown): string | undefined {
-  if (typeof value !== 'string' || value.length > MAX_FACE_LENGTH * 4) return undefined;
-  for (const part of value.split(',')) {
-    // Runs of spaces are tidied. A tab or a line break is not a space, and fails the check below.
-    const name = part.replace(/ {2,}/g, ' ').replace(/^ | $/g, '');
-    if (name.length > 0 && name.length <= MAX_FACE_LENGTH && FACE.test(name) && HAS_WORD.test(name)) return name;
-  }
-  return undefined;
+  return typeof value === 'string' ? sanitiseFaces(value)[0] : undefined;
 }
 
 /** A font size in points as Windows Terminal could mean it (it allows halves: 10.5), or undefined. */
@@ -101,9 +128,10 @@ type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj | undefined => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : undefined);
 
 // A profile's (or the defaults') own font: `font: { face, size }`, else the older `fontFace` and `fontSize`.
-function ownFont(p: Obj | undefined): TerminalFont {
+function ownFont(p: Obj | undefined): { faces: string[]; size?: number } {
   const font = obj(p?.font);
-  return { face: sanitiseFace(font?.face) ?? sanitiseFace(p?.fontFace), size: sanitiseSize(font?.size) ?? sanitiseSize(p?.fontSize) };
+  const faces = sanitiseFaces(font?.face);
+  return { faces: faces.length ? faces : sanitiseFaces(p?.fontFace), size: sanitiseSize(font?.size) ?? sanitiseSize(p?.fontSize) };
 }
 
 const same = (a: unknown, b: string) => typeof a === 'string' && a.trim().toLowerCase() === b;
@@ -125,7 +153,7 @@ export function pickFont(settings: unknown): TerminalFont {
   const profile = wanted ? (entries.find((p) => p && same(p.guid, wanted)) ?? entries.find((p) => p && same(p.name, wanted))) : undefined;
   const own = ownFont(profile);
   const base = ownFont(obj(profiles?.defaults));
-  const face = own.face ?? base.face;
+  const faces = own.faces.length ? own.faces : base.faces;
   const size = own.size ?? base.size;
-  return { ...(face ? { face } : {}), ...(size !== undefined ? { size } : {}) };
+  return { ...(faces[0] ? { face: faces[0] } : {}), ...(faces.length > 1 ? { faces } : {}), ...(size !== undefined ? { size } : {}) };
 }

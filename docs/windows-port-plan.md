@@ -660,8 +660,12 @@ showed as boxes for someone who had set one in Windows Terminal. The bridge now 
 (`bridge/windows-terminal-font.ts`, `font-face.ts`) and the panel's Font menu offers it as
 "Same as Windows Terminal", with Default and a typed name beside it. The settings file is JSONC,
 so there is a small tolerant parser rather than a dependency; only a checked font name and the
-size leave the bridge. A webview finds a private use glyph only in a font it was told to look
-in, so the stack names the common Nerd Fonts after the chosen one. Windows Terminal's size is in
+size leave the bridge. Windows Terminal's `face` can be a list ("Cascadia Code, Symbols Nerd
+Font Mono"), and the second font is often where the symbols come from, so the whole list (up to
+six names, in its order) goes to the panel and into the stack, and a name typed in the box can be
+a list too. A webview finds a private use glyph only in a font it was told to look
+in, so the stack names the common Nerd Fonts (Symbols Nerd Font among them) after the chosen
+ones. Windows Terminal's size is in
 points and the panel's is in pixels, so 12 points becomes 16 pixels (held between 8 and 32).
 Checked by hand in the built page against a stand-in settings file; not checked against a real
 Nerd Font on the person's own Windows Terminal setup.

@@ -4,9 +4,9 @@
 // page, the size, and how a choice is kept. Nothing here reads a file or the page.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_SIZE, FALLBACK_FACES, FONT_KEY, fontChoice, fontLabel, fontStack, parseFontChoice, pointsToPixels, resolveFont, serialiseFontChoice, setFontChoice } from './terminal-font.ts';
+import { DEFAULT_SIZE, FALLBACK_FACES, FONT_KEY, fontChoice, fontLabel, fontStack, parseFontChoice, pointsToPixels, resolveFont, serialiseFontChoice, setFontChoice, typedFontName } from './terminal-font.ts';
 
-const FALLBACKS = "'CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove NF', 'MesloLGM Nerd Font Mono', 'MesloLGS NF', 'JetBrainsMono Nerd Font Mono', 'FiraCode Nerd Font Mono', 'Hack Nerd Font Mono', 'Cascadia Mono', 'Cascadia Code', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New', monospace";
+const FALLBACKS = "'CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove NF', 'MesloLGM Nerd Font Mono', 'MesloLGS NF', 'JetBrainsMono Nerd Font Mono', 'FiraCode Nerd Font Mono', 'Hack Nerd Font Mono', 'Symbols Nerd Font Mono', 'Symbols Nerd Font', 'Cascadia Mono', 'Cascadia Code', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New', monospace";
 
 test('the stack: the chosen face in quotes, the Nerd Fonts and ordinary monospace fonts after it, then monospace', () => {
   assert.equal(fontStack('Iosevka Term'), `'Iosevka Term', ${FALLBACKS}`);
@@ -27,6 +27,21 @@ test('a face that is already a fallback is not named twice, whatever its case', 
   assert.equal(fontStack('Cascadia Code'), `'Cascadia Code', ${FALLBACKS.replace("'Cascadia Code', ", '')}`);
   assert.equal(fontStack('caskaydiacove nf').match(/caskaydiacove nf/gi)?.length, 1);
   assert.equal(fontStack('CaskaydiaCove NF').split("'CaskaydiaCove NF'").length, 2);
+});
+
+test("every face in a list is in the stack, in the person's order, ahead of the fallbacks", () => {
+  const stack = fontStack(['Iosevka Term', 'Symbols Nerd Font Mono']);
+  assert.ok(stack.startsWith("'Iosevka Term', 'Symbols Nerd Font Mono', 'CaskaydiaCove Nerd Font Mono', "), stack);
+  assert.equal(stack.split("'Symbols Nerd Font Mono'").length, 2, 'named once');
+  // A list as text, as Windows Terminal writes it, is the same list.
+  assert.equal(fontStack('Iosevka Term, Symbols Nerd Font Mono'), stack);
+  // A name the person lists that is not plain is left out and the rest are kept.
+  assert.equal(fontStack(['Iosevka Term', 'a"; }', 'Symbols Nerd Font Mono']), stack);
+});
+
+test('Symbols Nerd Font is among the fallbacks, for a person whose only Nerd Font is that one', () => {
+  assert.ok(FALLBACK_FACES.includes('Symbols Nerd Font Mono'));
+  assert.ok(FALLBACK_FACES.indexOf('Symbols Nerd Font Mono') < FALLBACK_FACES.indexOf('Cascadia Mono'));
 });
 
 test('a face that is not a plain name never reaches the stack', () => {
@@ -54,6 +69,19 @@ test('same as Windows Terminal: its face and its size', () => {
   assert.ok(other.family.startsWith("'Iosevka Term NF', 'CaskaydiaCove Nerd Font Mono', "));
 });
 
+test("same as Windows Terminal with several faces draws in all of them, and the label names the first", () => {
+  const found = { face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'], size: 12 };
+  const r = resolveFont({ kind: 'wt' }, found);
+  assert.equal(r.face, 'Cascadia Code');
+  assert.ok(r.family.startsWith("'Cascadia Code', 'Symbols Nerd Font Mono', "), r.family);
+  assert.equal(r.size, 16);
+  assert.equal(fontLabel(r), 'Font: Cascadia Code');
+  // The list is checked here as well as in the bridge, and a face alone still works (an older bridge).
+  assert.ok(resolveFont({ kind: 'wt' }, { ...found, faces: ['Cascadia Code', 'x"; }', 'Symbols Nerd Font Mono'] }).family.startsWith("'Cascadia Code', 'Symbols Nerd Font Mono', "));
+  assert.equal(resolveFont({ kind: 'wt' }, { face: 'Cascadia Code' }).family, fontStack('Cascadia Code'));
+  assert.equal(resolveFont({ kind: 'wt' }, { face: 'Cascadia Code', faces: [] }).family, fontStack('Cascadia Code'));
+});
+
 test('same as Windows Terminal with no size set there keeps the usual size', () => {
   assert.equal(resolveFont({ kind: 'wt' }, { face: 'MesloLGS NF' }).size, DEFAULT_SIZE);
   for (const size of [0, -3, NaN, Infinity]) assert.equal(resolveFont({ kind: 'wt' }, { face: 'MesloLGS NF', size }).size, DEFAULT_SIZE, String(size));
@@ -75,6 +103,25 @@ test("a name typed by the person is used with the usual size, not Windows Termin
   const r = resolveFont({ kind: 'custom', name: 'Iosevka Term' }, { face: 'Fira Code', size: 14 });
   assert.deepEqual(r, { family: fontStack('Iosevka Term'), size: DEFAULT_SIZE, kind: 'custom', face: 'Iosevka Term' });
   assert.equal(resolveFont({ kind: 'custom', name: 'Iosevka Term' }, undefined).face, 'Iosevka Term', 'on a system with no Windows Terminal');
+});
+
+test('a list typed by the person is used whole, as Windows Terminal takes one', () => {
+  const r = resolveFont({ kind: 'custom', name: 'Cascadia Code, Symbols Nerd Font Mono' }, undefined);
+  assert.equal(r.face, 'Cascadia Code');
+  assert.equal(r.size, DEFAULT_SIZE);
+  assert.ok(r.family.startsWith("'Cascadia Code', 'Symbols Nerd Font Mono', "), r.family);
+});
+
+test('what is typed in the name box: the usable names, and whether that is bad or a change', () => {
+  assert.deepEqual(typedFontName('  Fira   Code ', ''), { name: 'Fira Code', bad: false, changed: true });
+  assert.deepEqual(typedFontName('Fira Code', 'Fira Code'), { name: 'Fira Code', bad: false, changed: false });
+  assert.deepEqual(typedFontName('Cascadia Code,Symbols Nerd Font Mono', 'Cascadia Code'), { name: 'Cascadia Code, Symbols Nerd Font Mono', bad: false, changed: true });
+  assert.deepEqual(typedFontName('Cascadia Code, a"; }, Cascadia Code', ''), { name: 'Cascadia Code', bad: false, changed: true }, 'the unusable one and the repeat go');
+  assert.deepEqual(typedFontName('', 'Fira Code'), { name: '', bad: false, changed: true }, 'emptied: not bad, and a change');
+  assert.deepEqual(typedFontName('   ', ''), { name: '', bad: false, changed: false });
+  assert.deepEqual(typedFontName('a"; }', 'Fira Code'), { name: '', bad: true, changed: true });
+  // Escape puts the old name back before the box blurs, so what the blur commits is no change.
+  assert.deepEqual(typedFontName('Fira Code', 'Fira Code'), { name: 'Fira Code', bad: false, changed: false });
 });
 
 test('a typed name with nothing in it, or nothing usable, is the default stack, said so', () => {

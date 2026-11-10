@@ -7,7 +7,7 @@
 // terminal with Ctrl+J). Looking at a thread, or reloading the window, only finds the
 // shell that is already there. A thread's shell ends when the thread is archived or deleted.
 
-import { sanitiseFace, sanitiseSize } from '../../bridge/font-face.ts';
+import { sanitiseFace, sanitiseFaces, sanitiseSize } from '../../bridge/font-face.ts';
 import { bridgeKey, bridgeTransport, type Transport } from './rpc.ts';
 import { fontChoice, setFontChoice, type FontChoice, type FoundFont } from './terminal-font.ts';
 import type { ThreadSummary } from './types.ts';
@@ -228,11 +228,15 @@ export class TerminalSessions {
         break;
       }
       case 'font': {
-        // Only a name and a size are taken, and the name is checked again here: it ends up in a style.
-        const face = sanitiseFace(m.face);
+        // Only names and a size are taken, and the names are checked again here: they end up in a style.
+        const faces = sanitiseFaces(m.faces);
+        const face = sanitiseFace(m.face) ?? faces[0];
         const size = sanitiseSize(m.size);
         const before = this.snap.wtFont;
-        if (before?.face !== face || before?.size !== size) this.publish({ wtFont: face || size !== undefined ? { ...(face ? { face } : {}), ...(size !== undefined ? { size } : {}) } : undefined });
+        const same = before?.face === face && before?.size === size && (before?.faces ?? []).join(',') === (faces.length > 1 ? faces : []).join(',');
+        if (!same) {
+          this.publish({ wtFont: face || size !== undefined ? { ...(face ? { face } : {}), ...(faces.length > 1 ? { faces } : {}), ...(size !== undefined ? { size } : {}) } : undefined });
+        }
         break;
       }
       case 'opened': {

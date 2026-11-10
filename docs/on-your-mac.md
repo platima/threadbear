@@ -498,9 +498,10 @@ said otherwise.
   `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState`,
   the same under `Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe`, and
   `%LOCALAPPDATA%\Microsoft\Windows Terminal`, reads at most 2 MB of it, and
-  takes the default profile's font name and size, nothing else. Only that name
-  (letters, digits, spaces, hyphens, dots, underscores and brackets, up to 100
-  characters) and the size go to the window, to choose a font to draw with. The
+  takes the default profile's font names (a list, up to six) and size, nothing
+  else. Only those names (letters, digits, spaces, hyphens, dots, underscores
+  and brackets, up to 100 characters each) and the size go to the window, to
+  choose the fonts to draw with. The
   file's text is not kept, logged or sent anywhere, and nothing is written to
   it. The font choice (Same as Windows Terminal, Default, or a name you type) is
   kept in the page's local storage as `threadbear.terminalFont`. A shell is given the bridge's environment less

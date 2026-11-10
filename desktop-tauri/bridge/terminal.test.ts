@@ -383,6 +383,25 @@ describe('the page connection', () => {
     assert.equal(reads, 2);
   });
 
+  test('font says every face Windows Terminal lists, in its order, when it lists more than one', async () => {
+    const r = rig({ font: () => ({ face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'], size: 12 }) });
+    const ws = new FakeSocket();
+    r.terminals.serve(ws as unknown as WebSocket);
+    ws.say({ t: 'font' });
+    assert.deepEqual(ws.sent.at(-1), { t: 'font', face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'], size: 12 });
+    // A list of one is just the face, as before; unusable names and repeats are dropped; the list is capped.
+    const one = rig({ font: () => ({ face: 'Fira Code', faces: ['Fira Code', 'x"; }', 'fira code'] }) });
+    const ws1 = new FakeSocket();
+    one.terminals.serve(ws1 as unknown as WebSocket);
+    ws1.say({ t: 'font' });
+    assert.deepEqual(ws1.sent.at(-1), { t: 'font', face: 'Fira Code' });
+    const many = rig({ font: () => ({ faces: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] }) });
+    const wsm = new FakeSocket();
+    many.terminals.serve(wsm as unknown as WebSocket);
+    wsm.say({ t: 'font' });
+    assert.deepEqual(wsm.sent.at(-1), { t: 'font', face: 'a', faces: ['a', 'b', 'c', 'd', 'e', 'f'] });
+  });
+
   test('font with no Windows Terminal font to find says so with neither field', async () => {
     const r = rig();
     const ws = new FakeSocket();

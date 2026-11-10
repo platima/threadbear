@@ -661,10 +661,14 @@ draws show up as they do there. It is what you get until you choose, if
 Windows Terminal has a font set. Default is Cascadia Mono, or whatever
 monospace font the PC has. A font you name takes the name of any font installed
 on the PC (on Linux that and Default are the choices): type it in the box that
-appears and press Enter. Prompt symbols need a Nerd Font, and the terminal
-looks in the common ones (CaskaydiaCove, MesloLG, JetBrainsMono, FiraCode and
-Hack) after the font you picked, so one of those installed is enough even if
-you pick Default. The choice is kept.
+appears and press Enter, or Escape to put the old name back. Name several,
+separated by commas, as Windows Terminal does (`Cascadia Code, Symbols Nerd
+Font Mono`): the first draws the text and the others the symbols it lacks.
+Same as Windows Terminal keeps every font in that list, not only the first.
+Prompt symbols need a Nerd Font, and the terminal looks in the common ones
+(CaskaydiaCove, MesloLG, JetBrainsMono, FiraCode, Hack and the symbols-only
+Symbols Nerd Font) after the fonts you picked, so one of those installed is
+enough even if you pick Default. The choice is kept.
 
 A shell command an agent gives you (a ```` ```bash ````, `sh`, `zsh` or
 `shell` block) has a play icon and a copy icon at its top right. Play

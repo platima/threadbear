@@ -14,7 +14,7 @@
 //   {t:'in', key, d}  {t:'resize', key, cols, rows}  {t:'stop', key}
 //   {t:'prune', keep:[key...]}                   stop every shell whose key isn't listed
 // What it gets back:
-//   {t:'shells', ...}  {t:'font', face?, size?}  {t:'opened', key, shell, cwd, replay?}  {t:'none', key}
+//   {t:'shells', ...}  {t:'font', face?, faces?, size?}  {t:'opened', key, shell, cwd, replay?}  {t:'none', key}
 //   {t:'out', key, d}  {t:'exit', key, code}  {t:'error', key?, message}
 //
 // A shell starts only when the page asks for one with create. It stops when the page
@@ -26,7 +26,7 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
 import { command, pick, shellsNow, type Shell, type ShellList } from './shells.ts';
-import { sanitiseFace, sanitiseSize } from './font-face.ts';
+import { sanitiseFace, sanitiseFaces, sanitiseSize } from './font-face.ts';
 import { windowsTerminalFont, type TerminalFont } from './windows-terminal-font.ts';
 
 /** The part of node-pty's terminal this uses, so a test can stand one in. */
@@ -159,10 +159,12 @@ export class Terminals {
   font(): TerminalFont {
     try {
       const found = (this.deps.font ?? windowsTerminalFont)();
-      // Whatever is behind this, only a name and a size leave the bridge.
-      const face = sanitiseFace(found.face);
+      // Whatever is behind this, only names and a size leave the bridge. The names are the whole
+      // list Windows Terminal has, in its order, when it has more than one.
+      const faces = sanitiseFaces(found.faces);
+      const face = sanitiseFace(found.face) ?? faces[0];
       const size = sanitiseSize(found.size);
-      return { ...(face ? { face } : {}), ...(size !== undefined ? { size } : {}) };
+      return { ...(face ? { face } : {}), ...(faces.length > 1 ? { faces } : {}), ...(size !== undefined ? { size } : {}) };
     } catch {
       return {};
     }
