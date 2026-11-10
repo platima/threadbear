@@ -139,17 +139,20 @@ export async function runnerSetup(using: Using = {}): Promise<RunnerSetup | 'sil
 // Starts the runner: 'start' one that is set up, or set one up and start it, 'on-demand'
 // (only while the app is open) or at 'sign-in'. The shell decides what is run; the page
 // only names which. It answers when that is done, so the page can show it is working
-// until then. Gives back what went wrong, or undefined when it worked.
+// until then. Gives back what went wrong (`problem`), or what the shell says happened
+// (`note`: "Started the runner.", "The runner is already running.", "... turned off in
+// Task Scheduler ..."), so a start that did nothing is not silent either.
 export type RunnerWay = 'start' | 'on-demand' | 'sign-in';
+export type StartAnswer = { problem?: string; note?: string };
 
-export async function startRunner(how: RunnerWay = 'start', using: Using = {}): Promise<string | undefined> {
+export async function startRunner(how: RunnerWay = 'start', using: Using = {}): Promise<StartAnswer> {
   const call = channel(using);
-  if (!call) return 'Only the installed app can start the runner.';
+  if (!call) return { problem: 'Only the installed app can start the runner.' };
   try {
-    await within(call('start_runner', { how }), using.waitMs ?? SHELL_WAIT_MS);
-    return undefined;
+    const note = await within(call<string>('start_runner', { how }), using.waitMs ?? SHELL_WAIT_MS);
+    return typeof note === 'string' && note.trim() ? { note: note.trim() } : {};
   } catch (e) {
-    return words(e);
+    return { problem: words(e) };
   }
 }
 

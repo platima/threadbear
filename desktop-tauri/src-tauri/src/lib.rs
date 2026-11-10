@@ -604,13 +604,36 @@ fn start_args(how: &str) -> Option<Vec<String>> {
 // that is done, so the page can show it is working until then and not take a second
 // click; a failure comes back as words for the page.
 #[tauri::command]
-async fn start_runner(how: String) -> Result<(), String> {
+async fn start_runner(how: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || start_runner_now(&how))
         .await
         .map_err(|e| format!("The runner could not be started ({e})."))?
 }
 
-fn start_runner_now(how: &str) -> Result<(), String> {
+// The first line the script printed, which for --start says what it did: "Started the
+// runner.", "The runner is already running.", "The runner task is turned off in Task
+// Scheduler, so it was not started." or "... not installed, so nothing was started." (the
+// script exits 0 for all four, and the page shows the line so none of them is silent).
+fn first_line(text: &str) -> String {
+    text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string()
+}
+
+// What the page is told when the runner is set up and started by `how`: the script's own line
+// for a start, and a plain sentence for a set-up (whose output is a longer account).
+fn started_note(how: &str, text: &str) -> String {
+    let line = first_line(text);
+    if how == "start" {
+        if line.is_empty() {
+            "Started the runner.".to_string()
+        } else {
+            line
+        }
+    } else {
+        "The runner is set up and starting.".to_string()
+    }
+}
+
+fn start_runner_now(how: &str) -> Result<String, String> {
     let Some(args) = start_args(how) else {
         return Err(format!("The runner cannot be started by \"{how}\"."));
     };
@@ -619,9 +642,10 @@ fn start_runner_now(how: &str) -> Result<(), String> {
     }
     log_shell(&format!("start the runner, {how}: running the install script"));
     match runner_script(&args) {
-        Ok((0, _)) => {
-            log_shell(&format!("start the runner, {how}: done"));
-            Ok(())
+        Ok((0, text)) => {
+            let note = started_note(how, &text);
+            log_shell(&format!("start the runner, {how}: done: {note}"));
+            Ok(note)
         }
         Ok((code, text)) => {
             log_shell(&format!("start the runner, {how}: the script said {code}: {text}"));
@@ -928,6 +952,9 @@ pub fn run() {
                 app.handle().exit(0);
                 return Ok(());
             }
+            // One line so shell.log shows this copy started: a missing line for a click
+            // then means the click never reached the shell, and not that the log is off.
+            log_shell(&format!("Threadbear {} started", env!("CARGO_PKG_VERSION")));
             // A failure is shown, then the program ends. Returning it from here
             // instead would end in a panic that, in the release build, says nothing.
             if let Err(message) = start_ui(app) {
@@ -1003,6 +1030,17 @@ mod tests {
         for other in ["", "--uninstall", "--stop", "uninstall", "start ", "Start"] {
             assert_eq!(start_args(other), None, "{other:?} should be refused");
         }
+    }
+
+    #[test]
+    fn a_start_tells_the_page_what_the_script_said() {
+        assert_eq!(started_note("start", "Started the runner.\n"), "Started the runner.");
+        assert_eq!(started_note("start", "\n  The runner is already running.  \nmore"), "The runner is already running.");
+        assert_eq!(started_note("start", ""), "Started the runner.");
+        // A set-up prints a longer account; the page is told one sentence.
+        assert_eq!(started_note("on-demand", "Register the task...\nStarted the runner.\n"), "The runner is set up and starting.");
+        assert_eq!(started_note("sign-in", ""), "The runner is set up and starting.");
+        assert_eq!(first_line("\n\n  one  \ntwo"), "one");
     }
 
     #[test]

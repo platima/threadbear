@@ -58,20 +58,29 @@ test('starting the runner is a request the shell answers when it is done, and a 
     calls.push({ command, args });
     return undefined as never;
   };
-  assert.equal(await startRunner('start', { call: on }), undefined);
-  assert.equal(await startRunner('on-demand', { call: on }), undefined);
-  assert.equal(await startRunner('sign-in', { call: on }), undefined);
+  assert.deepEqual(await startRunner('start', { call: on }), {});
+  assert.deepEqual(await startRunner('on-demand', { call: on }), {});
+  assert.deepEqual(await startRunner('sign-in', { call: on }), {});
   // With no word, it starts a runner that is set up.
-  assert.equal(await startRunner(undefined, { call: on }), undefined);
+  assert.deepEqual(await startRunner(undefined, { call: on }), {});
   assert.deepEqual(calls.map((c) => c.args), [{ how: 'start' }, { how: 'on-demand' }, { how: 'sign-in' }, { how: 'start' }]);
   assert.ok(calls.every((c) => c.command === 'start_runner'));
-  assert.equal(await startRunner('start', { call: async () => { throw 'The runner could not be started.\n\nAccess is denied.'; } }), 'The runner could not be started.\n\nAccess is denied.');
-  assert.equal(await startRunner('start', { call: async () => { throw new Error('gone'); } }), 'gone');
+  assert.deepEqual(await startRunner('start', { call: async () => { throw 'The runner could not be started.\n\nAccess is denied.'; } }), { problem: 'The runner could not be started.\n\nAccess is denied.' });
+  assert.deepEqual(await startRunner('start', { call: async () => { throw new Error('gone'); } }), { problem: 'gone' });
+});
+
+test('what the shell says it did comes back as a note, so a start that changed nothing is not silent', async () => {
+  for (const said of ['Started the runner.', 'The runner is already running.', 'The runner task is turned off in Task Scheduler, so it was not started.']) {
+    assert.deepEqual(await startRunner('start', { call: async () => said as never }), { note: said });
+  }
+  // Blank or not text: nothing to say.
+  assert.deepEqual(await startRunner('start', { call: async () => '   ' as never }), {});
+  assert.deepEqual(await startRunner('start', { call: async () => 5 as never }), {});
 });
 
 test('a shell that never answers about the runner is given up on, with the words that say where to look', async () => {
   const never = () => new Promise<never>(() => {});
-  assert.equal(await startRunner('start', { call: never, waitMs: 20 }), shellSilent());
+  assert.deepEqual(await startRunner('start', { call: never, waitMs: 20 }), { problem: shellSilent() });
   // Not answering is its own result: it is not "none" and not "don't know".
   assert.equal(await runnerSetup({ call: never, waitMs: 20 }), 'silent');
 });
@@ -132,7 +141,7 @@ test('a sign-in terminal is asked for by name, with the login\'s folder only whe
 test('outside the shell the exit-on-close choice and the runner start do nothing and say what they can', async () => {
   assert.equal(await getExitOnClose({ call: null }), undefined);
   assert.match((await setExitOnClose(true, { call: null })) ?? '', /installed app/);
-  assert.match((await startRunner('start', { call: null })) ?? '', /installed app/);
+  assert.match((await startRunner('start', { call: null })).problem ?? '', /installed app/);
 });
 
 test('outside the shell it does nothing and says nothing', async () => {

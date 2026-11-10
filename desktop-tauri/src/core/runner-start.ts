@@ -4,9 +4,9 @@
 // opens: that window is what the button once left nobody able to see (rc.3), and the
 // button just sat on "Starting...".
 
-import { appCommand, pagePlatform, runnerSetup, shellSilent, startRunner, type PagePlatform, type RunnerWay } from './native.ts';
+import { appCommand, pagePlatform, runnerSetup, shellSilent, startRunner, type PagePlatform, type RunnerWay, type StartAnswer } from './native.ts';
 
-export type StartClick = { kind: 'choose' } | { kind: 'done'; problem?: string };
+export type StartClick = { kind: 'choose' } | ({ kind: 'done' } & StartAnswer);
 
 // `using` is the shell's channel; the tests pass their own.
 export async function startClick(using: Parameters<typeof startRunner>[1] = {}): Promise<StartClick> {
@@ -15,8 +15,8 @@ export async function startClick(using: Parameters<typeof startRunner>[1] = {}):
   if (setup === 'silent') return { kind: 'done', problem: shellSilent() };
   // No task of ours: nothing to start, so the person is asked how it should start.
   if (setup === 'none') return { kind: 'choose' };
-  // Set up, or the shell would not say: start it, and say what it says if it can't.
-  return { kind: 'done', problem: await startRunner('start', using) };
+  // Set up, or the shell would not say: start it, and say what it says either way.
+  return { kind: 'done', ...(await startRunner('start', using)) };
 }
 
 // The ways to set the runner up, for the page's two buttons (the shell runs the same install

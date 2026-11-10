@@ -12,8 +12,8 @@ function shell(setup: string, start: 'ok' | string = 'ok') {
   const call = async (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     if (command === 'runner_setup') return setup as never;
-    if (start !== 'ok') throw start;
-    return undefined as never;
+    if (start !== 'ok' && !start.startsWith('NOTE:')) throw start;
+    return (start.startsWith('NOTE:') ? start.slice(5) : undefined) as never;
   };
   return { call, calls };
 }
@@ -21,8 +21,15 @@ function shell(setup: string, start: 'ok' | string = 'ok') {
 test('with a runner set up, the button starts it and asks nothing', async () => {
   for (const setup of ['sign-in', 'on-demand']) {
     const s = shell(setup);
-    assert.deepEqual(await startClick({ call: s.call }), { kind: 'done', problem: undefined });
+    assert.deepEqual(await startClick({ call: s.call }), { kind: 'done' });
     assert.deepEqual(s.calls, [{ command: 'runner_setup', args: undefined }, { command: 'start_runner', args: { how: 'start' } }]);
+  }
+});
+
+test('what the shell says about starting is given back, even when it started nothing', async () => {
+  for (const said of ['Started the runner.', 'The runner is already running.', 'The runner task is turned off in Task Scheduler, so it was not started.']) {
+    const s = shell('sign-in', 'NOTE:' + said);
+    assert.deepEqual(await startClick({ call: s.call }), { kind: 'done', note: said });
   }
 });
 
