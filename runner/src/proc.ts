@@ -251,8 +251,9 @@ export function groupAlive(pgid: number): boolean {
 
 // Windows ends a process and everything it started in one go. There's no
 // gentler signal for a console program: SIGTERM is a hard kill there too.
-// Only a pid the runner started and still has recorded reaches this.
-function killTreeWindows(pid: number): boolean {
+// Only a pid the runner started and still has recorded reaches this, and
+// scripts/install-windows.mjs uses it for a runner it has checked is one.
+export function killTreeWindows(pid: number): boolean {
   try {
     execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     return true;
@@ -306,6 +307,34 @@ function processInfoWindows(pid: number): { pgid: number; lstart: string; comman
     ).trim();
     const m = /^(\d+) (.*)$/.exec(out);
     return m ? { pgid: pid, lstart: m[1], command: m[2] } : null;
+  } catch {
+    return null;
+  }
+}
+
+// Windows only. Which program a process is running and when it started, for
+// a caller about to end it that must be sure it has the right one: lstart is
+// the same count processInfo gives (so it compares with a runner's recorded
+// start time), path the full path of the program. null if PowerShell would
+// not say or the process is not there. A path of '' means the process would
+// not show its program (another user's, or elevated), which is no answer. The
+// text comes back as Base64 of its UTF-8, as PowerShell writes a pipe in the
+// OEM code page, which would turn a folder called Zoë into Zo?.
+export function processImage(pid: number): { lstart: string; path: string } | null {
+  if (!IS_WINDOWS) return null;
+  try {
+    const out = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$p = Get-Process -Id ${Math.trunc(pid)} -ErrorAction Stop; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$($p.StartTime.ToFileTimeUtc()) $($p.Path)"))`,
+      ],
+      { encoding: 'utf8', windowsHide: true, timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+    const m = /^(\d+) (.*)$/s.exec(Buffer.from(out, 'base64').toString('utf8'));
+    return m ? { lstart: m[1], path: m[2] } : null;
   } catch {
     return null;
   }

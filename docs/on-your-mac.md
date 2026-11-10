@@ -455,7 +455,23 @@ said otherwise.
   open programs, it sets and clears the user variable `THREADBEAR_PATH_CHANGED`
   for an instant. `--uninstall` removes the task, the file and the PATH entry;
   `--stop` ends the task but leaves it registered; `--start` runs it if it is
-  registered and not already running; `--installed` says whether it is.
+  registered and not already running; `--installed` says whether it is. `--stop`
+  (and `--uninstall`, before it removes the task) then waits up to 10 seconds
+  for Task Scheduler to say the task has stopped, and reads
+  `run\runner.pid` in the data folder. If the process it names is still
+  running, started at the time recorded there, and running from the same
+  `node.exe` the script itself is running on, it ends that process and the
+  ones it started (`taskkill /PID <pid> /T /F`) and prints one line saying so;
+  a runner from some other `node.exe`, or a process whose start time or program
+  it can't read, is left running and reported, and the exit code is 1. To read
+  those it runs `powershell.exe` (`Get-Process`) for that one process id.
+  Nothing is ever ended by name. The runner is also started with a pipe for its
+  standard input that `windows-run.mjs` holds open and a variable
+  (`THREADBEAR_RUNNER_WATCH_STDIN`) that makes it stop when the pipe closes,
+  which is what happens when the supervisor ends; the runner removes the
+  variable from its environment, so nothing it starts inherits it. The
+  supervisor's log also starts each run with a line giving its process id and
+  the `node.exe` it runs on.
 - **Where things are:** the data folder is `%APPDATA%\Threadbear` (the Mac's
   layout inside it), the runner's log is
   `%LOCALAPPDATA%\Threadbear\Logs\threadbear-runner.log`, and the supervisor's
@@ -476,7 +492,7 @@ said otherwise.
   `conhost.exe` for the task, `cmd.exe` for `tb.cmd`, `taskkill /T /F` on a
   process it started and still has recorded (only when its recorded start time
   matches, or the child it started hasn't exited, so a reused number is not
-  stopped), `powershell.exe`
+  stopped; and `--stop` on a leftover runner, as described above), `powershell.exe`
   to read a process's start time and the PATH, and
   `rundll32.exe url.dll,FileProtocolHandler` to open a web page. Every child is
   started with its console window hidden.

@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { tmpDir } from '../helpers/fakes.ts';
-import { markGood, readState, runnerVersion, statePath, takeRollbackNotice, type RunnerState } from '../../src/release.ts';
+import { PassThrough } from 'node:stream';
+import { SUPERVISOR_PIPE_VAR, markGood, readState, runnerVersion, statePath, takeRollbackNotice, takeSupervisorPipe, type RunnerState } from '../../src/release.ts';
 import { restartPath } from '../../src/restart.ts';
 import { RunnerClient } from '../../src/client.ts';
 import { nullLogger } from '../../src/log.ts';
@@ -356,4 +357,83 @@ test('onSupervisorGone fires when the IPC channel closes', async () => {
   c.proc.disconnect();
   assert.equal(await c.exited, 0, c.out());
   assert.equal(c.out().trim(), 'gone');
+});
+
+// ------------------------------------- the pipe windows-run.mjs holds on a runner
+
+test('takeSupervisorPipe watches standard input only when the supervisor on Windows asked, and takes the variable out of the environment either way', () => {
+  const calls: string[] = [];
+  const stdin = () => {
+    calls.push('stdin');
+    return new PassThrough();
+  };
+
+  // Started by hand, or by anything that is not windows-run.mjs: nothing watched, stdin not even opened.
+  assert.equal(takeSupervisorPipe({}, 'win32', stdin), undefined);
+  assert.equal(takeSupervisorPipe({ [SUPERVISOR_PIPE_VAR]: '0' }, 'win32', stdin), undefined);
+  assert.equal(takeSupervisorPipe({ [SUPERVISOR_PIPE_VAR]: '' }, 'win32', stdin), undefined);
+  // The Linux service shares the script, and never gets the variable; one that did is ignored.
+  const linux = { [SUPERVISOR_PIPE_VAR]: '1', OTHER: 'x' };
+  assert.equal(takeSupervisorPipe(linux, 'linux', stdin), undefined);
+  assert.equal(takeSupervisorPipe({ [SUPERVISOR_PIPE_VAR]: '1' }, 'darwin', stdin), undefined);
+  assert.deepEqual(linux, { OTHER: 'x' }, 'taken out even where it is not used');
+  assert.deepEqual(calls, [], 'standard input was left alone');
+
+  const env: NodeJS.ProcessEnv = { [SUPERVISOR_PIPE_VAR]: '1', OTHER: 'x' };
+  const watch = takeSupervisorPipe(env, 'win32', stdin);
+  assert.equal(typeof watch, 'function');
+  assert.deepEqual(env, { OTHER: 'x' }, 'so nothing the runner starts inherits it');
+  assert.deepEqual(calls, [], 'and nothing is read until the runner is ready to act on it');
+});
+
+test('takeSupervisorPipe calls back once when standard input ends, closes or fails, and not before', async () => {
+  for (const how of ['end', 'destroy', 'error'] as const) {
+    const input = new PassThrough();
+    let calls = 0;
+    takeSupervisorPipe({ [SUPERVISOR_PIPE_VAR]: '1' }, 'win32', () => input)!(() => calls++);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(calls, 0, `${how}: still waiting while the supervisor is there`);
+    if (how === 'end') input.end();
+    else if (how === 'destroy') input.destroy();
+    else input.emit('error', new Error('broken pipe'));
+    await new Promise((r) => setTimeout(r, 30));
+    input.destroy();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(calls, 1, `${how}: called once even though end, close and error can all follow`);
+  }
+});
+
+// A node child that imports release.ts and does what main.ts does with the pipe.
+function pipeChild(env: Record<string, string>, stdin: 'pipe' | 'ignore') {
+  const src = pathToFileURL(path.join(RUNNER_DIR, 'src', 'release.ts')).href;
+  const code = `import { takeSupervisorPipe } from ${JSON.stringify(src)};\ntakeSupervisorPipe()?.(() => { console.log('supervisor gone'); process.exit(0); });\nconsole.log('up');\nsetInterval(() => {}, 1000);\n`;
+  const proc = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...cleanEnv(), ...env }, stdio: [stdin, 'pipe', 'pipe'], windowsHide: true });
+  let out = '';
+  proc.stdout!.on('data', (d) => (out += d));
+  proc.stderr!.on('data', (d) => (out += d));
+  const exited = new Promise<number | null>((r) => proc.once('exit', (c) => r(c)));
+  return { proc, out: () => out, exited };
+}
+
+test('a runner on Windows stops when the pipe from its supervisor ends, and one started by hand does not', { skip: IS_WINDOWS ? false : 'Only Windows runs under windows-run.mjs' }, async () => {
+  const watched = pipeChild({ [SUPERVISOR_PIPE_VAR]: '1' }, 'pipe');
+  const byHand = pipeChild({}, 'pipe');
+  const noInput = pipeChild({}, 'ignore'); // standard input already at its end
+  try {
+    await until('the children to start', () => [watched, byHand, noInput].every((c) => c.out().includes('up')));
+    watched.proc.stdin!.end(); // what the supervisor's end does, as the system closes its end of the pipe
+    byHand.proc.stdin!.end();
+    assert.equal(await watched.exited, 0, watched.out());
+    assert.match(watched.out(), /supervisor gone/);
+    // Nothing asked for the watch, so an end of input means nothing to them.
+    await new Promise((r) => setTimeout(r, 1000));
+    for (const c of [byHand, noInput]) {
+      assert.equal(c.proc.exitCode, null, c.out());
+      assert.doesNotMatch(c.out(), /supervisor gone/);
+    }
+  } finally {
+    // Only the children this test started, by their handles.
+    for (const c of [watched, byHand, noInput]) c.proc.kill();
+    await Promise.all([watched, byHand, noInput].map((c) => c.exited));
+  }
 });

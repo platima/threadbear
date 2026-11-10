@@ -5,6 +5,7 @@
 // started from a checkout has none and reports itself as "+source".
 import fs from 'node:fs';
 import path from 'node:path';
+import type { Readable } from 'node:stream';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import type { Logger } from './log.ts';
 
@@ -274,6 +275,45 @@ export function requestHandover(timeoutMs = 10_000): Promise<HandoverReply> {
     process.on('disconnect', onGone);
     if (!sendToSupervisor({ type: 'handover' })) finish({ ok: false, error: "couldn't reach the supervisor" });
   });
+}
+
+// On Windows, scripts/windows-run.mjs starts the runner with a pipe for its
+// standard input, keeps the other end and sets this variable. However the
+// supervisor ends (Task Scheduler's End, an installer, a crash), the system
+// closes the pipe, which is how the runner finds out it has been left. Node's
+// job object for a child ends it with its parent as well, so in practice it
+// may be gone first; this is the runner's own way of knowing. The desktop
+// bridge does the same (THREADBEAR_BRIDGE_WATCH_STDIN). It is not
+// THREADBEAR_SUPERVISED, which means launch.mjs is there to take a handover.
+export const SUPERVISOR_PIPE_VAR = 'THREADBEAR_RUNNER_WATCH_STDIN';
+
+// Takes the variable out of the environment, so nothing the runner starts
+// (a thread that starts a runner of its own, say) inherits it and stops the
+// moment its own input ends. If it asked for the watch, on Windows, gives back
+// a function that calls fn, once, when standard input ends. Otherwise
+// undefined: a runner started by hand, or on the Mac or Linux, is left alone.
+// Standard input is not opened until that function is called.
+export function takeSupervisorPipe(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  getStdin: () => Readable = () => process.stdin,
+): ((fn: () => void) => void) | undefined {
+  const asked = env[SUPERVISOR_PIPE_VAR] === '1';
+  delete env[SUPERVISOR_PIPE_VAR];
+  if (!asked || platform !== 'win32') return undefined;
+  return (fn) => {
+    let called = false;
+    const done = () => {
+      if (called) return;
+      called = true;
+      fn();
+    };
+    const stdin = getStdin();
+    stdin.on('end', done);
+    stdin.on('close', done);
+    stdin.on('error', done);
+    stdin.resume();
+  };
 }
 
 // Calls fn once if the supervisor's IPC channel closes (it died), so the

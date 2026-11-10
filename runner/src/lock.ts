@@ -42,7 +42,9 @@ export function acquireLock(runDir: string): Lock | { heldBy: number } {
   throw new Error(`Couldn't take the runner lock at ${file}`);
 }
 
-function readHolder(file: string): { pid: number; lstart?: string } | null {
+// Who run/runner.pid says holds the lock: null if there is no such file or it
+// does not read. (scripts/install-windows.mjs reads it too.)
+export function readHolder(file: string): { pid: number; lstart?: string } | null {
   try {
     const raw = fs.readFileSync(file, 'utf8').trim();
     // Older runners wrote just the pid.

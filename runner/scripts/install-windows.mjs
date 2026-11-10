@@ -10,8 +10,9 @@
 //   node scripts/install-windows.mjs --status      is the task there and running
 //   node scripts/install-windows.mjs --installed   exit 0 if the task is there, 1 if not
 //   node scripts/install-windows.mjs --start       start the task if it is there and not running
-//   node scripts/install-windows.mjs --stop        end the task if it is running (it stays registered)
-//   node scripts/install-windows.mjs --uninstall   end and remove the task and `tb`
+//   node scripts/install-windows.mjs --stop        end the task if it is running (it stays registered), wait for it
+//                                                  to stop, and end the runner if it was left behind
+//   node scripts/install-windows.mjs --uninstall   end (the same way) and remove the task and `tb`
 //
 // It leaves: the task "Threadbear Runner (<your user name>)" (this user, no
 // admin rights), and `tb.cmd` in %LOCALAPPDATA%\Threadbear\bin, which goes on
@@ -28,6 +29,13 @@
 // upgrade, so the runner comes back. It starts the task only if it is there and
 // not running, says in one line which it did, and exits 0 unless something
 // really went wrong.
+//
+// --stop is for the same installers, before they replace the files the runner
+// holds open. `schtasks /End` was all it did, and nothing checked that the
+// runner's node.exe went with it. Now it waits for the task to stop, then
+// ends the runner that run\runner.pid names if it is still running from this
+// install's node (see endLeftRunner), says in one line what happened, and
+// exits 1 if a recorded runner still lives. The installers ignore the code.
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -244,6 +252,111 @@ function taskState(d, name) {
   }
 }
 
+// ------------------------------------------------- ending the runner
+
+export const STOP_WAIT_MS = 10_000;
+const STOP_POLL_MS = 250;
+// How long a runner that has just been ended is given to be gone.
+const GONE_WAIT_MS = 5000;
+
+// Waits in place: runInstaller is synchronous.
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// The runner's own functions for looking at a process and ending it (proc.ts,
+// lock.ts, platform.ts), so this does what the runner does about start times
+// and pids rather than a copy of it. Loaded only for --stop and --uninstall,
+// so the other switches, whose output the desktop app reads, never load
+// TypeScript. Node 24 prints a notice on stderr the first time it does, and
+// the desktop app takes stderr for part of the answer, so that notice is
+// dropped (the listeners come back after it has gone out).
+export async function loadRunnerTools() {
+  const listeners = process.listeners('warning');
+  process.removeAllListeners('warning');
+  setImmediate(() => {
+    for (const l of listeners) process.on('warning', l);
+  });
+  const proc = await import('../src/proc.ts');
+  const lock = await import('../src/lock.ts');
+  const platform = await import('../src/platform.ts');
+  return {
+    pidExists: proc.pidExists,
+    processImage: proc.processImage,
+    sameStartTime: proc.sameStartTime,
+    readHolder: lock.readHolder,
+    endTree: proc.killTreeWindows,
+    dataDirFor: platform.dataDirFor,
+  };
+}
+
+// Whether two paths name the same program. Windows does not care about case,
+// and a folder can be reached by more than one name, so both are resolved first.
+function sameProgram(a, b) {
+  const real = (p) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return real(a).toLowerCase() === real(b).toLowerCase();
+}
+
+// After the task has been ended: whether the runner it started is still there,
+// and if it is this install's own, ends it. run/runner.pid says which process
+// the runner is. It is ended only when all of these hold, because a pid is
+// reused as soon as its process goes and this runs as the user:
+//   - the pid is alive and its start time is the one recorded,
+//   - its program is this install's own node (d.node),
+// and a start time or program that cannot be read counts as not matching
+// (unlike lock.ts, which takes an unreadable start time as alive, so a second
+// runner never starts). A runner from another node, a terminal's say, is
+// reported and left. Ended by pid, with the tree under it, the way the runner
+// ends its own CLIs (proc.ts killTreeWindows), never by name.
+// Gives the line to say and whether nothing recorded is left running.
+function endLeftRunner(d) {
+  const t = d.procs;
+  if (!t || !d.home) return { text: `Could not check whether the runner is still running (${d.procsError || "the runner's files could not be loaded"}).`, ok: false };
+  const notRunning = { text: 'The runner is not running.', ok: true };
+  const holder = t.readHolder(path.join(d.home, 'run', 'runner.pid'));
+  if (!holder || !Number.isInteger(holder.pid) || holder.pid <= 0 || !t.pidExists(holder.pid)) return notRunning;
+  const pid = holder.pid;
+  const image = pid === process.pid ? null : t.processImage(pid);
+  if (!t.pidExists(pid)) return notRunning;
+  if (!image || !image.path || !holder.lstart) return { text: `Could not tell what program pid ${pid} is, so it was left running.`, ok: false };
+  if (!t.sameStartTime(holder.lstart, image.lstart)) return { text: `The runner is not running (pid ${pid} belongs to another program now, so it was left alone).`, ok: true };
+  if (!sameProgram(image.path, d.node)) return { text: `The runner (pid ${pid}) is running from ${image.path}, not from this install's Node (${d.node}), so it was left running.`, ok: false };
+  t.endTree(pid);
+  const sleep = d.sleep ?? sleepSync;
+  const deadline = Date.now() + (d.goneWaitMs ?? GONE_WAIT_MS);
+  while (t.pidExists(pid) && Date.now() < deadline) sleep(50);
+  if (t.pidExists(pid)) return { text: `The runner (pid ${pid}) is still running after it was ended.`, ok: false };
+  return { text: `Ended the runner (pid ${pid}), which the task had not stopped.`, ok: true };
+}
+
+// Ends these tasks, waits until Task Scheduler has finished with them, and
+// ends a runner they left behind, which `schtasks /End` was only hoped to
+// take with it. Says in one line what became of the runner, and gives 0 if it
+// is stopped, 1 if a task is still running or a recorded runner still lives.
+function stopRunner(d, names) {
+  for (const name of names) endTask(d, name);
+  const sleep = d.sleep ?? sleepSync;
+  const waitMs = d.stopWaitMs ?? STOP_WAIT_MS;
+  const deadline = Date.now() + waitMs;
+  let running = names.filter((n) => taskState(d, n) === 'Running');
+  while (running.length && Date.now() < deadline) {
+    sleep(d.pollMs ?? STOP_POLL_MS);
+    running = running.filter((n) => taskState(d, n) === 'Running');
+  }
+  let ok = true;
+  for (const n of running) {
+    d.out(`The task "${n}" is still running after ${waitMs / 1000} s.`);
+    ok = false;
+  }
+  const left = endLeftRunner(d);
+  d.out(left.text);
+  return ok && left.ok ? 0 : 1;
+}
+
 // ------------------------------------------------------------------ main
 
 // Does what `argv` asks and gives the exit code. `d` is everything it touches
@@ -310,29 +423,39 @@ export function runInstaller(argv, d) {
     return 0;
   }
 
-  // End the task if it is running, so an installer can replace the files it
-  // holds open. Leaves the task registered, so the next logon starts it again.
+  // End the task if it is running, and the runner if the task left it, so an
+  // installer can replace the files they hold open. Leaves the task registered,
+  // so the next logon starts it again. Says what became of the runner, and
+  // exits 1 if one that was recorded still lives (the callers ignore the code).
   if (args.has('--stop')) {
-    out(`End the task "${d.task}" (and an older one named "${LEGACY_TASK}" if it is yours) if it is running`);
+    out(
+      [
+        `End the task "${d.task}" (and an older one named "${LEGACY_TASK}" if it is yours) if it is running`,
+        `Then wait for it to stop, and end the runner recorded in run\\runner.pid in the data folder if it is still running from this Node (${d.node})`,
+      ].join('\n'),
+    );
     if (dry) return 0;
-    for (const name of ownTasks(d)) endTask(d, name);
-    return 0;
+    return stopRunner(d, ownTasks(d));
   }
 
   if (args.has('--uninstall')) {
-    out([`End and delete the task "${d.task}" (and an older one named "${LEGACY_TASK}" if it is yours)`, `Delete ${tbCmdFile} and take ${d.binDir} off this user's PATH`].join('\n'));
+    out(
+      [
+        `End and delete the task "${d.task}" (and an older one named "${LEGACY_TASK}" if it is yours), and end the runner if the task left it running from this Node (${d.node})`,
+        `Delete ${tbCmdFile} and take ${d.binDir} off this user's PATH`,
+      ].join('\n'),
+    );
     if (dry) return 0;
-    for (const name of ownTasks(d)) {
-      endTask(d, name);
-      d.schtasks('/Delete', '/TN', name, '/F');
-    }
+    const names = ownTasks(d);
+    const stopped = stopRunner(d, names);
+    for (const name of names) d.schtasks('/Delete', '/TN', name, '/F');
     fs.rmSync(tbCmdFile, { force: true });
     const before = readUserPath(d.ps, d.envKey);
     const kept = before.split(';').filter((p) => p && !sameDir(p, d.binDir));
     // Touch the PATH only if our folder is on it.
     if (kept.join(';') !== before.split(';').filter(Boolean).join(';')) writeUserPath(d.ps, d.envKey, kept.join(';'));
     out('Removed. The data folder is untouched.');
-    return 0;
+    return stopped;
   }
 
   const script = path.join(d.root, 'scripts', 'windows-run.mjs');
@@ -375,7 +498,9 @@ function oneLine(e) {
   return text.split(/\r?\n/).filter(Boolean).join(' ');
 }
 
-function realDeps() {
+// `tools` is loadRunnerTools()'s answer, or undefined with `toolsError` saying
+// why it could not be had (or not asked for, for the switches that do not need it).
+export function realDeps(tools, toolsError) {
   const env = process.env;
   const username = os.userInfo().username;
   const run = (file, a) => execFileSync(file, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -383,6 +508,11 @@ function realDeps() {
     task: taskNameFor(username),
     me: `${env.USERDOMAIN || os.hostname()}\\${username}`,
     node: process.execPath,
+    // The runner's data folder, where run/runner.pid says which process it is
+    // (config.ts loadConfig: THREADBEAR_HOME or THREADBEAR_DATA_DIR, else the default).
+    home: tools ? path.resolve(env.THREADBEAR_HOME || env.THREADBEAR_DATA_DIR || tools.dataDirFor()) : undefined,
+    procs: tools,
+    procsError: toolsError,
     root,
     env,
     binDir: path.join(env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Threadbear', 'bin'),
@@ -403,7 +533,18 @@ if (!process.env.THREADBEAR_INSTALL_NO_RUN) {
     process.exitCode = 2;
   } else {
     try {
-      process.exitCode = runInstaller(process.argv.slice(2), realDeps());
+      const argv = process.argv.slice(2);
+      let tools;
+      let toolsError;
+      // Only an actual --stop or --uninstall looks at processes.
+      if ((argv.includes('--stop') || argv.includes('--uninstall')) && !argv.includes('--dry-run')) {
+        try {
+          tools = await loadRunnerTools();
+        } catch (e) {
+          toolsError = oneLine(e);
+        }
+      }
+      process.exitCode = runInstaller(argv, realDeps(tools, toolsError));
     } catch (e) {
       console.error(oneLine(e));
       process.exitCode = 1;

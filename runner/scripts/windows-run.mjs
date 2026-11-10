@@ -3,8 +3,10 @@
 // The logon task (install-windows.mjs) runs this; it runs the runner from
 // the checkout it sits in, and starts it again after it exits, whether it
 // crashed or restarted itself (runner.restart exits 0 and expects a
-// supervisor). Ending the task ends this, the runner and the CLIs, as Task
-// Scheduler runs a task's processes in one job.
+// supervisor). Ending the task should end this, the runner and the CLIs, as
+// Task Scheduler runs a task's processes in one job. That has not been checked
+// against a real task, so the runner also stops by itself when this ends
+// (runnerLink), and `install-windows.mjs --stop` ends one that is still there.
 //
 // A runner that keeps failing is tried again after longer and longer waits (5 s,
 // 10 s, 20 s, up to 5 minutes), and a runner that ran for a minute starts the
@@ -29,6 +31,22 @@ const root = path.resolve(here, '..');
 // agent-sdk.mjs). A stand-in entry, which tests use, has no need of it.
 export function runnerArgs(entry, { preload = true } = {}) {
   return preload ? ['--import', pathToFileURL(path.join(here, 'agent-sdk-preload.mjs')).href, entry] : [entry];
+}
+
+// How the runner is tied to this supervisor. Node puts a child that is not
+// detached in a job object that ends it when its parent goes, however that
+// happens (tried on Node 25 with a stand-in: the runner is gone within a
+// moment of the supervisor being ended), so a runner does not outlive this
+// today. It does not rest on that alone: on Windows the runner gets a pipe for
+// its standard input, of which this keeps the other end, and a variable that
+// says to stop when it closes (release.ts, takeSupervisorPipe), and the system
+// closes the pipe whenever this ends. That stop is the runner's own, and holds
+// if the runner is ever started some other way (detached, say). The Linux
+// service has systemd for this, and a runner started by hand has no
+// supervisor, so neither gets the pipe. The variable is not
+// THREADBEAR_SUPERVISED, which switches on the handover paths.
+export function runnerLink(platform = process.platform) {
+  return platform === 'win32' ? { stdin: 'pipe', env: { THREADBEAR_RUNNER_WATCH_STDIN: '1' } } : { stdin: 'ignore', env: {} };
 }
 
 // What main.ts writes before it exits 1 because another runner holds the lock.
@@ -59,6 +77,9 @@ function run() {
   waits.max = waits.first * (MAX_WAIT_MS / FIRST_WAIT_MS);
 
   const note = (text) => fs.appendFileSync(logFile, `${new Date().toISOString()} ${text}\n`);
+  // Which process this is and which node it runs on, so a node.exe that holds
+  // an install's files can be told from the log which it is.
+  note(`supervisor pid ${process.pid}, node ${process.execPath}`);
 
   // The log is cut to a second file when it gets big, between runs, when
   // nothing has it open.
@@ -74,12 +95,16 @@ function run() {
   function start() {
     rotateLog();
     const startedAt = Date.now();
+    const link = runnerLink();
     const child = spawn(process.execPath, runnerArgs(entry, { preload: !process.env.THREADBEAR_SUPERVISE_ENTRY }), {
       cwd: root,
-      env: { ...process.env, THREADBEAR_FOLLOW_MAIN: '0' },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, THREADBEAR_FOLLOW_MAIN: '0', ...link.env },
+      stdio: [link.stdin, 'pipe', 'pipe'],
       windowsHide: true,
     });
+    // Nothing is ever written to it: it is only held open. A runner that exits first
+    // must not turn the broken pipe into an uncaught error here.
+    child.stdin?.on('error', () => {});
     note(`started the runner, pid ${child.pid}`);
     // The runner's own words go to the log, and are watched for the one that
     // says another runner has the data folder.

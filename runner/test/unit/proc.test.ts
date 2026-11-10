@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { ProcessRegistry, approxStartTime, followUpKillDue, groupAlive, hasExited, groupSpawner, killGroup, ownStartTime, pidExists, processInfo, sameStartTime } from '../../src/proc.ts';
+import { ProcessRegistry, approxStartTime, followUpKillDue, groupAlive, hasExited, groupSpawner, killGroup, ownStartTime, pidExists, processImage, processInfo, sameStartTime } from '../../src/proc.ts';
 import { acquireLock } from '../../src/lock.ts';
 import { nullLogger } from '../../src/log.ts';
 import { tmpDir } from '../helpers/fakes.ts';
@@ -185,6 +185,25 @@ test('a start time worked out in-process is close to the one the system reports,
   assert.equal(sameStartTime('Mon Jan  1 00:00:00 2001', real), false);
   assert.equal(sameStartTime('', real), false);
   assert.equal(sameStartTime('~12abc', real), false);
+});
+
+test('processImage gives the start time and full program path of a process, with letters outside ASCII intact, and nothing for one that is gone', READS_START_TIMES, async () => {
+  // A copy of node in a folder with letters outside ASCII, started and ended by this test.
+  const exe = path.join(tmpDir(), 'Zoë José', 'node', 'node.exe');
+  fs.mkdirSync(path.dirname(exe), { recursive: true });
+  fs.copyFileSync(process.execPath, exe);
+  const child = spawn(exe, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
+  try {
+    const image = processImage(child.pid!);
+    assert.ok(image, 'PowerShell answered');
+    assert.equal(image.path, exe);
+    assert.equal(image.lstart, processInfo(child.pid!)!.lstart, 'the start time is the one the runner records for itself');
+    assert.equal(processImage(process.pid)?.path, process.execPath);
+  } finally {
+    child.kill();
+  }
+  await new Promise((r) => child.once('exit', r));
+  assert.equal(processImage(child.pid!), null, 'a process that has exited has no image');
 });
 
 test('pidExists says whether a process is there without touching it', () => {
