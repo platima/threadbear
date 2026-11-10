@@ -56,10 +56,16 @@ export function App({ store }: { store: AppStore }) {
   // for as long as the connection is down, through the "connecting" of each retry, and not torn down
   // and rebuilt on every one.
   const [sawClosed, setSawClosed] = useState(false);
+  // Which click's answer may still be shown. A connection that opens while the shell is still
+  // answering makes that answer stale (it would bring back the note, the error or the choice the
+  // open just cleared, and the next disconnect would show them), so opening moves this on and each
+  // click only shows its answer if it is still the current one.
+  const attempt = useRef(0);
   useEffect(() => {
     if (snap.conn === 'closed') setSawClosed(true);
     if (snap.conn === 'open') {
       // Connected, however it came about: nothing from the last click is still true.
+      attempt.current += 1;
       setSawClosed(false);
       setChoosing(false);
       setStartProblem(undefined);
@@ -67,19 +73,22 @@ export function App({ store }: { store: AppStore }) {
     }
   }, [snap.conn]);
   const start = async (way?: RunnerWay) => {
+    const mine = ++attempt.current;
     setStarting(true);
     setChoosing(false);
     setStartProblem(undefined);
     setStartNote(undefined);
     if (way) {
       const answer = await startRunner(way);
+      setStarting(false);
+      if (mine !== attempt.current) return;
       setStartProblem(answer.problem);
       setStartNote(answer.note);
-      setStarting(false);
       return;
     }
     const clicked = await startClick();
     setStarting(false);
+    if (mine !== attempt.current) return;
     if (clicked.kind === 'choose') setChoosing(true);
     else {
       setStartProblem(clicked.problem);
