@@ -1,6 +1,6 @@
 // Assembles the folder the Linux package is made from, and the .tar.gz of it:
 //
-//   threadbear-desktop         the desktop shell (desktop/src-tauri)
+//   threadbear-desktop         the desktop shell (desktop-tauri/src-tauri)
 //   node/bin/node              the pinned Node (installer/node.json), so nothing
 //                              has to be on the PATH
 //   runner/                    the runner's source and its production packages
@@ -15,10 +15,10 @@
 // names this machine's folders. This is installer/stage.ps1 for Linux, in
 // Node so that it runs where the shell was built.
 //
-//   node installer/linux/stage.mjs --arch x64 --shell desktop/src-tauri/target/release/threadbear-desktop
+//   node installer/linux/stage.mjs --arch x64 --shell desktop-tauri/src-tauri/target/release/threadbear-desktop
 //
 // Options: --arch x64|arm64 (default: this machine's), --version (default:
-// desktop/package.json's), --out (default: build/linux-<arch>, and the
+// desktop-tauri/package.json's), --out (default: build/linux-<arch>, and the
 // .tar.gz goes beside it), --no-tar.
 
 import { execFileSync } from 'node:child_process';
@@ -41,12 +41,12 @@ const ARCHES = { x64: { elf: 0x3e, triple: 'x86_64-unknown-linux-gnu', node: 'x6
 const arch = arg('arch', os.arch() === 'arm64' ? 'arm64' : 'x64');
 if (!ARCHES[arch]) throw new Error(`--arch is x64 or arm64, not ${arch}`);
 const shell = arg('shell');
-if (!shell || !fs.existsSync(shell)) throw new Error(`The shell was not found at ${shell}. Build it first (npx tauri build --no-bundle in desktop/)`);
+if (!shell || !fs.existsSync(shell)) throw new Error(`The shell was not found at ${shell}. Build it first (npx tauri build --no-bundle in desktop-tauri/)`);
 
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: ['ignore', 'inherit', 'inherit'], ...opts });
 const out = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8', ...opts }).trim();
 
-const version = arg('version') || out(process.execPath, [path.join(repo, 'desktop', 'scripts', 'version.mjs'), '--print']);
+const version = arg('version') || out(process.execPath, [path.join(repo, 'desktop-tauri', 'scripts', 'version.mjs'), '--print']);
 const base = path.resolve(arg('out', path.join(repo, 'build', `linux-${arch}`)));
 const name = `threadbear-v${version}-linux-${arch}`;
 const stage = path.join(base, name);
@@ -187,7 +187,7 @@ const nodeModules = path.join(runner, 'node_modules');
 // --- Desktop: the bridge, the built UI, and the one package the bridge needs
 {
   const desk = path.join(stage, 'desktop');
-  const bridgeSrc = path.join(repo, 'desktop', 'bridge');
+  const bridgeSrc = path.join(repo, 'desktop-tauri', 'bridge');
   const bridgeDst = path.join(desk, 'bridge');
   fs.mkdirSync(bridgeDst, { recursive: true });
   // bridge.ts and the files next to it that it imports (never the tests)
@@ -201,23 +201,23 @@ const nodeModules = path.join(runner, 'node_modules');
     const text = fs.readFileSync(path.join(bridgeSrc, f), 'utf8');
     for (const m of text.matchAll(/^\s*(?:import|export)\b[^;]*?from\s+['"]\.\/([\w.-]+\.ts)['"]/gm)) queue.push(m[1]);
   }
-  fs.copyFileSync(path.join(repo, 'desktop', 'package.json'), path.join(desk, 'package.json'));
-  const dist = path.join(repo, 'desktop', 'dist');
-  if (!fs.existsSync(path.join(dist, 'index.html'))) throw new Error('desktop/dist is not built. Run npm run build in desktop/');
+  fs.copyFileSync(path.join(repo, 'desktop-tauri', 'package.json'), path.join(desk, 'package.json'));
+  const dist = path.join(repo, 'desktop-tauri', 'dist');
+  if (!fs.existsSync(path.join(dist, 'index.html'))) throw new Error('desktop-tauri/dist is not built. Run npm run build in desktop-tauri/');
   copy(dist, path.join(desk, 'dist'));
-  const ws = path.join(repo, 'desktop', 'node_modules', 'ws');
-  if (!fs.existsSync(ws)) throw new Error('desktop/node_modules/ws is missing. Run npm ci in desktop/');
+  const ws = path.join(repo, 'desktop-tauri', 'node_modules', 'ws');
+  if (!fs.existsSync(ws)) throw new Error('desktop-tauri/node_modules/ws is missing. Run npm ci in desktop-tauri/');
   copy(ws, path.join(desk, 'node_modules', 'ws'));
   // The Terminal's pseudo-terminal (bridge/terminal.ts): @lydell/node-pty and the package
-  // for this platform with its prebuilt addon. desktop/node_modules has the build machine's
+  // for this platform with its prebuilt addon. desktop-tauri/node_modules has the build machine's
   // platform only, so npm installs the target's (--os/--cpu) from the lockfile, checked
   // against its hashes, in a folder of its own. Nothing is compiled and no script runs.
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-pty-'));
   try {
-    for (const f of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(repo, 'desktop', f), path.join(work, f));
+    for (const f of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(repo, 'desktop-tauri', f), path.join(work, f));
     run('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--os=linux', `--cpu=${ARCHES[arch].node}`], { cwd: work });
     const prebuilt = path.join(work, 'node_modules', '@lydell', `node-pty-linux-${ARCHES[arch].node}`, 'prebuilds', `linux-${ARCHES[arch].node}`, 'pty.node');
-    if (!fs.existsSync(prebuilt)) throw new Error(`The terminal's @lydell/node-pty-linux-${ARCHES[arch].node} package did not install, so the Terminal would not work. Is it in desktop/package-lock.json?`);
+    if (!fs.existsSync(prebuilt)) throw new Error(`The terminal's @lydell/node-pty-linux-${ARCHES[arch].node} package did not install, so the Terminal would not work. Is it in desktop-tauri/package-lock.json?`);
     copy(path.join(work, 'node_modules', '@lydell'), path.join(desk, 'node_modules', '@lydell'));
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
@@ -231,7 +231,7 @@ for (const f of ['LICENSE', 'README.md', 'INSTALL.md']) fs.copyFileSync(path.joi
 fs.copyFileSync(path.join(here, 'readme-linux.txt'), path.join(stage, 'README-LINUX.txt'));
 fs.copyFileSync(path.join(here, 'install.sh'), path.join(stage, 'install.sh'));
 fs.chmodSync(path.join(stage, 'install.sh'), 0o755);
-fs.copyFileSync(path.join(repo, 'desktop', 'src-tauri', 'icons', '128x128@2x.png'), path.join(stage, 'threadbear.png'));
+fs.copyFileSync(path.join(repo, 'desktop-tauri', 'src-tauri', 'icons', '128x128@2x.png'), path.join(stage, 'threadbear.png'));
 
 // --- Third-party notices: the licence of everything that ships
 {
@@ -239,8 +239,8 @@ fs.copyFileSync(path.join(repo, 'desktop', 'src-tauri', 'icons', '128x128@2x.png
   run(process.execPath, [
     path.join(repo, 'installer', 'make-notices.mjs'),
     '--stage', stage,
-    '--desktop', path.join(repo, 'desktop'),
-    '--cargo-manifest', path.join(repo, 'desktop', 'src-tauri', 'Cargo.toml'),
+    '--desktop', path.join(repo, 'desktop-tauri'),
+    '--cargo-manifest', path.join(repo, 'desktop-tauri', 'src-tauri', 'Cargo.toml'),
     '--triple', ARCHES[arch].triple,
     '--node-version', pin.version,
     '--out', path.join(stage, 'THIRD-PARTY-NOTICES.txt'),

@@ -589,11 +589,14 @@ enum Automation {
             // or this accessibility label for an icon-only one. `tip` instead
             // presses a SwiftUI control with that tooltip, through the window
             // as a real click would go, without moving the pointer.
-            if let tip = c["tip"] as? String {
+            if let tip = c["tip"] as? String ?? c["tipPrefix"] as? String {
                 // {"settings": true}: in the Settings window (open it with `settings`).
                 // A sheet over the window (the Move sheet) takes the click first.
+                // `tipPrefix` is for a tip that ends with a keyboard shortcut
+                // ("Archive (⌘E)"), which differs from one Mac to another.
+                let prefix = c["tipPrefix"] != nil
                 guard let window = c["settings"] as? Bool == true ? SettingsWindow.current : (mainWindow?.attachedSheet ?? mainWindow), let content = window.contentView,
-                      let anchor = all(TipAnchorView.self, in: content).last(where: { $0.text == tip && !$0.isHiddenOrHasHiddenAncestor })
+                      let anchor = all(TipAnchorView.self, in: content).last(where: { (prefix ? $0.text.hasPrefix(tip) : $0.text == tip) && !$0.isHiddenOrHasHiddenAncestor })
                 else { return "error no control with the tip \(tip)" }
                 let center = anchor.convert(NSPoint(x: anchor.bounds.midX, y: anchor.bounds.midY), to: nil)
                 for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
@@ -654,8 +657,8 @@ enum Automation {
             app.archive(id)
             return "ok \(id)"
         case "move":
-            // Opens the Move sheet for a thread and a runner (by name), as
-            // Move to ▸ that runner in its menu does.
+            // Moves a thread to a runner (by name), or opens the Move sheet
+            // if there's something to say first, as Move to ▸ that runner does.
             let target = target(c, app)
             guard let id = target.id else { return target.error }
             let want = (c["runner"] as? String ?? "").lowercased()
@@ -1024,6 +1027,11 @@ enum Automation {
             return "ok"
         case "close-schedule":
             app.scheduleEditor = nil
+            return "ok"
+        case "archive-more":
+            // The Archived section's Show more row, which is often off the
+            // bottom of the list (a lazy stack doesn't draw it till then).
+            app.archiveLimit += ArchiveRows.step
             return "ok"
         case "sort":
             // The Inbox heading's sort menu.

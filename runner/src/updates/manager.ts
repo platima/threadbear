@@ -16,6 +16,8 @@ import type { Logger } from '../log.ts';
 import { paths } from '../config.ts';
 import type { CliPolicy, CliStatus, Provider } from '../protocol.ts';
 import type { Provider as AnyProvider } from '../protocol.ts';
+import { PROVIDERS } from '../protocol.ts';
+import { cliName } from '../providers.ts';
 
 // What this updates. An ACP agent's CLI isn't touched by Threadbear.
 const MANAGED: readonly AnyProvider[] = ['claude', 'codex'];
@@ -59,9 +61,13 @@ export type CliUpdatesDeps = {
   env?: NodeJS.ProcessEnv;
   execPath?: string; // the runner's Node: npm and the fallback codex sit next to it
   random?: () => number;
+  // The ACP agents, with the experiment's switch.
+  acp?: { on(): boolean; providers: Provider[]; binary(p: Provider): string | undefined; updateArgs(p: Provider): string[] };
 };
 
 type UpdateOptions = { version?: string; force?: boolean; bootstrap?: boolean };
+
+const ACP_UPDATE_TIMEOUT_MS = 5 * 60_000;
 
 export class CliUpdates {
   private d: CliUpdatesDeps;
@@ -104,7 +110,7 @@ export class CliUpdates {
     });
     // A previous update that was running when the runner stopped didn't
     // finish; say so rather than show it running forever.
-    for (const p of MANAGED) {
+    for (const p of PROVIDERS) {
       const u = this.st[p]?.update;
       if (u && (u.state === 'running' || u.state === 'waiting')) this.st[p]!.update = { ...u, state: 'failed', message: 'The runner stopped before this finished.' };
     }
@@ -114,6 +120,7 @@ export class CliUpdates {
     this.stopped = false;
     if (this.managedCodex() && this.copies.cleanPartials().length) this.d.log.info('cli updates: removed an unfinished Codex install');
     this.track('claude', this.refreshInstalled());
+    for (const p of this.acpProviders()) this.track(p, this.refreshAcp(p));
     this.schedule('check', FIRST_CHECK_MS);
   }
 
@@ -140,21 +147,30 @@ export class CliUpdates {
   }
 
   list(): CliStatus[] {
-    return MANAGED.map((p) => this.status(p));
+    return [...MANAGED.map((p) => this.status(p)), ...this.acpProviders().map((p) => this.acpStatus(p))];
   }
 
   check(p?: Provider): CliStatus[] {
+    if (p && !MANAGED.includes(p)) {
+      if (this.acpProviders().includes(p)) this.track(p, this.refreshAcp(p));
+      return this.list();
+    }
     for (const prov of p ? [p] : MANAGED) this.track(prov, this.runCheck(prov, true));
+    if (!p) for (const prov of this.acpProviders()) this.track(prov, this.refreshAcp(prov));
     return this.list();
   }
 
   update(p: Provider, o: { version?: string; force?: boolean } = {}): CliStatus[] {
-    if (!MANAGED.includes(p)) return this.list();
+    if (!MANAGED.includes(p)) {
+      if (this.acpProviders().includes(p) && !this.configOff(p)) this.track(p, this.updateAcp(p));
+      return this.list();
+    }
     this.startUpdate(p, o);
     return this.list();
   }
 
   setPolicy(p: Provider, policy: CliPolicy): CliStatus[] {
+    if (!MANAGED.includes(p)) return this.list();
     this.ps(p).policy = policy;
     this.save();
     this.changed();
@@ -197,6 +213,59 @@ export class CliUpdates {
   }
 
   // ---- status
+
+  // ---- The ACP agents (adapters/acp/): only what can be known without a
+  // version feed. Never updated without being asked.
+
+  private acpProviders(): Provider[] {
+    const acp = this.d.acp;
+    return acp?.on() ? acp.providers.filter((p) => acp.binary(p)) : [];
+  }
+
+  private acpStatus(p: Provider): CliStatus {
+    const installedVersion = this.installed[p];
+    const s = this.st[p] ?? {};
+    return {
+      provider: p,
+      path: this.d.acp!.binary(p) ?? '',
+      managedBy: 'cli',
+      status: 'unknown',
+      policy: 'off',
+      canUpdateNow: true,
+      inUse: this.d.hooks.versionsInUse(p),
+      ...(installedVersion ? { installedVersion } : {}),
+      ...(s.update ? { update: { ...s.update } } : {}),
+    };
+  }
+
+  private async refreshAcp(p: Provider): Promise<void> {
+    const binary = this.d.acp?.binary(p);
+    if (!binary) return;
+    const r = await this.exec(binary, ['--version'], { timeoutMs: LOOKUP_TIMEOUT_MS });
+    const version = r.code === 0 ? /^\S{1,60}/.exec(r.stdout.trim())?.[0] : undefined;
+    if (version && this.installed[p] !== version) {
+      this.installed[p] = version;
+      this.changed();
+    }
+  }
+
+  private async updateAcp(p: Provider): Promise<void> {
+    const binary = this.d.acp?.binary(p);
+    if (!binary || this.ps(p).update?.state === 'running') return;
+    this.setUpdate(p, { state: 'running', message: `Updating ${cliName(p)}` });
+    await this.refreshAcp(p);
+    const before = this.installed[p];
+    const r = await this.exec(binary, this.d.acp!.updateArgs(p), { timeoutMs: ACP_UPDATE_TIMEOUT_MS });
+    await this.refreshAcp(p);
+    const now = this.installed[p];
+    if (r.code !== 0) {
+      this.history.append({ at: this.iso(), provider: p, action: 'update', ok: false, message: 'failed', output: r.stderr || r.stdout });
+      return this.finish(p, { state: 'failed', message: (r.stderr || r.stdout).trim().split('\n').at(-1)?.slice(0, 200) || `${cliName(p)} didn't update.` });
+    }
+    this.history.append({ at: this.iso(), provider: p, action: 'update', ok: true, ...(now ? { version: now } : {}), message: `from ${before ?? 'unknown'}` });
+    this.finish(p, { state: now && now !== before ? 'succeeded' : 'unchanged', ...(now ? { targetVersion: now } : {}) });
+    if (now && now !== before) this.d.hooks.releaseIdle(p, now);
+  }
 
   private status(p: Provider): CliStatus {
     const s = this.st[p] ?? {};
@@ -253,7 +322,7 @@ export class CliUpdates {
     const bin = this.codexBinary();
     const codex = bin === this.copies.currentLink ? this.copies.currentVersion() : codexPackageVersion(bin);
     const changed = claude !== this.installed.claude || codex !== this.installed.codex;
-    this.installed = { claude, codex };
+    this.installed = { ...this.installed, claude, codex };
     if (claude) this.lastClaude ??= claude;
     if (changed) this.changed();
   }

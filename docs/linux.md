@@ -6,7 +6,7 @@ Two things, and they are separate:
   service, installed by `runner/scripts/install-runner.sh`, built from a git
   checkout and following `main`. That is the original, for a server.
 - **The desktop app on Linux** (this page): the window for your threads that the
-  Windows app is, built from the same code (`desktop/`), packaged with its own
+  Windows app is, built from the same code (`desktop-tauri/`), packaged with its own
   Node and the runner as a `.tar.gz`. It runs the runner from the files it was
   installed with, as the Windows one does, and sets it up as a systemd user
   service of its own. Use one of the two runner installs on a machine, not both.

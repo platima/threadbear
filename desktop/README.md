@@ -1,83 +1,94 @@
-# Threadbear desktop
+# Threadbear for Mac, Windows and Linux (GPUI)
 
-The Windows and Linux app: TypeScript and React in a web view,
-talking to the runner over the protocol in `docs/protocol.md`. The plan and
-the reasons are in `docs/windows-port-plan.md`.
+One native desktop app, drawn with [GPUI](https://gpui.rs) (Zed's UI
+framework) and [gpui-kit](https://gpui-kit.com)'s components. It's growing
+to replace the Swift Mac app in `app/`; `docs/gpui-port.md` has the plan and
+what's left. The iPhone app stays Swift.
 
-## How it fits together
+Like the Mac app, it holds no agent state of its own. It talks to a runner
+(`runner/`) over the protocol in [`../docs/protocol.md`](../docs/protocol.md).
 
-- `src/core/`: `rpc.ts` (JSON-RPC client with reconnects), `store.ts` (the
-  thread list, the open thread, actions), `model.ts` (a thread's events as
-  transcript rows), `types.ts` (the runner's own `protocol.ts`, shared).
-- `src/ui/`: the window. `App.tsx` is the rail, sidebar and main area;
-  `Sidebar.tsx`, `ThreadView.tsx`, `Transcript.tsx`, `Composer.tsx`, `Cards.tsx`.
-- It reuses the website's plain view logic: `web/src/sections.ts` (which
-  thread goes under which heading), `turns.ts` (a finished turn folds to
-  "Worked for 4m 12s") and `format.ts`. Change those with the Mac and iPhone
-  copies, not here.
-- `bridge/bridge.ts`: a loopback server that serves the built UI and passes
-  its WebSocket on to the runner, doing the token handshake itself so the page
-  never holds the token. It also sets the page's content security policy
-  (nothing is loaded from outside the bridge except the update check's call to
-  api.github.com, so a picture in an agent's Markdown is never fetched; the
-  page draws its description instead). The settings it reads from the
-  environment are listed at the top of the file.
-- `src-tauri/`: the Tauri shell. It starts the bridge, opens the window on it,
-  keeps a tray icon, shows toasts, picks folders and opens links in the browser
-  (what the page may ask of it is in `capabilities/default.json`). Start-up
-  problems (no Node, a bridge that does not come up) are shown in a window
-  rather than ending silently.
+So far it signs in to the runner, shows the inbox, opens a thread (live, as
+it streams), answers a card's asks and approvals, sends messages and stops a
+turn.
 
-## Pages and panes
+## How it's put together
 
-Add a file and it appears; nothing shared needs editing.
+- **`core/`, what the app knows with no window**: the inbox rules, and
+  `reducer/`, a port of how the Swift app turns events into rows, checked
+  against golden files both languages test (`core/tests/golden`).
+- **`dock/`, BearDock for GPUI**: splits, tabs, panel dragging and torn-out
+  windows. Its layout tree (`dock/layout`) has no GPUI in it and reads what the
+  Swift `dock/` saved. Not in the app yet; see `dock/README.md`.
+- **`client/`, the runner connection** (`runner.rs`): the challenge sign-in
+  (`auth.rs`, the same HMAC as `runner/src/rpc-auth.ts`), hello, requests and
+  replies, and reconnecting when the runner restarts. `tests/mock_runner.rs`
+  signs in to the mock runner.
+- **`gpui/`, the app.** GPUI has no tokio, so the connection runs on its own
+  runtime and its events cross on a channel (`main.rs`). With the `automation`
+  feature (never in a release) `automation.rs` takes the same scripted commands
+  as the Swift app, which is how `features/` drives it.
+- **Which runner.** The one in `THREADBEAR_HOME` (default `~/Library/Application
+  Support/Threadbear`, which the runner uses on Linux too), on the port from
+  its `runner.json` (default 8797), as `tb` finds it.
 
-- `src/ui/pages/<Name>.tsx` default-exports a `PageDef` (`registry.ts`): an
-  icon in the rail, an optional list column (`Sidebar`) and the page (`Main`).
-  The route is `#/<id>`.
-- `src/ui/panes/<Name>.tsx` default-exports a `PaneDef`: a tab in an open
-  thread's side pane. `available(thread)` hides it for a thread with nothing
-  for it; `badge(thread)` puts a number on it.
+## Run it
 
-Talk to the runner with `store.rpc.request(method, params)` and
-`store.rpc.on(notification, handler)`. Keep a page's own state, hooks and CSS in
-its own file (a `<Name>.css` imported by it). The types for every request and
-event are in `runner/src/protocol.ts`.
+You need Rust (`rustup`) and Node 24. On a Mac you also need Xcode's command
+line tools; on Windows, the C++ build tools. On Linux:
 
-## Seeing it
-
-```
-node scripts/dev-stack.mjs --id a      # mock runner + build + bridge; prints the address
+```bash
+sudo apt install libasound2-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libvulkan-dev
 ```
 
-then drive it with `scripts/browser.mjs` (headless Edge, a temp profile):
-see its header. `window.__store` is the same store the page uses. The mock
-runner (`app/Tools/mock-runner`) serves fixture threads, projects and
-schedules; it won't have every method, so a page must show a plain error and
-carry on when the runner says `-32601`.
+On a flaky connection, crates.io downloads need
+`CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10`.
 
-Type checks: `npx tsc --noEmit -p .`
+```bash
+npm ci --prefix ../app/Tools/mock-runner   # for the tests and the mock
+cargo run -p threadbear-gpui
+```
 
-Tests: `npm test` runs the logic tests in `src/` and the bridge tests in
-`bridge/`, which start the real bridge on free ports with a throwaway data
-folder and a stand-in runner. Nothing touches the real runner or its folder.
+To run it against the mock runner instead of your real one, start
+`node ../app/Tools/mock-runner/server.mjs --data-dir /tmp/tb-mock` and run
+the app with `THREADBEAR_HOME=/tmp/tb-mock`.
 
-## The window's address
+## Tests
 
-The window keeps its saved state (theme, sidebar width, the update check's off
-switch, the tour being done) under the address it is served from, so the shell
-gives the bridge the same port every launch: one in 50000 to 59999 taken from the
-user name, or `THREADBEAR_DESKTOP_PORT` (`0` for any free port, which also means
-nothing is kept between runs and the daily check never runs). If that port is busy the bridge uses another for
-that run, the saved state is not there for it, and the daily update check waits
-for the next start instead of overruling a choice it cannot see.
+```bash
+cargo test    # the connection (with the mock) and the app's rules
+```
 
-To use the vite dev server (`npm run dev`, port 5183) with a bridge started by
-hand, start the bridge with `THREADBEAR_BRIDGE_DEV=1`; otherwise that origin is
-not trusted.
+`../features/README.md` has the behaviour specs, which run the real app on the
+mock runner. Run Rust builds and suites elsewhere (`scripts/remote.sh`):
 
-## Style
+```bash
+scripts/remote.sh cloud -- bash -c 'cd desktop && cargo test -p threadbear-core'
+```
 
-Plain words in the UI, no em dashes, no small labels above headings. Every
-control has a `title` (tooltip). Colours come from the variables at the top of
-`src/ui/styles.css`; it follows the system's dark or light setting.
+`scripts/spec.sh` is the one-command version for use through `remote.sh`: it
+builds the app (Swift or GPUI), keeps its own copy of the GPUI binary so another
+checkout's build can't swap it mid-run (the cargo target folder is shared), and
+runs specs by tag or takes a picture (`--shot "<thread title>" out.png`).
+
+`desktop/test/auth-vector-*.txt` are fixed sign-in proofs. The Rust tests
+check them, and so does `runner/test/unit/desktop-auth-vector.test.ts` with
+the runner's own code, so if the runner's auth changes both sides fail until
+they agree again.
+
+`.github/workflows/desktop.yml` runs it all on Linux, Mac and Windows and
+uploads each platform's binary as the run's artifacts.
+
+## Seeing it on a server
+
+`scripts/shot.sh OUT_DIR [--home DIR] [--click X,Y | --type TEXT | --key KEY]...`
+runs the debug build (`cargo build -p threadbear-gpui`) on a virtual display
+(Xvfb) with Mesa's software Vulkan, against the mock (or the runner in
+`--home`), and saves screenshots: `0.png` before any step, then one after
+each.
+
+## Known gaps
+
+- On Windows, path handling (`folderName` splits on `/`) and the runner's
+  data dir are still Mac-shaped. The runner itself doesn't run on Windows
+  yet.

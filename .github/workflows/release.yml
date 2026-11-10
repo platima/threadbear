@@ -4,7 +4,7 @@ name: Release
 # the setup exe, MSI and portable zip for x64 and arm64, the Linux tarball and
 # .deb for each, a SHA-256 for each, and a CHECKSUMS.txt. Semantic
 # versioning: the tag is v<version>, and <version> is
-# the one in desktop/package.json (installer/release.sh checks that before it
+# the one in desktop-tauri/package.json (installer/release.sh checks that before it
 # tags, and this workflow checks it again, for tags pushed by hand). A tag with
 # a hyphen (v0.2.0-rc.1) is a pre-release: GitHub marks it so, and releases/latest
 # (what the app's update check reads) never points at it.
@@ -43,7 +43,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to rehearse, as its tag would be spelled (e.g. v0.1.0); must match desktop/package.json"
+        description: "Version to rehearse, as its tag would be spelled (e.g. v0.1.0); must match desktop-tauri/package.json"
         type: string
         required: true
       sign:
@@ -105,11 +105,11 @@ jobs:
         *) echo "::error::The version must look like v0.1.0 or v0.2.0-rc.1, not '$version'"; exit 1 ;;
         esac
         # Strict semantic versioning, from the one pattern the scripts share
-        node desktop/scripts/version.mjs --valid "${version#v}"
-        node desktop/scripts/version.mjs --check
-        built=$(node desktop/scripts/version.mjs --print)
+        node desktop-tauri/scripts/version.mjs --valid "${version#v}"
+        node desktop-tauri/scripts/version.mjs --check
+        built=$(node desktop-tauri/scripts/version.mjs --print)
         if [ "v$built" != "$version" ]; then
-          echo "::error::$version was asked for, but desktop/package.json says $built. Run: node desktop/scripts/version.mjs --set ${version#v}"
+          echo "::error::$version was asked for, but desktop-tauri/package.json says $built. Run: node desktop-tauri/scripts/version.mjs --set ${version#v}"
           exit 1
         fi
         # The changelog entry with its Highlights, dated for a final release.

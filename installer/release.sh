@@ -42,9 +42,9 @@ VERSION=$1
 
 # Strict semantic version, with an optional pre-release (v0.2.0-rc.1). Build
 # metadata (+build) is left out: it is not allowed in a Windows Installer
-# version. desktop/scripts/version.mjs holds the one pattern, so this, the
+# version. desktop-tauri/scripts/version.mjs holds the one pattern, so this, the
 # release workflow and the packaging script cannot disagree about it.
-if [[ $VERSION != v* ]] || ! node desktop/scripts/version.mjs --valid "${VERSION#v}"; then
+if [[ $VERSION != v* ]] || ! node desktop-tauri/scripts/version.mjs --valid "${VERSION#v}"; then
     print_error "Invalid semantic version: $VERSION"
     echo "Expected format: v1.2.3 or v1.2.3-rc.1"
     exit 1
@@ -78,13 +78,13 @@ if [ -n "$(git ls-remote --tags origin "refs/tags/$VERSION")" ]; then
 fi
 
 print_status "Checking the version numbers..."
-node desktop/scripts/version.mjs --check || {
-    print_error "The version files disagree. Run: node desktop/scripts/version.mjs --set ${VERSION#v}"
+node desktop-tauri/scripts/version.mjs --check || {
+    print_error "The version files disagree. Run: node desktop-tauri/scripts/version.mjs --set ${VERSION#v}"
     exit 1
 }
-BUILT=$(node desktop/scripts/version.mjs --print)
+BUILT=$(node desktop-tauri/scripts/version.mjs --print)
 if [ "v$BUILT" != "$VERSION" ]; then
-    print_error "$VERSION was asked for, but the app is $BUILT. Run: node desktop/scripts/version.mjs --set ${VERSION#v}"
+    print_error "$VERSION was asked for, but the app is $BUILT. Run: node desktop-tauri/scripts/version.mjs --set ${VERSION#v}"
     exit 1
 fi
 
@@ -92,11 +92,11 @@ fi
 # checked against its version's entry (## [0.2.0]), which may still say
 # Unreleased; a final release's heading must carry its date. The release
 # workflow runs the same check, for tags that skip this script.
-print_status "Checking desktop/CHANGELOG.md has highlights for $VERSION..."
+print_status "Checking desktop-tauri/CHANGELOG.md has highlights for $VERSION..."
 BASE=${VERSION#v}
 BASE=${BASE%%-*}
 sh installer/release-notes.sh --check "$VERSION" || {
-    print_error "Fix desktop/CHANGELOG.md: a '## [$BASE]' entry with a '### ✨ Highlights' list, and a date in its heading for a final release"
+    print_error "Fix desktop-tauri/CHANGELOG.md: a '## [$BASE]' entry with a '### ✨ Highlights' list, and a date in its heading for a final release"
     exit 1
 }
 

@@ -30,7 +30,8 @@ export class AcpMcpServer {
   private deps: AcpMcpDeps;
   private server?: http.Server;
   private port = 0;
-  private open = new Set<AbortController>();
+  // Calls waiting for an answer, by JSON-RPC id, for notifications/cancelled.
+  private open = new Map<number | string, AbortController>();
 
   constructor(tools: ToolDefinition[], deps: AcpMcpDeps) {
     for (const t of tools) this.byName.set(t.name, t);
@@ -54,7 +55,7 @@ export class AcpMcpServer {
 
   // Calls still waiting on a card expire with it (the session is ending).
   close(): void {
-    for (const a of this.open) a.abort();
+    for (const a of this.open.values()) a.abort();
     this.open.clear();
     this.server?.close();
     this.server?.closeAllConnections();
@@ -91,12 +92,17 @@ export class AcpMcpServer {
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return this.reply(res, null, undefined, { code: -32600, message: 'Invalid request' });
     // A notification (initialized, cancelled) has no answer.
     if (msg.id === undefined || msg.id === null) {
+      if (msg.method === 'notifications/cancelled') {
+        const requestId = (msg.params as { requestId?: unknown } | undefined)?.requestId;
+        if (typeof requestId === 'number' || typeof requestId === 'string') this.open.get(requestId)?.abort();
+      }
       res.writeHead(202);
       res.end();
       return;
     }
     const ac = new AbortController();
-    this.open.add(ac);
+    const callId = msg.id;
+    this.open.set(callId, ac);
     // The agent gave up on the call (its own timeout, or it was stopped):
     // an unanswered card goes with it, so a late Allow runs nothing.
     res.once('close', () => {
@@ -108,7 +114,7 @@ export class AcpMcpServer {
     } catch (e) {
       this.reply(res, msg.id, undefined, { code: (e as { code?: number })?.code ?? -32603, message: (e as Error)?.message ?? 'Internal error' });
     } finally {
-      this.open.delete(ac);
+      if (this.open.get(callId) === ac) this.open.delete(callId);
     }
   }
 

@@ -391,6 +391,22 @@ rollback covers a release that doesn't come up.
   it builds records the checkout it was following, not its own clone. A
   release that names the clone (built before 27 Oct's fix) can't see main
   and says so in `tb status`; one deploy by hand from the checkout fixes it.
+- A second machine follows GitHub rather than a local main. With
+  `followOrigin: true` in its `runner.json` (Mike's bruce, Pixel and
+  Hetzner; off by default, since whatever `origin` has gets built and run
+  unsigned) each check runs `git fetch origin main`, builds
+  `origin/main`, and moves the checkout's `main` along when that's a
+  fast-forward (`runner/src/follow-origin.ts`). It's read at each check, so
+  setting it needs no restart. A commit made only on that machine, or
+  uncommitted changes git won't overwrite, are left alone and said; the
+  runner keeps updating from GitHub either way. `tb land` refuses in the
+  followed repo, and a fix-update thread hands its fix to the main Mac
+  (Mike, 9 Nov: hand-made pull jobs on bruce and the Pixel failed quietly
+  for days behind one commit a fix-update thread had made on their main).
+  `followProblem` in `runner.status`'s `update` says what's wrong: a local
+  main that can't follow, GitHub out of reach for over an hour, or something
+  that runs on GitHub's main and not here for over six hours. It goes up
+  in the heartbeat, and the main Mac's `tb status` and Updates panel list it.
 - `followMain: false` in `runner.json`, or `THREADBEAR_FOLLOW_MAIN=0`,
   switches it off. `runner.status` reports it as `update`; `tb status`
   shows the line.

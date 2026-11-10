@@ -4,7 +4,7 @@
 // thread and everything under it to the new runner.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend, outcome } from '../helpers/convex-memory.ts';
+import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
 const BRUCE_KEY = 'tbr_bruce';
@@ -69,7 +69,7 @@ async function setup() {
   return { ...b, rehome, uploadChunk, owner: as(OWNER), bruce: as(BRUCE_KEY), cloud: as(CLOUD_KEY) };
 }
 
-const thread = (threadId: string, runnerId: string, extra: Record<string, unknown> = {}) => ({ threadId, runnerId, title: 'T', view: 'inbox', needsYou: false, ...extra });
+const thread = (threadId: string, runnerId: string, extra: Record<string, unknown> = {}) => ({ threadId, runnerId, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false, ...extra });
 const moveOf = (s: Awaited<ReturnType<typeof setup>>, moveId: string) => s.rows('threadMoves').find((m) => m.moveId === moveId)!;
 
 test('only the main Mac starts a move, to an online runner other than the thread’s, one at a time', async () => {

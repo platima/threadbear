@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { denySecrets } from '../../secrets-guard.ts';
 import { CONFINED_NO_SANDBOX, sandboxSpawner, type SandboxConfig } from '../../sandbox.ts';
 import os from 'node:os';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -315,7 +316,6 @@ export function modelChoices(rows: ModelInfo[]): ModelChoice[] {
       const levels = row.supportedEffortLevels.filter(isEffortLevel);
       if (levels.length) choice.effortLevels = levels;
     }
-    if (row.supportsFastMode === true) choice.fastMode = true;
     out.push(choice);
   }
   return out;
@@ -337,6 +337,10 @@ const ASKS_IN_ASK = new Set([...EDIT_TOOLS, 'NotebookEdit', 'Bash', 'WebFetch'])
 // The PreToolUse hook's tools: edits (onEditCall) and anything that can
 // queue (wouldAsk). A regex, as the CLI reads it.
 const QUEUE_HOOK_MATCHER = [...ASKS_IN_ASK, 'mcp__.*'].join('|');
+// Tools that only read, checked for the secrets folder (secrets-guard.ts) on
+// every session: one on Full can be lowered mid-session, and the matcher is
+// fixed when it starts. The hook returns at once on Full.
+const SECRETS_ONLY_TOOLS = ['Read', 'Grep', 'Glob', 'LS', 'NotebookRead'];
 
 // A queued call as a card listed it: its tool, its whole input and
 // whether it wrote code then. An allow holds only for exactly that.
@@ -468,7 +472,9 @@ class ClaudeSession implements AgentSession {
           // (onQueuedCall), before any allow rule or Auto's classifier could
           // let it through: only tools that can queue, so the rest don't
           // make a round trip per call.
-          { matcher: QUEUE_HOOK_MATCHER, hooks: [async (input) => this.onQueuedCall(input) ?? this.onEditCall(input)] },
+          // ...and keeps the runner's token from a thread that isn't on Full
+          // access (secrets-guard.ts).
+          { matcher: [QUEUE_HOOK_MATCHER, ...SECRETS_ONLY_TOOLS].join('|'), hooks: [async (input) => this.onSecretsCall(input) ?? this.onQueuedCall(input) ?? this.onEditCall(input)] },
           // A hook's ask comes before allow rules, so it's how a folder's
           // untrusted ones stop applying once the thread leaves Full
           // (askBeforeEveryTool). Only on a session that may need it.
@@ -488,14 +494,11 @@ class ClaudeSession implements AgentSession {
     if (opts.model) options.model = opts.model;
     const effort = claudeEffort(opts.effort);
     if (effort) options.effort = effort;
-    // Fast mode only comes on in an SDK session from flag settings (the
-    // CLI's sdk_opt_in_required otherwise), beside any untrusted folder's.
-    if (opts.fastMode) options.settings = { ...((options.settings as Record<string, unknown> | undefined) ?? {}), fastMode: true };
     // The never-ask tools go in as allow rules too, so the CLI lets them
     // through before its own checks (Auto's classifier included) rather
     // than relying on canUseTool being reached. They're not the thread's
     // rules, so they're never saved with them.
-    const allowed = [...(opts.allowRules ?? []), ...[...(deps.neverAsk ?? [])].filter((n) => !deps.alwaysAsk?.has(n))];
+    const allowed = [...(opts.allowRules ?? []).filter((r) => !isTbPrefixRule(r)), ...[...(deps.neverAsk ?? [])].filter((n) => !deps.alwaysAsk?.has(n))];
     if (allowed.length) options.allowedTools = [...new Set(allowed)];
     if (opts.resume) {
       options.resume = opts.sessionId;
@@ -576,6 +579,15 @@ class ClaudeSession implements AgentSession {
     if (!kind) return {};
     this.codeWrites.add(id);
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: codeWriteReason(kind) } };
+  }
+
+  private onSecretsCall(input: HookInput): { hookSpecificOutput: { hookEventName: 'PreToolUse'; permissionDecision: 'deny'; permissionDecisionReason: string } } | undefined {
+    if (this.mode === 'full') return undefined;
+    const call = input as { tool_name?: string; tool_input?: unknown; cwd?: string };
+    const home = this.opts.env?.THREADBEAR_HOME;
+    if (!home || typeof call.tool_name !== 'string' || !call.tool_input || typeof call.tool_input !== 'object') return undefined;
+    const why = denySecrets(call.tool_name, call.tool_input as Record<string, unknown>, home, typeof call.cwd === 'string' ? call.cwd : undefined);
+    return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : undefined;
   }
 
   private onQueuedCall(input: HookInput): { hookSpecificOutput: { hookEventName: 'PreToolUse'; permissionDecision: 'deny'; permissionDecisionReason: string } } | undefined {
@@ -880,8 +892,8 @@ class ClaudeSession implements AgentSession {
         }
         return { behavior: 'allow', updatedInput: input, toolUseID: o.toolUseID, decisionClassification: 'user_temporary' };
       case 'allowAlways': {
-        const { updates, rules } = alwaysAllow(name, o.suggestions);
-        this.sink.output({ kind: 'allowRules', rules });
+        const { updates, rules } = alwaysAllow(name, o.suggestions, input);
+        if (rules.length) this.sink.output({ kind: 'allowRules', rules });
         return {
           behavior: 'allow',
           updatedInput: input,
@@ -966,13 +978,6 @@ class ClaudeSession implements AgentSession {
   async setEffort(effort: EffortLevel | undefined): Promise<void> {
     if (this.exited) return;
     await this.q.applyFlagSettings({ effortLevel: claudeEffort(effort) ?? null });
-  }
-
-  // null rather than false, so it's off without hiding a setting of
-  // Mike's own beneath (as setEffort).
-  async setFastMode(on: boolean): Promise<void> {
-    if (this.exited) return;
-    await this.q.applyFlagSettings({ fastMode: on ? true : null });
   }
 
   // Leaving Full access counts at once and coming to it only once the CLI
@@ -1073,22 +1078,56 @@ export function commandFile(name: string, base: string): string | undefined {
 // would change more than the user agreed to and outlive the thread, so
 // those are dropped and every rule is session-scoped. The runner keeps the
 // rules on the thread and passes them back as allowedTools after a resume.
-export function alwaysAllow(name: string, suggestions: PermissionUpdate[] | undefined): { updates: PermissionUpdate[]; rules: string[] } {
+//
+// tb gets one rule for exactly the command that was allowed, and never the
+// CLI's suggested prefix (docs/protocol.md, "A thread's own key"): allowing
+// `tb new --ask x` shouldn't allow `tb new --full y` the next time.
+export function alwaysAllow(name: string, suggestions: PermissionUpdate[] | undefined, input?: Record<string, unknown>): { updates: PermissionUpdate[]; rules: string[] } {
   const updates: PermissionUpdate[] = [];
   const rules: string[] = [];
+  const command = name === 'Bash' && typeof input?.command === 'string' ? input.command : undefined;
+  const isTb = command !== undefined && mentionsTb(command);
   for (const s of suggestions ?? []) {
     if (s.type === 'addRules' && s.behavior === 'allow' && s.rules.length) {
-      updates.push({ ...s, destination: 'session' });
-      rules.push(...s.rules.map(ruleString));
+      const kept = isTb ? s.rules.filter((r) => r.toolName !== 'Bash') : s.rules;
+      if (kept.length) {
+        updates.push({ ...s, rules: kept, destination: 'session' });
+        rules.push(...kept.map(ruleString));
+      }
     } else if (s.type === 'addDirectories') {
       updates.push({ ...s, destination: 'session' });
     }
+  }
+  if (name === 'Bash') {
+    // Exact, or none: a `*` in a rule is a wildcard and a newline can't go
+    // in one, so that command is allowed this once, like Codex's are.
+    if (isTb || rules.length === 0) {
+      if (command !== undefined && !/[*\n\r]/.test(command)) {
+        const rule = { toolName: 'Bash', ruleContent: command };
+        updates.push({ type: 'addRules', rules: [rule], behavior: 'allow', destination: 'session' });
+        rules.push(ruleString(rule));
+      }
+    }
+    return { updates, rules };
   }
   if (rules.length === 0) {
     updates.push({ type: 'addRules', rules: [{ toolName: name }], behavior: 'allow', destination: 'session' });
     rules.push(name);
   }
   return { updates, rules };
+}
+
+// Whether a shell command runs tb anywhere in it: alone, by path, quoted, or
+// behind && or a pipe.
+export function mentionsTb(command: string): boolean {
+  // Quotes and backslashes don't change what runs: t'b', \\tb, t\\<newline>b.
+  return /(^|[\s;&|()`$=/])tb(\s|$|[;&|)`])/.test(command.replace(/\\\n/g, '').replace(/[\\'"]/g, ''));
+}
+
+// A saved "Always allow" prefix rule for tb, from before they were exact.
+export function isTbPrefixRule(rule: string): boolean {
+  const m = /^Bash\((.*)\)$/s.exec(rule);
+  return Boolean(m && /\*/.test(m[1]) && mentionsTb(m[1].replace(/\*/g, ' ').replace(/:/g, ' ')));
 }
 
 function ruleString(r: { toolName: string; ruleContent?: string }): string {

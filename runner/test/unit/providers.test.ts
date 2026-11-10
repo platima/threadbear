@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { discoverAccounts } from '../../src/accounts.ts';
+import { readPools } from '../../src/pools.ts';
 import { activeProviders, cliName, PROVIDER_INFO, providerInfo, providerName, providersForHello } from '../../src/providers.ts';
 import { PROVIDERS, type Account } from '../../src/protocol.ts';
 import { FakeAccounts, makeHarness, withCodex } from '../helpers/fakes.ts';
@@ -82,6 +83,12 @@ test('an ACP model is only ever the one its account lists', () => {
   assert.equal(h.runner.modelFits(claude, 'fake/one'), false);
   assert.equal(h.runner.modelProvider('fake/one'), 'opencode');
   assert.equal(h.runner.modelProvider('gpt-9'), 'codex', 'another provider keeps what it has always claimed');
+});
+
+test('a saved pool of only an agent this runner does not offer is gone', () => {
+  const accounts: Account[] = [{ id: 'claude-main', provider: 'claude', title: 'c', configDir: '/c' }];
+  const pools = [{ id: 'oc', title: 'OC', accountIds: ['opencode-main'] }, { id: 'mine', title: 'Mine', accountIds: ['claude-main', 'opencode-main'] }];
+  assert.deepEqual(readPools({ pools }, accounts, {}).map((p) => p.id), ['mine']);
 });
 
 test('hello lists each provider this runner offers', () => {

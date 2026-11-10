@@ -654,6 +654,22 @@ it is decoded as that (`parseWslList`). Not run: the installed app (the shell's 
 arm64 and Linux packages (`stage.ps1` and `stage.mjs` fetch the target's package with
 `npm ci --os --cpu`, tried here for win32-arm64 only), and a Linux desktop.
 
+### The desktop folder, and Mike's GPUI app (9 Nov 2026)
+
+Mike is rewriting the desktop app in Rust with GPUI, for Mac, Windows and Linux, and has
+put it in `desktop/` (`docs/gpui-port.md`). This fork's own app, the TypeScript and React UI
+in a Tauri shell, was in `desktop/` too, so it moved to `desktop-tauri/` and `desktop/`
+now comes from his tree unchanged. The installers, workflows, version script, Dependabot
+and the docs point at `desktop-tauri/` for the source. The installed layout still has a
+`desktop/` folder (`<install>/desktop/bridge`), because the shell looks for it there and
+that is a different thing from the source folder.
+
+Until his app does what this one does, releases keep coming from `desktop-tauri/`. His
+parity table (`docs/gpui-port/PARITY.md`) counted 21 of 325 features with a spec on 9 Nov,
+so that is not soon. What bringing his app across to Windows, Android and Linux involves
+(packaging it, the Windows runner, the terminal, signing) is for the next pieces of work,
+and `desktop-tauri/` goes when his app covers what it does.
+
 ## Upstream pull requests
 
 Scoped on 6 Nov 2026, against `mikecann/threadbear` at `d488512`. Nothing is

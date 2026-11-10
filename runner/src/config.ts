@@ -122,7 +122,7 @@ export type Config = {
   oneReply: boolean;
   // Mike's runner tags a signed release of main once a day for everyone
   // else's copy (src/upstream.ts): runner.json `releases`.
-  releases?: { publish: boolean; signingKey?: string };
+  releases?: { publish: boolean; signingKey?: string; signingProvider?: string };
   // The runner's own model calls (src/models/): the pool whose Claude
   // logins answer them (null: none, so no small jobs) and folders whose
   // threads are never sent.
@@ -177,6 +177,9 @@ export type RunnerJson = {
   sandbox?: unknown;
   pools?: unknown[];
   followMain?: boolean;
+  // This machine's main is GitHub's (follow-origin.ts): read by that file,
+  // each time, so it needs no restart.
+  followOrigin?: boolean;
   // The ssh host that ./check.sh sends the repo's checks to, so suites and
   // the app's test windows stay off this Mac (scripts/check-remote.sh), or
   // checkHosts, several tried in order, which wins (a check.sh from before
@@ -187,7 +190,7 @@ export type RunnerJson = {
   oneReply?: boolean;
   // bringIn: how often a fork's runner starts a thread to bring in Mike's
   // releases (bring-in.ts): every so many days, 'important' or 'off'.
-  releases?: { publish?: boolean; signingKey?: string; bringIn?: number | 'important' | 'off' };
+  releases?: { publish?: boolean; signingKey?: string; signingProvider?: string; bringIn?: number | 'important' | 'off' };
   models?: { pool?: string | null; privateFolders?: string[] };
   // icon: an SF Symbol for this runner in lists (machine.ts works one out).
   // rpcUrl: how a Mac app reaches this runner over the tailnet (step 6 part 2).
@@ -399,7 +402,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     // On unless runner.json turns it off (2 Nov: Mike found it the right
     // balance, and it's no longer in Settings).
     oneReply: json.oneReply !== false,
-    ...(json.releases?.publish === true ? { releases: { publish: true, ...(typeof json.releases.signingKey === 'string' ? { signingKey: expandHome(json.releases.signingKey) } : {}) } } : {}),
+    ...(json.releases?.publish === true ? { releases: { publish: true, ...(typeof json.releases.signingKey === 'string' ? { signingKey: expandHome(json.releases.signingKey) } : {}), ...(typeof json.releases.signingProvider === 'string' ? { signingProvider: expandHome(json.releases.signingProvider) } : {}) } } : {}),
     models: modelSettingsFrom(json),
     ...(codexPath ? { codexPath: expandHome(codexPath) } : {}),
     ...(nonEmpty(json.cursorPath) ? { cursorPath: expandHome(nonEmpty(json.cursorPath)!) } : {}),

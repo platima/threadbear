@@ -39,7 +39,7 @@ export type IndexRow = {
 };
 
 // What the Mac app gets (docs/protocol.md, "Other runners' threads").
-export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; rpcUrl?: string; tokenFile?: string };
+export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; rpcUrl?: string; tokenFile?: string; followProblem?: string };
 // `moving`: set by the main Mac's runner for a move it knows of (main.ts
 // remoteMoving), never by the backend's rows.
 export type RemoteThread = IndexRow & { runnerId: string; moving?: import('./moves.ts').ThreadMoving };
@@ -47,7 +47,7 @@ export type RemoteThread = IndexRow & { runnerId: string; moving?: import('./mov
 // one's too, for the app's Settings > Runners. Left out before it's heard.
 export type RemoteThreads = { runners: RemoteRunner[]; threads: RemoteThread[]; order?: string[] };
 
-type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; rpcUrl?: string };
+type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; rpcUrl?: string; followProblem?: string };
 type SinceRow = RemoteThread & { updatedMs?: number; deleted?: boolean };
 
 const FLUSH_MS = 1000;
@@ -522,6 +522,7 @@ export class ThreadIndex {
           online: now - r.lastSeenAt < ONLINE_MS,
           lastSeenAt: new Date(r.lastSeenAt).toISOString(),
           ...(r.rpcUrl ? { rpcUrl: r.rpcUrl } : {}),
+          ...(r.followProblem ? { followProblem: r.followProblem } : {}),
         })),
       threads: value?.threads ?? [],
       ...(this.order ? { order: this.order } : {}),

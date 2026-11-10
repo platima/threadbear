@@ -13,7 +13,7 @@ updating the app never stops a thread. Your threads are also copied to a
 Convex deployment of your own, which is how the iPhone app and the website
 can follow along.
 
-This guide describes the Mac app. The Windows and Linux app (`desktop/`, kept
+This guide describes the Mac app. The Windows and Linux app (`desktop-tauri/`, kept
 in the fork at github.com/platima/threadbear) has most of the same panels and
 follows it where it does, and the Android app is the website in an app of its
 own (`docs/android.md`).
@@ -51,9 +51,7 @@ asked you something, as what they find can change what it asks. It comes to
 the inbox when they're done, and you can still open it and answer early.
 Hibernating and Archived, at the foot, hold the threads that are put away
 (see [Hibernate and archive](#hibernate-and-archive)). They start folded,
-showing only how many; click a heading to open or fold it. Folded, Archived
-stays at the bottom of the sidebar however many threads are above it, and
-opening it scrolls its threads into view. Hibernating also
+showing only how many; click a heading to open or fold it. Hibernating also
 has the threads that have booked a message to themselves for later (an
 agent saying "I'll check again in 20 minutes") and have nothing for you
 until then. Each row says when it wakes, soonest first. When the time comes
@@ -351,7 +349,7 @@ failed update, start on it too, so on Ask before edits (or Auto on Codex,
 which asks before edits) they wait for you to allow what they need. Deleting
 a thread is one thing an agent always has to ask about, whatever the mode.
 
-An agent in Ask before edits or Auto can't give itself more room. Switching
+An agent in Ask before edits or Auto can't give itself more room, with its tools or with `tb`: `tb` in a thread signs in with that thread's own key and gets what the thread can do, and anything more is refused with a pointer to the tool that can ask you on a card. Switching
 any thread or schedule to more access, starting a thread with more access
 than its own (the threads it starts get its mode), messaging or moving a
 thread that has more, changing the brief of a project such a thread is in,
@@ -783,15 +781,19 @@ up at most every 20 minutes while the thread keeps going. A catch-up after
 only a quick reply is skipped without asking anything.
 
 Each look is one short call to Haiku, Claude's small, cheap model, rather
-than the model your threads run on. It runs on one of your own Claude
+than the model your threads run on. When it wants to file a thread in a
+project the thread hasn't touched the folders of, one more short call, to
+Opus, checks the thread is really working on that project and doesn't just
+share a subject with it. They run on one of your own Claude
 logins: the one the pool would pick next in the pool chosen under Runs on (the
-same pool that writes thread titles, also in Settings › Models), and it
-counts towards that login's usage like any other call. When every login in
+same pool that writes thread titles, also in Settings › Models), and they
+count towards that login's usage like any other call. When every login in
 the pool is out of room it waits, and with only Codex logins it doesn't
 run at all. Threads in a private folder (Settings › Models) are never sent
 to it.
 
-The Librarian view lists what it did and what it will look at next. Turn
+The Librarian view lists what it did and what it will look at next. Hover
+a row to see why it filed a thread where it did. Turn
 off Look at threads there to pause it; what's queued waits until you turn
 it back on. If it files a thread wrongly, take the thread out of the
 project and it won't put it back.
@@ -1067,9 +1069,10 @@ to `f20`.
 <!-- picture: /img/bear-dizzy.webp alt: Experiments are off until you turn them on -->
 
 Some new features start as experiments: off unless you turn them on, while
-they're tried out. Each has a switch under `experiments` in `runner.json`
-in Threadbear's data folder, read at every turn, so there's nothing to
-restart:
+they're tried out. Turn one on or off in Settings > General > Experiments
+(the ⓘ beside each says what it does), with nothing to restart. The switches are kept under `experiments` in `runner.json` in
+Threadbear's data folder, read at every turn, so an agent can set them
+there too:
 
 ```json
 "experiments": { "labReview": true }
@@ -1477,21 +1480,25 @@ you. Right-click it for a quick Restart to Update.
 
 Your copy is a fork of Mike's, and it doesn't change unless you say so.
 About once a day Mike publishes a release. Your runner checks for new ones
-every few hours, and only trusts releases signed with the key setup saved.
-When there's one your copy doesn't have, the Updates icon gets a coloured
-dot, and its From Mike section lists what's new in plain words, grouped by
-release. Older releases without notes show their commit subjects instead.
-Bring Them In starts a
-thread that merges Mike's changes with your own, sorts out any clashes,
-runs the checks and asks you before it lands. Let's Discuss starts one that
+every few hours, and only trusts a release signed with the key setup saved
+and already on Mike's main (not one signed on a side branch). Mike can
+replace that key through a signed release: a new key counts a week after a
+release signed with the old one names it, and a key he revokes stops
+counting at once. When there's one your copy doesn't have, the Updates icon
+gets a coloured dot, and its From Mike section lists what's new in plain
+words, grouped by release. Older releases without notes show their commit
+subjects instead. Bring Them In starts a thread that works out how Mike's
+changes merge with your own, without checking anything out, tells you what
+they bring and how it would settle any clashes, and asks. Nothing from the
+release runs until you say go: then it merges, runs the checks and lands. Let's Discuss starts one that
 talks the release through first, what's in it and what it means for your
 own changes, and changes nothing until you say. From a thread, `tb updates`
 says the same, and `tb updates check` looks again now.
 
 You don't have to remember to look. Every 5 days, if Mike has a release
-your copy doesn't have, Threadbear starts that thread for you: it does the
-merge and runs the checks first, so it reaches your inbox with one
-question, whether to land it. There's only ever one; if you leave it open,
+your copy doesn't have, Threadbear starts that thread for you: it reaches
+your inbox with what's new and one question, whether to go ahead, and runs
+nothing from the release before you answer. There's only ever one; if you leave it open,
 a newer release goes into the same thread. A release Mike marks important
 (a security or data fix) starts one straight away. Change how often, or
 turn it off, in Settings (⌘,) > General > Updates from Mike.

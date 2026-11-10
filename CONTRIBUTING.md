@@ -18,7 +18,7 @@ repository. Where a change goes depends on what it is.
 
 The line is Mike's: bug fixes and what the ports need come back to him as pull
 requests, and features are talked about before they are written. The code
-that only exists here (`desktop/`, `android/`, `installer/`, the packaging and
+that only exists here (`desktop-tauri/`, `android/`, `installer/`, the packaging and
 release workflows) is this repository's to change.
 
 ## Pull requests to this repository

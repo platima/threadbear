@@ -606,9 +606,19 @@ extension Automation {
             menu.update()
             menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
         } else {
-            guard let x = c["x"] as? Double, let y = c["y"] as? Double else { return "error realMenu needs x and y, or main" }
             let right = c["right"] as? Bool == true
-            let point = NSPoint(x: x, y: view.bounds.height - y)
+            // `tipPrefix` opens it at the control with that tooltip (a sidebar
+            // row's starts with its title), for what has no fixed position.
+            let point: NSPoint
+            if let prefix = c["tipPrefix"] as? String {
+                guard let content = window.contentView, let anchor = all(TipAnchorView.self, in: content).last(where: { $0.text.hasPrefix(prefix) && !$0.isHiddenOrHasHiddenAncestor }) else {
+                    return "error no control with the tip \(prefix)"
+                }
+                point = anchor.convert(NSPoint(x: anchor.bounds.midX, y: anchor.bounds.midY), to: nil)
+            } else {
+                guard let x = c["x"] as? Double, let y = c["y"] as? Double else { return "error realMenu needs x and y, or main" }
+                point = NSPoint(x: x, y: view.bounds.height - y)
+            }
             func event(_ type: NSEvent.EventType, _ number: Int) -> NSEvent? {
                 NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                    windowNumber: window.windowNumber, context: nil, eventNumber: number, clickCount: 1, pressure: 1)

@@ -1122,8 +1122,13 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     /// The pencil by one of Mike's messages: its text and pictures go into
     /// the composer, and sending replaces it (docs/protocol.md, "Editing a
     /// message").
+    var canGoBack: Bool {
+        guard let session, let thread = session.app?.threads[session.threadId] else { return true }
+        return Providers.info(thread.provider).rewind
+    }
+
     func editMessage(rowId: String) {
-        guard let session, let app = session.app,
+        guard canGoBack, let session, let app = session.app,
               case .user(let message)? = session.model.item(id: rowId)?.content, message.editable,
               let row = session.model.item(id: rowId) else { return }
         app.startEditing(threadId: session.threadId, seq: row.seq, text: message.text, images: message.images)

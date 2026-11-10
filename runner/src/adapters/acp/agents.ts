@@ -20,10 +20,13 @@ export type AcpAgent = {
   // explicit: runner.json's path for it. Undefined when not installed.
   findBinary(o: { explicit?: string; home: string; pathEnv: string }): string | undefined;
   args: string[];
+  // Runs the agent's own updater, when Update is pressed.
+  updateArgs: string[];
   // Set on every process it starts. What stops a thread running tools
   // unguarded is here, so it applies whatever mode the thread starts in and
   // whatever it changes to later: the runner answers each request (AcpSession).
-  env(): Record<string, string>;
+  // noTools: for a small job, where the agent may not use anything at all.
+  env(o?: { noTools?: boolean }): Record<string, string>;
   // Whether the process that answered initialize really is this agent, as
   // the same command name can be another program's.
   identifies(init: InitializeResult): boolean;
@@ -67,7 +70,8 @@ export function isCursorBinary(file: string): boolean {
 // Every tool asks unless it only reads, so a tool an agent adds later asks
 // too. Read of something outside the folder asks as external_directory, and
 // the threadbear tools have their own gate (tool-gate.ts).
-const ASK_FOR_EVERYTHING = { '*': 'ask', read: 'allow', glob: 'allow', grep: 'allow', list: 'allow', external_directory: 'ask', 'threadbear_*': 'allow' };
+const ASK_FOR_EVERYTHING: Record<string, string> = { '*': 'ask', read: 'allow', glob: 'allow', grep: 'allow', list: 'allow', external_directory: 'ask', 'threadbear_*': 'allow' };
+const DENY_EVERYTHING: Record<string, string> = { '*': 'deny' };
 
 // OpenCode runs anything without asking unless its config says otherwise,
 // and a folder's own opencode.json outranks this inline config: tried on
@@ -76,8 +80,8 @@ const ASK_FOR_EVERYTHING = { '*': 'ask', read: 'allow', glob: 'allow', grep: 'al
 // So the folder's OpenCode config isn't read at all, as a folder's Claude
 // settings aren't until trusted. The rules go on the agents too: agent-level
 // rules outrank top-level ones.
-export function opencodeEnv(): Record<string, string> {
-  const permission = ASK_FOR_EVERYTHING;
+export function opencodeEnv(o: { noTools?: boolean } = {}): Record<string, string> {
+  const permission = o.noTools ? DENY_EVERYTHING : ASK_FOR_EVERYTHING;
   return {
     OPENCODE_DISABLE_PROJECT_CONFIG: '1',
     OPENCODE_DISABLE_AUTOUPDATE: '1',
@@ -94,12 +98,15 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
     // Free models work with no login, so being installed is enough.
     loggedIn: () => true,
     findBinary({ explicit, home, pathEnv }) {
-      if (explicit) return isExecutableFile(explicit) ? explicit : undefined;
+      // Whole paths only: a relative one would resolve against the thread's
+      // folder when it's run, and that can be anyone's repo.
+      if (explicit) return path.isAbsolute(explicit) && isExecutableFile(explicit) ? explicit : undefined;
       const own = path.join(home, '.opencode', 'bin', 'opencode');
       return isExecutableFile(own) ? own : onPath('opencode', pathEnv);
     },
     // --pure: no plugins, the user's own included, for the same reason.
     args: ['acp', '--pure'],
+    updateArgs: ['upgrade'],
     env: opencodeEnv,
     identifies: (init) => /opencode/i.test(init.agentInfo?.name ?? '') || Boolean(init.authMethods?.some((m) => m.id === 'opencode-login')),
     modeFor: (mode) => (mode === 'plan' ? 'plan' : 'build'),
@@ -112,11 +119,12 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
     // Written once the CLI has been used; only whether it exists is read.
     loggedIn: (home) => fs.existsSync(path.join(home, '.cursor', 'cli-config.json')),
     findBinary({ explicit, home, pathEnv }) {
-      if (explicit) return isExecutableFile(explicit) ? explicit : undefined;
+      if (explicit) return path.isAbsolute(explicit) && isExecutableFile(explicit) ? explicit : undefined;
       const candidates = [path.join(home, '.local', 'bin', 'cursor-agent'), onPath('cursor-agent', pathEnv), path.join(home, '.local', 'bin', 'agent'), onPath('agent', pathEnv)];
       return candidates.find((f): f is string => Boolean(f) && isExecutableFile(f!) && isCursorBinary(f!));
     },
     args: ['acp'],
+    updateArgs: ['update'],
     // Nothing to set: the mode does the job. See modeFor.
     env: () => ({}),
     identifies: (init) => Boolean(init.authMethods?.some((m) => m.id === 'cursor_login')) || /cursor/i.test(init.agentInfo?.name ?? ''),

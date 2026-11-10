@@ -3,7 +3,7 @@
 // MCP server). delete_thread always asks; in any mode but Full, so does
 // anything that changes something, unless "Always allow" covers it.
 import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS } from '../threadbear-mcp.ts';
-import { toolTitle, truncateInput } from '../tools.ts';
+import { cardInput, tooLongForCard, toolTitle } from '../tools.ts';
 import type { PermissionMode } from '../protocol.ts';
 import type { ToolApprovalAnswer, ToolApprovalRequest } from './types.ts';
 
@@ -32,11 +32,15 @@ export async function gateThreadbearTool(deps: ToolGateDeps, call: ToolGateCall)
   const readOnly = NEVER_ASK_TOOLS.has(fullName) || call.readOnlyHint === true;
   const allowed = !alwaysAsk && [...deps.rules()].includes(fullName);
   if (!alwaysAsk && (deps.mode() === 'full' || readOnly || allowed)) return { allowed: true };
+  // All of it or nothing: an allow runs the whole of what it allowed, so a
+  // card cut short would approve words nobody saw.
+  const card = cardInput(args, 'all');
+  if (card.tooLong) return { allowed: false, message: tooLongForCard(card.tooLong) };
   const ans = await deps.requestApproval({
     toolUseId: call.toolUseId,
     name: fullName,
     title: toolTitle(fullName, args, deps.cwd()),
-    input: truncateInput(args),
+    input: card.input,
     canAlwaysAllow: !alwaysAsk,
     signal: call.signal,
   });

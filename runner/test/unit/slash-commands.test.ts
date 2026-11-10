@@ -57,9 +57,8 @@ test('commandList puts Threadbear\'s own first and hides Claude\'s terminal-only
     { name: 'model', source: 'cli' },
     { name: 'resume', source: 'cli' },
     { name: 'code-review', source: 'skill' },
-  ], true);
-  assert.deepEqual(claude.map((c) => c.name), ['model', 'effort', 'fast', 'compact', 'code-review']);
-  assert.deepEqual(commandList('claude', [{ name: 'fast', source: 'cli' }]).map((c) => c.name), ['model', 'effort'], "/fast waits for its experiment, and the CLI's own stays hidden");
+  ]);
+  assert.deepEqual(claude.map((c) => c.name), ['model', 'effort', 'compact', 'code-review']);
   const codex = commandList('codex', [{ name: 'deslop', source: 'skill' }, { name: 'review', source: 'skill' }]);
   assert.deepEqual(codex.map((c) => c.name), ['model', 'effort', 'compact', 'review', 'clear', 'new', 'status', 'deslop']);
 });
@@ -165,45 +164,6 @@ test('/effort sets the level, and default puts it back', async () => {
   await tick();
   assert.equal(h.runner.get(thread.id).effort, undefined);
   assert.equal(notes(h, thread.id).at(-1), "Back to the model's own effort level.");
-});
-
-test('/fast says so while its experiment is off', async () => {
-  const h = harness();
-  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-main' });
-  const s = h.adapter.last;
-  s.init();
-  s.result();
-  h.runner.send(thread.id, '/fast on');
-  await tick();
-  assert.equal(h.runner.get(thread.id).fastMode, undefined);
-  assert.match(notes(h, thread.id).at(-1)!, /an experiment, and it's off here/);
-  assert.deepEqual(s.fastModes, []);
-});
-
-test('/fast turns fast mode on and off on a Claude thread; Codex has none', async () => {
-  const h = harness();
-  fs.writeFileSync(path.join(h.home, 'runner.json'), JSON.stringify({ experiments: { fastMode: true } }));
-  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-main' });
-  const s = h.adapter.last;
-  s.init();
-  s.result();
-  h.runner.send(thread.id, '/fast');
-  await tick();
-  assert.equal(h.runner.get(thread.id).fastMode, true, 'on its own it toggles');
-  assert.equal(notes(h, thread.id).at(-1), 'Fast mode on: the same model, answering faster, at a higher price.');
-  h.runner.send(thread.id, '/fast off');
-  await tick();
-  assert.equal(h.runner.get(thread.id).fastMode, undefined);
-  assert.equal(notes(h, thread.id).at(-1), 'Fast mode off: standard speed.');
-  assert.deepEqual(s.fastModes, [true, false]);
-  assert.equal(s.sent.filter((m) => m.text.startsWith('/fast')).length, 0, 'never sent to the CLI');
-  const cx = h.runner.create({ text: 'hi', accountId: 'codex-main' }).thread;
-  h.codex.last.init('cx-1', 'gpt-6.1-sol');
-  h.codex.last.result();
-  h.runner.send(cx.id, '/fast on');
-  await tick();
-  assert.equal(h.runner.get(cx.id).fastMode, undefined);
-  assert.equal(notes(h, cx.id).at(-1), "Codex threads don't have fast mode.");
 });
 
 test('/clear on Codex starts a fresh session from the next message', async () => {

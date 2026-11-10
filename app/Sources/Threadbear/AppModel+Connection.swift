@@ -42,6 +42,7 @@ extension AppModel {
                 clisSupported = hello.clis.isEmpty ? nil : true
                 runnerUpdates = hello.updates
                 experiments = hello.experiments
+                Providers.update(hello.providers)
                 // An older runner sends no pools; the app then works as it
                 // did before them.
                 pools = hello.pools ?? []
@@ -255,8 +256,9 @@ extension AppModel {
         apply(thread)
     }
 
-    private func apply(_ thread: ThreadSummary) {
-        let previous = threads[thread.id]
+    private func apply(_ incoming: ThreadSummary) {
+        let previous = threads[incoming.id]
+        let thread = keepingAskedMove(incoming, over: previous)
         threads[thread.id] = thread
         threadCountMayHaveChanged()
         // The open transcript's "3 sub-agents working in the background"

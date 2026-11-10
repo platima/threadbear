@@ -44,7 +44,7 @@ maintained. Mike's changes are merged in here regularly.
 
 | | What it is | More |
 |---|---|---|
-| **Windows 11**, x64 and Arm64 | The app, with a tray icon and toasts, and the runner started at sign-in by a Task Scheduler task. Setup exe, MSI and a portable zip, signed. | [INSTALL.md](INSTALL.md) section 7, [desktop/README.md](desktop/README.md) |
+| **Windows 11**, x64 and Arm64 | The app, with a tray icon and toasts, and the runner started at sign-in by a Task Scheduler task. Setup exe, MSI and a portable zip, signed. | [INSTALL.md](INSTALL.md) section 7, [desktop-tauri/README.md](desktop-tauri/README.md) |
 | **Android 8 or newer** | The website in an app of its own, paired with your Convex deployment by a link or the QR code. A signed APK, installed by hand. Notifications with the app closed need a push relay that has the Firebase key (docs/android.md says how). | [docs/android.md](docs/android.md) |
 | **Linux**, x64 and arm64 | The Windows app's window, as a `.deb` or a `.tar.gz`, with the runner as a systemd user service. Not signed. | [docs/linux.md](docs/linux.md) |
 
@@ -244,7 +244,7 @@ Where things are:
   `claude` and `codex` CLIs
 - `app/`: the Mac app (SwiftUI and AppKit)
 - `ios/`: the iPhone app
-- `desktop/`: the Windows and Linux app (TypeScript and React, in a Tauri shell)
+- `desktop-tauri/`: the Windows and Linux app (TypeScript and React, in a Tauri shell)
 - `android/`: the Android app (the website in a Tauri shell, with a Kotlin
   notifications plugin)
 - `installer/`: how the Windows and Linux packages are made and released

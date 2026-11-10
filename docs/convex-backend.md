@@ -472,6 +472,9 @@ all meet. So:
 - Change the backend so it still takes what the old runner sends and still
   returns what the old phone reads (new fields optional, nothing removed or
   renamed), and only later stop accepting the old shape.
+- Since API 67 `sync:heartbeat` takes `followProblem`, a runner's word that it
+  can't follow GitHub's main (docs/dev-tools.md); the main key reads it from
+  `sync:otherRunnersList`.
 - `convex/version.ts` has `API_VERSION`, returned by `sync:heartbeat` and
   `phone:me`. Bump it when a client starts relying on something new, along
   with `BACKEND_API_VERSION` in `runner/src/sync.ts` (a unit test keeps them

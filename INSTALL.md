@@ -204,7 +204,7 @@ Threads that need those belong on the Mac.
 ## 7. A runner on Windows (optional)
 
 The runner runs on Windows 11 (Windows 10 is out of support and is not
-tested), and the desktop app in `desktop/` (or the website) is the way in. It is newer than the Mac and Linux setups, and
+tested), and the desktop app in `desktop-tauri/` (or the website) is the way in. It is newer than the Mac and Linux setups, and
 there is no Mac app. It runs Claude Code, and Codex when its `codex.exe` is on
 the PATH. docs/windows-port-plan.md says what is done and what isn't.
 
@@ -267,7 +267,7 @@ on an Arm PC yet.
    with its native installer, signed in as above. A git identity, as on any
    machine that commits.
 2. **The code:** clone their fork anywhere, then `npm ci` in `runner/` and in
-   `desktop/`.
+   `desktop-tauri/`.
 3. **Install:** `node runner/scripts/install-windows.mjs --dry-run`, show
    them what it prints, and run it without `--dry-run` once they agree. It
    registers a Task Scheduler task, "Threadbear Runner (<their Windows user
@@ -279,8 +279,8 @@ on an Arm PC yet.
 4. **The window:** the app is a small Rust shell (Tauri) around a TypeScript
    UI. It needs Rust (`rustup`, the MSVC toolchain) and the Visual Studio
    C++ build tools (the "Desktop development with C++" workload) to build.
-   In `desktop/`: `npm ci`, then `npx tauri build --no-bundle`, and run
-   `desktop\src-tauri\target\release\threadbear-desktop.exe`. It starts
+   In `desktop-tauri/`: `npm ci`, then `npx tauri build --no-bundle`, and run
+   `desktop-tauri\src-tauri\target\release\threadbear-desktop.exe`. It starts
    `node bridge/bridge.ts` (Node on the PATH, or the one in `node\` beside the
    program in an installed copy), a loopback server that passes the page's
    connection to the runner and does the token handshake, with a key for that

@@ -53,7 +53,7 @@ const quiet = Boolean(args.quiet);
 // default its settings name.
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const models = [
-  { id: 'opus', model: 'claude-opus-5-5', title: 'Opus 5.5', description: 'For complex work and everyday tasks', effortLevels: EFFORTS, fastMode: true },
+  { id: 'opus', model: 'claude-opus-5-5', title: 'Opus 5.5', description: 'For complex work and everyday tasks', effortLevels: EFFORTS },
   { id: 'claude-fable-5-1[1m]', model: 'claude-fable-5-1', title: 'Fable 5.1', description: 'For your toughest challenges', effortLevels: EFFORTS },
   { id: 'sonnet', model: 'claude-sonnet-5-5', title: 'Sonnet 5.5', description: 'Most efficient for simpler tasks', effortLevels: EFFORTS },
   { id: 'haiku', model: 'claude-haiku-5-5', title: 'Haiku 5.5', description: 'Fastest for quick answers', effortLevels: EFFORTS },
@@ -334,6 +334,8 @@ const BRUCE = 'runner_bruce';
 // runner passes on the backend's.
 // MOCK_MORE_RUNNERS=1 adds two more, for a list worth rearranging (only for
 // a look at Settings > Runners: the usual demo stays at two).
+// What threads.movePreview says won't come; empty and Move to skips the sheet.
+let moveLeftBehind = ['1 background job, which gets stopped'];
 const MORE_RUNNERS = process.env.MOCK_MORE_RUNNERS ? [
   { id: 'runner_cloud', name: 'Hetzner Cloud', icon: 'cloud', online: true, lastSeenAt: new Date().toISOString() },
   { id: 'runner_pixel', name: 'Pixel', icon: 'smartphone', online: true, lastSeenAt: new Date().toISOString() },
@@ -501,7 +503,7 @@ async function dispatch(client, method, p) {
       }
       return {
         runnerVersion, protocol: 1, accounts: publicAccounts(),
-        defaults: oldRunner ? { ...defaults, poolId: undefined } : defaults, ...(oldRunner ? {} : { clis, updates, pools, experiments: ['moveToRunner', 'fastMode'] }),
+        defaults: oldRunner ? { ...defaults, poolId: undefined } : defaults, ...(oldRunner ? {} : { clis, updates, pools, experiments: ['moveToRunner'] }),
       };
     // Moving a thread to another runner (docs/protocol.md): a guess from
     // "that runner", and a move that only marks the row, for the app's
@@ -514,7 +516,8 @@ async function dispatch(client, method, p) {
         cwd: p.cwd || `${home}/dev/me/threadbear-threads/slot-4`,
         accountId: p.accountId || 'claude-main',
         accounts: [{ id: 'claude-main', provider: 'claude', title: 'Claude', email: 'mike.cann@gmail.com' }, { id: 'claude-1', provider: 'claude', title: 'Claude', email: 'mike@gangbusters.io' }],
-        leftBehind: ['2 files git ignores (.env.local, app/.build)'],
+        leftBehind: moveLeftBehind,
+        sourceChecked: true,
         problems: p.cwd && !String(p.cwd).startsWith(home) ? [`There's no folder ${p.cwd} on ${runner?.name ?? 'it'}.`] : [],
         worktree: true,
       };
@@ -671,7 +674,6 @@ async function dispatch(client, method, p) {
         ...(pool ? { poolId: pool.id } : {}),
         id: threadId, title: (p.title ?? p.text.split('\n')[0]).slice(0, 60), cwd: p.cwd ?? defaults.cwd,
         accountId, provider, model: p.model ?? defaults.models[provider], effort: p.effort ?? defaults.efforts[provider],
-        ...(p.fastMode === true && provider === 'claude' ? { fastMode: true } : {}),
         permissionMode: p.permissionMode ?? 'full', status: 'starting', live: true, needsYou: false,
         createdAt: now, updatedAt: now, lastActivityAt: now, preview: '', lastSeq: 0, lastSeenSeq: 0,
       };
@@ -772,10 +774,6 @@ async function dispatch(client, method, p) {
       if (s.poolId) delete s.waitingForRoom;
       if (p.model !== undefined) s.model = p.model ?? undefined;
       if (p.effort !== undefined) s.effort = p.effort ?? undefined;
-      // Fast mode: Claude only, and only on a model that has it, as the runner.
-      if (p.fastMode !== undefined) s.fastMode = p.fastMode === true || undefined;
-      const fastRow = models.find((m) => m.id === s.model || m.model === s.model);
-      if (s.provider !== 'claude' || (fastRow && !fastRow.fastMode)) delete s.fastMode;
       if (p.snoozedUntil !== undefined) {
         // "restart": until the runner next starts, as the runner keeps it.
         const untilRestart = p.snoozedUntil === 'restart';
@@ -1371,6 +1369,9 @@ async function dispatch(client, method, p) {
       return deviceList();
     }
     // Mock-only helpers for perf runs, demos and screenshots.
+    case 'mock.moveLeftBehind':
+      moveLeftBehind = p.lines ?? [];
+      return { lines: moveLeftBehind };
     case 'mock.slow': {
       slow = { ms: Math.max(0, Number(p.ms ?? 0)), queueMs: Math.max(0, Number(p.queueMs ?? 0)) };
       return slow;
@@ -1423,6 +1424,24 @@ async function dispatch(client, method, p) {
       }
       broadcast('runner.updates', { updates });
       return { updates };
+    }
+    case 'mock.fillArchived': {
+      // More archived threads than the Archived section shows at first, for
+      // its Show more row: `count` of them, each archived a minute apart.
+      const count = Number(p.count) || 30;
+      const now = Date.now();
+      for (let i = 0; i < count; i++) {
+        const id = `th_archived_${i}`;
+        const ts = new Date(now - (i + 1) * 60_000 - 3_600_000).toISOString();
+        const summary = {
+          id, title: `Archived thread ${i + 1}`, cwd: defaults.cwd, accountId: 'claude-main', provider: 'claude',
+          permissionMode: 'full', status: 'idle', live: false, needsYou: false, createdAt: ts, updatedAt: ts, lastActivityAt: ts,
+          archivedAt: ts, preview: '', lastSeq: 0, lastSeenSeq: 0,
+        };
+        threads.set(id, { summary, events: [], inProgress: new Map(), timers: [] });
+        broadcastSummary(id);
+      }
+      return { count };
     }
     case 'mock.background': {
       // What a thread's CLI is running in the background, as the real

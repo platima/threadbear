@@ -781,7 +781,7 @@ struct MarkdownViewMenu: View {
     @State private var hovering = false
 
     var body: some View {
-        Menu {
+        IconMenu {
             ForEach(MarkdownView.allCases, id: \.self) { view in
                 Toggle(isOn: Binding(get: { showing == view }, set: { if $0 { pick(view) } })) {
                     Label(view.title, systemImage: view.symbol)

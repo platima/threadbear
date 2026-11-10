@@ -36,7 +36,8 @@
 # changed from main: runner/scripts/, launch.mjs, the launcher or the tests
 # themselves. BearDock's tests only run when dock/ changed (the app's own
 # build and tests cover how it uses it). The iPhone app's ThreadbearKit
-# tests run with any of the options when ios/ changed, --quick included, so
+# tests run with any of the options when ios/ changed, or a Mac app file
+# ThreadbearKit links to (IOS_NEEDS, below), --quick included, so
 # `tb land` runs them (MicTapTests guards a crash the phone hit twice). On
 # main itself, with nothing changed, everything runs.
 #
@@ -150,6 +151,22 @@ fi
 needed() {
   [ "$ALL" = 1 ] || [ -z "$CHANGED" ] || printf '%s\n' "$CHANGED" | grep -qE "$1|^check\.sh$"
 }
+
+# What the iPhone kit's tests cover: ios/, and the Mac app's files that
+# ThreadbearKit builds through links (SlashCommands.swift and the like). On
+# 9 Nov a change to one under app/ used a type the kit didn't have, the
+# kit's tests didn't run as nothing under ios/ had changed, and the iPhone
+# app stopped building on main.
+IOS_NEEDS='^ios/'
+ROOT_REAL="$(cd "$ROOT" && pwd -P)"
+while IFS= read -r link; do
+  to="$(readlink "$link")"
+  dir="$(cd "$(dirname "$link")" && cd "$(dirname "$to")" 2>/dev/null && pwd -P)" || continue
+  case "$dir/$(basename "$to")" in
+    "$ROOT_REAL"/ios/*) ;;
+    "$ROOT_REAL"/*) IOS_NEEDS="$IOS_NEEDS|^$(printf '%s' "${dir#"$ROOT_REAL"/}/$(basename "$to")" | sed 's/[][\\.*^$()+?{}|]/\\&/g')" ;;
+  esac
+done < <(find "$ROOT_REAL/ios" -type l -not -path '*/.build/*' 2>/dev/null)
 
 skip() {
   printf 'skip  %-20s (%s; --all runs it)\n' "$1" "$2"
@@ -289,7 +306,7 @@ fi
 # The app itself only builds with Xcode; ios/scripts/sim-shots.sh does that.
 if [ "$RUNNER_ONLY" = 1 ]; then
   :
-elif needed '^ios/'; then
+elif needed "$IOS_NEEDS"; then
   step "iphone kit tests" "$ROOT/ios/ThreadbearKit" "${LIMITED[@]}" swift test --disable-keychain
 else
   skip "iphone kit tests" "nothing in ios/ changed"

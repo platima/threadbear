@@ -1,6 +1,6 @@
 # Assembles the folder every Windows package is made from, build/stage-<arch>/:
 #
-#   Threadbear.exe             the desktop shell (desktop/src-tauri), unsigned here
+#   Threadbear.exe             the desktop shell (desktop-tauri/src-tauri), unsigned here
 #   node/node.exe              the pinned Node (installer/node.json), so nothing
 #                              has to be on the PATH
 #   runner/                    the runner's source and its production packages
@@ -18,14 +18,14 @@
 # be copied to another machine and packaged there (build-installers.ps1
 # -FromStage). Signing is not done here; the packaging step signs Threadbear.exe.
 #
-#   pwsh installer/stage.ps1 -Arch x64 -ShellExe desktop/src-tauri/target/release/threadbear-desktop.exe
+#   pwsh installer/stage.ps1 -Arch x64 -ShellExe desktop-tauri/src-tauri/target/release/threadbear-desktop.exe
 
 param(
     [ValidateSet("x64", "arm64")]
     [string]$Arch = "x64",
     [Parameter(Mandatory)]
     [string]$ShellExe,
-    [string]$Version = "",   # the version being packaged; defaults to desktop/package.json
+    [string]$Version = "",   # the version being packaged; defaults to desktop-tauri/package.json
     [string]$StageDir = ""   # defaults to build/stage-<arch>
 )
 
@@ -42,10 +42,10 @@ function Invoke-Native([string]$What, [scriptblock]$Block) {
 }
 
 # --- The shell: right architecture and right version, before anything else ---
-if (-not (Test-Path $ShellExe)) { throw "The shell was not found at $ShellExe. Build it first (npx tauri build --no-bundle in desktop/)" }
+if (-not (Test-Path $ShellExe)) { throw "The shell was not found at $ShellExe. Build it first (npx tauri build --no-bundle in desktop-tauri/)" }
 if (-not $Version) {
-    $Version = (& node (Join-Path $repo "desktop\scripts\version.mjs") --print).Trim()
-    if ($LASTEXITCODE -ne 0) { throw "Could not read the version from desktop/package.json" }
+    $Version = (& node (Join-Path $repo "desktop-tauri\scripts\version.mjs") --print).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Could not read the version from desktop-tauri/package.json" }
 }
 Assert-PeMachine $ShellExe $Arch
 Assert-ShellVersion $ShellExe $Version
@@ -146,7 +146,7 @@ $pruned | Remove-Item -Force
 
 # --- Desktop: the bridge, the built UI, and the one package the bridge needs ---
 $desk = Join-Path $stage "desktop"
-$bridgeSrc = Join-Path $repo "desktop\bridge"
+$bridgeSrc = Join-Path $repo "desktop-tauri\bridge"
 $bridgeDst = Join-Path $desk "bridge"
 New-Item -ItemType Directory -Force $bridgeDst | Out-Null
 # bridge.ts and the files next to it that it imports (never the tests)
@@ -162,31 +162,31 @@ while ($queue.Count -gt 0) {
         $queue.Enqueue($m.Groups[1].Value)
     }
 }
-Copy-Item (Join-Path $repo "desktop\package.json") (Join-Path $desk "package.json")
-$dist = Join-Path $repo "desktop\dist"
-if (-not (Test-Path (Join-Path $dist "index.html"))) { throw "desktop/dist is not built. Run npm run build in desktop/" }
+Copy-Item (Join-Path $repo "desktop-tauri\package.json") (Join-Path $desk "package.json")
+$dist = Join-Path $repo "desktop-tauri\dist"
+if (-not (Test-Path (Join-Path $dist "index.html"))) { throw "desktop-tauri/dist is not built. Run npm run build in desktop-tauri/" }
 Copy-Item $dist (Join-Path $desk "dist") -Recurse
-$ws = Join-Path $repo "desktop\node_modules\ws"
-if (-not (Test-Path $ws)) { throw "desktop/node_modules/ws is missing. Run npm ci in desktop/" }
+$ws = Join-Path $repo "desktop-tauri\node_modules\ws"
+if (-not (Test-Path $ws)) { throw "desktop-tauri/node_modules/ws is missing. Run npm ci in desktop-tauri/" }
 New-Item -ItemType Directory -Force (Join-Path $desk "node_modules") | Out-Null
 Copy-Item $ws (Join-Path $desk "node_modules\ws") -Recurse
 
 # The Terminal's pseudo-terminal (bridge/terminal.ts): @lydell/node-pty, a few files of
 # JavaScript, and one package for the platform with the prebuilt addon, ConPTY's conpty.dll
-# and OpenConsole.exe (Microsoft's, MIT). desktop/node_modules has this build machine's
+# and OpenConsole.exe (Microsoft's, MIT). desktop-tauri/node_modules has this build machine's
 # platform only, so, as for the runner, npm installs the target's (--os/--cpu) from the
 # lockfile, checked against its hashes, in a folder of its own. Nothing is compiled and no
 # install script runs.
 $ptyWork = Join-Path ([System.IO.Path]::GetTempPath()) "threadbear-pty-$Arch-$PID"
 New-Item -ItemType Directory -Force $ptyWork | Out-Null
 try {
-    foreach ($f in "package.json", "package-lock.json") { Copy-Item (Join-Path $repo "desktop\$f") (Join-Path $ptyWork $f) }
+    foreach ($f in "package.json", "package-lock.json") { Copy-Item (Join-Path $repo "desktop-tauri\$f") (Join-Path $ptyWork $f) }
     Push-Location $ptyWork
     try {
         Invoke-Native "npm ci (desktop, for the terminal)" { npm ci --omit=dev --ignore-scripts --no-audit --no-fund --os=win32 --cpu=$npmCpu }
     } finally { Pop-Location }
     $ptyPackage = Join-Path $ptyWork "node_modules\@lydell\node-pty-win32-$npmCpu"
-    if (-not (Test-Path (Join-Path $ptyPackage "prebuilds\win32-$npmCpu\conpty.node"))) { throw "The terminal's @lydell/node-pty-win32-$npmCpu package did not install, so the Terminal would not work. Is it in desktop/package-lock.json?" }
+    if (-not (Test-Path (Join-Path $ptyPackage "prebuilds\win32-$npmCpu\conpty.node"))) { throw "The terminal's @lydell/node-pty-win32-$npmCpu package did not install, so the Terminal would not work. Is it in desktop-tauri/package-lock.json?" }
     Copy-Item (Join-Path $ptyWork "node_modules\@lydell") (Join-Path $desk "node_modules\@lydell") -Recurse
 } finally {
     Remove-Item $ptyWork -Recurse -Force -ErrorAction SilentlyContinue
@@ -216,8 +216,8 @@ if (-not $cargoExe) { throw "cargo is not on the PATH. The notices list the Rust
 $triple = if ($Arch -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
 $nodeVersion = (Get-Content (Join-Path $installerDir "node.json") -Raw | ConvertFrom-Json).version
 Invoke-Native "make-notices.mjs" {
-    node (Join-Path $installerDir "make-notices.mjs") --stage $stage --desktop (Join-Path $repo "desktop") `
-        --cargo-manifest (Join-Path $repo "desktop\src-tauri\Cargo.toml") --triple $triple `
+    node (Join-Path $installerDir "make-notices.mjs") --stage $stage --desktop (Join-Path $repo "desktop-tauri") `
+        --cargo-manifest (Join-Path $repo "desktop-tauri\src-tauri\Cargo.toml") --triple $triple `
         --node-version $nodeVersion --out (Join-Path $stage "THIRD-PARTY-NOTICES.txt")
 }
 

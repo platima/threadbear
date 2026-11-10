@@ -105,7 +105,7 @@ export type AgentApprovalRequest = { name: string; title: string; input: Record<
 // Plan first ranks with ask: its agent changes nothing, and only Mike's
 // approval takes it out of plan mode.
 const ACCESS: Record<PermissionMode, number> = { ask: 0, plan: 0, auto: 1, full: 2 };
-const MODE_NAMES: Record<PermissionMode, string> = { full: 'Full access', auto: 'Auto', ask: 'Ask before edits', plan: 'Plan first' };
+export const MODE_NAMES: Record<PermissionMode, string> = { full: 'Full access', auto: 'Auto', ask: 'Ask before edits', plan: 'Plan first' };
 export const raises = (to: PermissionMode, from: PermissionMode): boolean => ACCESS[to] > ACCESS[from];
 // What a thread's agent can do: its mode, and whether its CLI is shut in a
 // sandbox (sandbox.ts), where even Full access reaches only its folder.

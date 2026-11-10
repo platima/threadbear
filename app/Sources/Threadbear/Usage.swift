@@ -261,14 +261,18 @@ enum SignIn {
         let codex = account.provider == "codex"
         var env = ""
         if codex, !account.configDir.isEmpty { env = "CODEX_HOME=\(quoted(account.configDir)) " }
-        if !codex, account.id != "claude-main", !account.configDir.isEmpty { env = "CLAUDE_CONFIG_DIR=\(quoted(account.configDir)) " }
-        let binary = cliPath.isEmpty ? (codex ? "codex" : "claude") : quoted(cliPath)
+        if account.provider == "claude" || account.provider.isEmpty, account.id != "claude-main", !account.configDir.isEmpty { env = "CLAUDE_CONFIG_DIR=\(quoted(account.configDir)) " }
+        let info = Providers.info(account.provider)
+        // "opencode auth login": the program, then what it's asked to do.
+        let words = info.loginCommand.split(separator: " ").map(String.init)
+        let binary = cliPath.isEmpty ? (words.first ?? "claude") : quoted(cliPath)
+        let command = words.dropFirst().joined(separator: " ")
         return """
         #!/bin/zsh -l
         export PATH="$HOME/.local/bin:$PATH"
-        printf '%s\\n' \(quoted("Signing in to \(codex ? "Codex" : "Claude") for Threadbear (\(Self.oneLine(account.title)))."))
+        printf '%s\\n' \(quoted("Signing in to \(info.name) for Threadbear (\(Self.oneLine(account.title)))."))
         echo
-        \(env)\(binary) \(codex ? "login" : "auth login")
+        \(env)\(binary) \(command)
         echo
         echo "Done. Go back to Threadbear and press Send again. You can close this window."
 

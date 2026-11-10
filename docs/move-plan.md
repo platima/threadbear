@@ -12,11 +12,11 @@ over"), and step 6's Later list has this as `move_thread` with a runner.
 ## What it's like when it's done
 
 - A thread's menu (sidebar and the ... menu) has **Move to** with each other
-  runner. Offline ones are greyed with "offline". Picking one opens a small
-  sheet: the folder it will run in there and the login, both filled in with
-  that machine's best guess, and a line for anything that won't come (a
-  dev server that will stop, changes in a checkout other threads share).
-  **Move** starts it.
+  runner. Offline ones are greyed with "offline". Picking one moves it
+  straight away, to the folder and login that machine guesses. If it can't
+  go, or something won't come (a dev server that will stop, changes in a
+  checkout other threads share), a small sheet shows the folder and login,
+  both filled in, and says why. **Move** starts it.
 - The row stays where it is and shows "Moving to cloud" with a spinner. A
   thread mid-turn shows "Moves to cloud when this turn ends". Messages sent
   meanwhile wait in its queue and go with it.

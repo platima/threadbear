@@ -7,10 +7,10 @@
 #
 # Requirements (Windows): Inno Setup 6 (ISCC.exe), WiX (dotnet tool: wix), Node
 # and npm, Rust (the notices list the shell's crates), and a built shell for that
-# architecture: the shell is desktop/src-tauri/target/release/threadbear-desktop.exe
-# for x64, and desktop/src-tauri/target/aarch64-pc-windows-msvc/release/ for arm64
+# architecture: the shell is desktop-tauri/src-tauri/target/release/threadbear-desktop.exe
+# for x64, and desktop-tauri/src-tauri/target/aarch64-pc-windows-msvc/release/ for arm64
 # (build with `npx tauri build --no-bundle [--target aarch64-pc-windows-msvc]` in
-# desktop/), or pass -ShellExe. The UI must be built (desktop/dist). Both
+# desktop-tauri/), or pass -ShellExe. The UI must be built (desktop-tauri/dist). Both
 # installers build on an x64 machine.
 #
 # Three ways to run it:
@@ -41,7 +41,7 @@ param(
     [ValidateSet("x64", "arm64")]
     [string]$Arch = "x64",
     [string]$ShellExe = "",    # defaults to the release build for $Arch
-    [string]$Version = "",     # override; defaults to desktop/package.json (required with -FromStage)
+    [string]$Version = "",     # override; defaults to desktop-tauri/package.json (required with -FromStage)
     [string]$SignCmd = "",     # a "sign one file" script or executable; empty = unsigned
     [string]$Publisher = "",   # defaults to $env:THREADBEAR_PUBLISHER, else Platima
     [switch]$StageOnly,        # stage the unsigned tree and stop
@@ -61,15 +61,15 @@ if ($FromStage -and $StageDir) { throw "-StageDir does not apply with -FromStage
 
 $dist = if ($OutDir) { [System.IO.Path]::GetFullPath($OutDir) } else { Join-Path $repo "dist" }
 
-# --- Version: one number in desktop/package.json, checked against the rest ---
+# --- Version: one number in desktop-tauri/package.json, checked against the rest ---
 if ($FromStage) {
     # Nothing is run from the repo here (no node needed): the staging job has
     # already checked the numbers agree, and the version is given.
     if (-not $Version) { throw "-Version is required with -FromStage (the staged tree does not say which release it is for)" }
 } else {
-    & node (Join-Path $repo "desktop\scripts\version.mjs") --check
+    & node (Join-Path $repo "desktop-tauri\scripts\version.mjs") --check
     if ($LASTEXITCODE -ne 0) { throw "The version numbers disagree: see above" }
-    if (-not $Version) { $Version = (& node (Join-Path $repo "desktop\scripts\version.mjs") --print).Trim() }
+    if (-not $Version) { $Version = (& node (Join-Path $repo "desktop-tauri\scripts\version.mjs") --print).Trim() }
 }
 if (-not ($Version -match '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')) { throw "'$Version' is not a semantic version" }
 # Windows Installer wants numbers only: 1.2.3-rc1 becomes 1.2.3 for the MSI
@@ -94,7 +94,7 @@ function Invoke-Signing([string]$Path) {
 # --- Shell (only needed to stage) ---
 function Get-ShellExe {
     if ($ShellExe) { return $ShellExe }
-    $rel = if ($Arch -eq "arm64") { "desktop\src-tauri\target\aarch64-pc-windows-msvc\release" } else { "desktop\src-tauri\target\release" }
+    $rel = if ($Arch -eq "arm64") { "desktop-tauri\src-tauri\target\aarch64-pc-windows-msvc\release" } else { "desktop-tauri\src-tauri\target\release" }
     Join-Path $repo "$rel\threadbear-desktop.exe"
 }
 

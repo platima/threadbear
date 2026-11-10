@@ -150,7 +150,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: desktop
+        working-directory: desktop-tauri
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -159,7 +159,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: desktop-tauri/package-lock.json
       - run: npm ci
       # The UI imports the runner's protocol types, so the runner's packages
       # have to be there for the typecheck to see them.
@@ -171,5 +171,5 @@ jobs:
       # One version number, repeated in four files: they have to agree.
       - run: node scripts/version.mjs --check
       - name: The shell compiles
-        working-directory: desktop/src-tauri
+        working-directory: desktop-tauri/src-tauri
         run: cargo check --locked
