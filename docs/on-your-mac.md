@@ -122,7 +122,10 @@ File references are where to look.
   environment (`THREADBEAR_THREAD_KEY`), never the token. When something
   connects, the runner runs `lsof` and `ps` on that one connection to see
   which process it is and whether it's under a thread's CLI
-  (`runner/src/peer.ts`, docs/protocol.md "Who's really calling").
+  (`runner/src/peer.ts`, docs/protocol.md "Who's really calling"). On
+  Windows it runs `netstat -ano -p tcp` and PowerShell's `Get-CimInstance
+  Win32_Process` instead (`runner/src/peer-windows.ts`), about half a second
+  for each connection.
 - **With the `acpAgents` experiment on** (off by default) it also starts the
   `opencode acp` and Cursor's `agent acp` CLIs for threads on them, runs each
   with `--version` when the runner starts, and runs its own updater
@@ -591,9 +594,21 @@ said otherwise.
   command (`ruleMayCover` in `adapters/codex/approvals.ts`), so it asks each
   time. The standing instructions file is not read through a link (Windows has
   no `O_NOFOLLOW`, so `instructions.ts` looks for one by name).
+- **Which thread a command comes from, on Windows:** the runner works it out from
+  the connection (netstat) and the process's parents (PowerShell), so `tb` run
+  with its key wiped, or with the owner's token, from a thread's shell is still
+  that thread's and is limited as it is. A process the parents cannot reach
+  (one a shell left behind with its parent gone) is the owner's, as on a Mac,
+  where a process group can still name it and Windows has none. The check that
+  keeps a thread's tools from reading the runner's secrets looks at the
+  command's words, as it does on a Mac, with the Windows spellings of the data
+  folder added (`$env:THREADBEAR_HOME`, `%THREADBEAR_HOME%`, other case, a UNC
+  share of the drive, the short 8.3 names); a shell can still spell a path in
+  a way no pattern sees, which SECURITY.md says of the Mac too.
 - **Not on Windows:** Threadbear installing or updating Codex (a `codex.exe` on
   the PATH is used if there is one), runner releases and handovers (there is no
-  `current` link or `launch.mjs` supervision), `lsof` and `ps` checks (so a CLI
+  `current` link or `launch.mjs` supervision), `lsof` and `ps` checks for a
+  stuck CLI (so a CLI
   stuck in a file call isn't spotted, and idle threads whose quiet background
   shells are stuck aren't nudged), the idle check, the screen-dialog and secret
   checks, docker sandboxes, stopping a crashed CLI's leftover tool commands

@@ -8,7 +8,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { makeHarness } from '../helpers/fakes.ts';
-import { skipOnWindows } from '../helpers/platform.ts';
 import { RpcServer } from '../../src/rpc.ts';
 import { RunnerClient } from '../../src/client.ts';
 import { readToken } from '../../src/config.ts';
@@ -358,13 +357,15 @@ test('the process lookup walks parents to a CLI, and only a real thread counts',
   assert.equal(failing, undefined, 'a failed lookup falls back to the credential');
 });
 
-test('the process lookup finds a real connection through lsof and ps', skipOnWindows('lsof and ps are Unix tools; a thread there is found by the key it was given'), async () => {
+test('the process lookup finds a real connection (lsof and ps, or netstat and PowerShell on Windows)', async () => {
   const { threadOfPort } = await import('../../src/peer.ts');
   const net = await import('node:net');
   const server = net.createServer();
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const addr = server.address() as { port: number };
   const child = spawn(process.execPath, ['-e', `require('net').connect(${addr.port},'127.0.0.1');setTimeout(()=>{},60000)`], { stdio: 'ignore' });
+  // On Windows the end of a killed child is a reset, not an end of file, and an unhandled one fails the run.
+  server.on('connection', (s) => s.on('error', () => undefined));
   const peer = new Promise<number>((r) => server.once('connection', (s) => r(s.remotePort!)));
   try {
     const port = await peer;
