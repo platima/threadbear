@@ -9,7 +9,8 @@ import { Shortcuts } from './Shortcuts.tsx';
 import { TOUR_KEY, Tour } from './Tour.tsx';
 import { PAGES } from './registry.ts';
 import { TerminalDock } from './TerminalDock.tsx';
-import { isNative, startRunner } from '../core/native.ts';
+import { isNative, startRunner, type RunnerWay } from '../core/native.ts';
+import { RUNNER_WAYS, runnerChoiceText, startClick } from '../core/runner-start.ts';
 import { targetFor, terminals } from '../core/terminals.ts';
 import { runUpdateCheck } from './update-state.ts';
 
@@ -41,17 +42,26 @@ export function App({ store }: { store: AppStore }) {
   const snap = useSnap(store);
   const [width, setWidth] = useState(() => clampWidth(readWidth(saved()), window.innerWidth));
   const [help, setHelp] = useState(false);
-  // The banner's Start the runner button: busy until the shell has started the runner, or the
-  // person has taken or turned down the set-up it offered (the shell answers only then), so a second
-  // click can't open a second offer. What went wrong is said beside it.
+  // The banner's Start the runner button: busy until the shell has started the runner (or has
+  // answered that none is set up), so a second click can't start it twice. With none set up, the
+  // banner offers the two ways to start one, in the page, where it can be seen. What went wrong
+  // is said beside the button.
   const [starting, setStarting] = useState(false);
+  const [choosing, setChoosing] = useState(false);
   const [startProblem, setStartProblem] = useState<string>();
-  const start = async () => {
+  const start = async (way?: RunnerWay) => {
     setStarting(true);
+    setChoosing(false);
     setStartProblem(undefined);
-    const problem = await startRunner();
+    if (way) {
+      setStartProblem(await startRunner(way));
+      setStarting(false);
+      return;
+    }
+    const clicked = await startClick();
     setStarting(false);
-    setStartProblem(problem);
+    if (clicked.kind === 'choose') setChoosing(true);
+    else setStartProblem(clicked.problem);
   };
   const [tour, setTour] = useState(false);
   // The Terminal: its panel under the page, and a counter that asks the screen to take the keyboard.
@@ -173,11 +183,24 @@ export function App({ store }: { store: AppStore }) {
             {snap.conn === 'closed' && isNative() && (
               <>
                 {' '}
-                <button className="ghost" disabled={starting} aria-busy={starting} onClick={() => void start()} title={starting ? 'Working on it: waiting for the runner to start, or for your answer to the window that opened' : 'Start the runner, or choose how it should start'}>
+                <button className="ghost" disabled={starting} aria-busy={starting} onClick={() => void start()} title={starting ? 'Working on it: waiting for the runner to start' : 'Start the runner, or choose how it should start if none is set up'}>
                   {starting ? 'Starting...' : 'Start the runner'}
                 </button>
                 {startProblem && <span className="error"> {startProblem}</span>}
               </>
+            )}
+            {snap.conn === 'closed' && isNative() && choosing && (
+              <div className="runnerChoice">
+                <p>{runnerChoiceText()}</p>
+                {RUNNER_WAYS.map((w) => (
+                  <button key={w.way} className="ghost" disabled={starting} onClick={() => void start(w.way)} title={w.tip}>
+                    {w.label}
+                  </button>
+                ))}
+                <button className="ghost" onClick={() => setChoosing(false)} title="Close this without setting up a runner">
+                  Not now
+                </button>
+              </div>
             )}
           </div>
         )}

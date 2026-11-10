@@ -131,6 +131,9 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .composer .bar select, .composer .bar input { padding: 2px 6px; font-size: 12px; }
 .banner { background: var(--warn); color: #000; padding: 6px 16px; font-size: 13px; }
 .banner.bad { background: var(--bad); color: #fff; }
+.banner .runnerChoice { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.35); }
+.banner .runnerChoice p { margin: 0 0 6px; max-width: 70ch; }
+.banner .runnerChoice button { margin-right: 6px; }
 .empty { margin: auto; color: var(--dim); text-align: center; padding: 40px; }
 .loadmore { text-align: center; padding: 8px; }
 

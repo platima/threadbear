@@ -37,8 +37,8 @@ async function toast(title: string, body: string): Promise<void> {
 // the window ends the app (Settings, This app), and starting the runner. In a
 // plain browser tab they do nothing.
 
-// (`using.call` is the shell's channel; the tests pass their own.)
-type Using = { call?: Invoke | null };
+// (`using.call` is the shell's channel; the tests pass their own, and a short `waitMs`.)
+type Using = { call?: Invoke | null; waitMs?: number };
 const channel = (using: Using): Invoke | undefined => (using.call === undefined ? invoke() : (using.call ?? undefined));
 
 // Whether closing the window ends the app. Undefined outside the shell, when it won't
@@ -81,18 +81,75 @@ export async function openClaudeLogin(kind: 'login' | 'setup-token', configDir?:
   }
 }
 
-// Starts the runner if it is set up, or offers to set one up that runs only while
-// the app is open. It answers when the start is done, or the offer taken or declined,
-// not before (the shell waits), so the page can show it is working until then. Gives
-// back what went wrong, or undefined when it started or was declined.
-export async function startRunner(using: Using = {}): Promise<string | undefined> {
+// How long the page waits for the shell to answer about the runner. Setting up the task
+// takes a few seconds; the button stays "Starting..." until then, and this keeps it from
+// staying that way for ever if the shell never answers (the button once did nothing,
+// with no word about why).
+const SHELL_WAIT_MS = 60_000;
+
+// Which of the two systems the app is on, as the page can tell (the user agent of the
+// shell's webview): the program, its folders and what it is called differ.
+export type PagePlatform = 'windows' | 'linux';
+export const pagePlatform = (userAgent: string = typeof navigator === 'undefined' ? '' : navigator.userAgent): PagePlatform => (/windows/i.test(userAgent) ? 'windows' : 'linux');
+
+// The app's program, as typed in a terminal opened in the folder it is installed in (it
+// need not be on the PATH), and where it keeps shell.log.
+export const appCommand = (platform: PagePlatform = pagePlatform()): string => (platform === 'windows' ? '.\\Threadbear.exe' : './threadbear-desktop');
+export const shellLogFolder = (platform: PagePlatform = pagePlatform()): string => (platform === 'windows' ? '%LOCALAPPDATA%\\Threadbear' : '~/.local/state/Threadbear');
+
+// What is said when the shell does not answer.
+export const shellSilent = (platform: PagePlatform = pagePlatform()): string =>
+  `The app did not answer. Its shell.log (in ${shellLogFolder(platform)}) says what it did. You can also set the runner up yourself: in a terminal opened in the folder Threadbear is installed in, run ${appCommand(platform)} --runner --on-demand`;
+
+function within<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(shellSilent()), ms);
+    work.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+const words = (e: unknown): string => (typeof e === 'string' ? e : ((e as Error)?.message ?? 'unknown'));
+
+// How the runner is set up: at sign-in, only while the app is open, or 'none' (no task
+// of ours). Undefined outside the shell, and when the shell refuses or gives a word that
+// is not one of these; 'silent' when it did not answer in time, which is a failure of its
+// own and not a reason to ask it for anything more.
+export type RunnerSetup = 'none' | 'sign-in' | 'on-demand';
+
+export async function runnerSetup(using: Using = {}): Promise<RunnerSetup | 'silent' | undefined> {
+  const call = channel(using);
+  if (!call) return undefined;
+  try {
+    const word = await within(call<string>('runner_setup'), using.waitMs ?? SHELL_WAIT_MS);
+    return word === 'sign-in' || word === 'on-demand' || word === 'none' ? word : undefined;
+  } catch (e) {
+    return e === shellSilent() ? 'silent' : undefined;
+  }
+}
+
+// Starts the runner: 'start' one that is set up, or set one up and start it, 'on-demand'
+// (only while the app is open) or at 'sign-in'. The shell decides what is run; the page
+// only names which. It answers when that is done, so the page can show it is working
+// until then. Gives back what went wrong, or undefined when it worked.
+export type RunnerWay = 'start' | 'on-demand' | 'sign-in';
+
+export async function startRunner(how: RunnerWay = 'start', using: Using = {}): Promise<string | undefined> {
   const call = channel(using);
   if (!call) return 'Only the installed app can start the runner.';
   try {
-    await call('start_runner');
+    await within(call('start_runner', { how }), using.waitMs ?? SHELL_WAIT_MS);
     return undefined;
   } catch (e) {
-    return typeof e === 'string' ? e : ((e as Error)?.message ?? 'unknown');
+    return words(e);
   }
 }
 
