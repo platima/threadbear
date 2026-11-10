@@ -33,6 +33,8 @@ type Opts = {
   env?: NodeJS.ProcessEnv;
   homeWarning?: string;
   startSays?: string[];
+  // What `convex login status` fails with (until a login is made), whatever the saved login is.
+  statusSays?: string;
 };
 
 // A computer with a clone of the repo, a profile folder and a data folder, and an account on the other end.
@@ -69,6 +71,7 @@ function world(o: Opts = {}) {
     installed: o.installed ?? false,
     startSays: [...(o.startSays ?? ['Started the runner.'])],
     gitHead: true,
+    statusSays: o.statusSays,
   };
   const calls: Call[] = [];
   const out: string[] = [];
@@ -81,9 +84,13 @@ function world(o: Opts = {}) {
   const convexFake = (args: string[], call: Call) => {
     const e = call.env ?? {};
     const verb = args.slice(0, 2).join(' ');
-    if (verb === 'login status') return acct.token ? res(0, '', `Logged in.\nTeams:\n${acct.teams.map((t) => `  - ${t.name} (${t.slug})`).join('\r\n')}\r\n`) : res(1, '', 'Not logged in.');
+    if (verb === 'login status') {
+      if (acct.statusSays) return res(1, '', acct.statusSays);
+      return acct.token ? res(0, '', `Logged in.\nTeams:\n${acct.teams.map((t) => `  - ${t.name} (${t.slug})`).join('\r\n')}\r\n`) : res(1, '', 'Not logged in.');
+    }
     if (args[0] === 'login') {
       acct.token = true;
+      acct.statusSays = undefined;
       fs.mkdirSync(path.join(profile, '.convex'), { recursive: true });
       fs.writeFileSync(path.join(profile, '.convex', 'config.json'), JSON.stringify({ accessToken: ACCESS_TOKEN }));
       return res(0);
@@ -560,7 +567,10 @@ test('restarting the runner: stop then start with --yes, the commands to run by 
   assert.match(no.text(), /Not restarting \(--no-restart\)/);
   assert.ok(no.text().includes(`node "${script}" --stop`));
   assert.ok(no.text().includes(`node "${script}" --start`));
-  assert.match(no.text(), /tb restart/);
+  // `tb restart` is not offered: from a terminal it refuses a runner that has no release.json, which an
+  // installed Windows or Linux runner has not (runner/src/tb-dev.ts, restartRefusal). The Runners page waits for idle.
+  assert.doesNotMatch(no.text(), /tb restart/);
+  assert.match(no.text(), /Runners page, which waits until no thread is busy/);
   assert.match(no.text(), /First restart the runner \(step 8\)/);
 
   const none = world({ installed: false });
@@ -606,6 +616,130 @@ test('a runner installed here is restarted only when --home is the folder it use
   assert.equal(await linux.run('--yes', '--home', other(linux)), 0, linux.text());
   assert.deepEqual(touched(linux), []);
   assert.match(linux.text(), /systemd user service/);
+});
+
+test('inside a Threadbear thread the installed runner is never stopped: it says how to restart it from outside, and the plan promises no restart', async () => {
+  // Stopping the runner a thread runs on ends the script before it starts the runner again, and the thread's
+  // turn with it (runner/scripts/install-runner.sh refuses the real runner from any thread for the same reason).
+  const touched = (w: ReturnType<typeof world>) => w.calls.filter((c) => /install-(windows|linux)\.mjs$/.test(c.args[0] ?? ''));
+  for (const [platform, name] of [['win32', 'THREADBEAR_THREAD_ID'], ['linux', 'THREADBEAR_THREAD_ID'], ['win32', 'THREADBARE_THREAD_ID']] as const) {
+    const w = world({ platform, installed: true, env: { [name]: 'a1b2c3d4' } });
+    assert.equal(await w.run('--yes', '--home', w.home), 0, `${platform} ${name}: ${w.text()}`);
+    assert.deepEqual(touched(w), [], `${platform} ${name}: the installer was not run at all: not --installed, not --stop, not --start`);
+    assert.match(w.text(), /Not restarting: this is running inside a Threadbear thread/);
+    assert.match(w.text(), /Runners page, which waits until no thread is busy/);
+    assert.match(w.text(), /from a terminal outside any thread/);
+    assert.ok(w.text().includes(`install-${platform === 'win32' ? 'windows' : 'linux'}.mjs" --stop`) || w.text().includes(`install-${platform === 'win32' ? 'windows' : 'linux'}.mjs --stop`), 'the commands are given');
+    assert.doesNotMatch(w.text(), /the runner restarted/);
+    assert.match(w.text(), /First restart the runner \(step 8\)/, 'the end still says the runner has to be restarted');
+  }
+
+  // The plan promises no restart, in a dry run or in the list a run is asked about.
+  const env = { THREADBEAR_THREAD_ID: 'a1b2c3d4' };
+  const dry = world({ installed: true, env });
+  assert.equal(await dry.run('--dry-run', '--home', dry.home), 0, dry.text());
+  assert.doesNotMatch(dry.text(), /todo {2}restart the runner/);
+  assert.match(dry.text(), /Not restarting: this is running inside a Threadbear thread/);
+  const onTty = world({ installed: true, tty: true, answers: ['y'], env });
+  assert.equal(await onTty.run('--home', onTty.home), 0, onTty.text());
+  assert.deepEqual(onTty.asked.map((q) => q.replace(/\s+$/, '')), ['Go ahead? [y/N]'], 'asked once, about the plan, and never about restarting');
+  assert.deepEqual(onTty.out.filter((l) => /^ {2}- /.test(l) && /restart/i.test(l)), [], 'no restart in the list of what it will do');
+  assert.deepEqual(touched(onTty), []);
+
+  // A thread of a runner that uses another folder: the folder's runner is not the installed one, so that note stands.
+  const other = world({ installed: true, env });
+  assert.equal(await other.run('--yes', '--home', path.join(other.root, 'another runner data')), 0, other.text());
+  assert.match(other.text(), /uses the standard data folder/);
+  assert.deepEqual(touched(other), []);
+});
+
+test('a Node older than 24 is told what to install, before the runner\'s TypeScript is read', async () => {
+  assert.equal(sync.oldNodeMessage('24.0.0'), undefined);
+  assert.equal(sync.oldNodeMessage('25.2.1'), undefined);
+  assert.equal(sync.oldNodeMessage('26.0.0'), undefined);
+  for (const version of ['22.18.0', '20.11.1', '18.20.4', '9.9.9', 'not a version']) {
+    const message = sync.oldNodeMessage(version) as string;
+    assert.match(message, new RegExp(`^Node ${version.replace(/\./g, '\\.')} is too old: Threadbear needs Node 24 or newer\\. Install it from https://nodejs\\.org`), version);
+    assert.match(message, /node --version/);
+  }
+  // main() says it for a Node that is handed in, and touches nothing.
+  const w = world();
+  w.deps.nodeVersion = '22.18.0';
+  assert.equal(await w.run('--yes', '--home', w.home), 1);
+  assert.match(w.errs.join('\n'), /Failed: Node 22\.18\.0 is too old/);
+  assert.equal(w.calls.length, 0, 'nothing was run');
+  assert.equal(fs.existsSync(w.home), false);
+});
+
+test('run as a program on a Node that cannot read .ts files: it says what to install, not ERR_UNKNOWN_FILE_EXTENSION', (t) => {
+  // Node 20 and 22 before 22.18 cannot load the .ts files in runner/src. Here the same is made by switching
+  // type stripping off, with a preload that makes this Node say it is 20.11.1: no second Node is needed.
+  const probe = spawnSync(process.execPath, ['--no-experimental-strip-types', '-e', '0'], { encoding: 'utf8' });
+  if (probe.status !== 0) return t.skip(`this Node has no --no-experimental-strip-types switch: ${probe.stderr.trim().split('\n')[0]}`);
+  const dir = tmpDir();
+  const preload = path.join(dir, 'pretend-old-node.mjs');
+  fs.writeFileSync(preload, "Object.defineProperty(process.versions, 'node', { value: '20.11.1' });\n");
+  const script = path.join(REPO, 'scripts', 'setup-sync.mjs');
+  const old = ['--no-experimental-strip-types', '--import', pathToFileURL(preload).href];
+  const r = spawnSync(process.execPath, [...old, script, '--dry-run'], { cwd: REPO, encoding: 'utf8', env: process.env, timeout: 60_000 });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /Failed: Node 20\.11\.1 is too old: Threadbear needs Node 24 or newer\. Install it from https:\/\/nodejs\.org/);
+  assert.doesNotMatch(r.stderr, /ERR_UNKNOWN_FILE_EXTENSION|\n\s+at /, 'no stack trace');
+  assert.equal(r.stdout, '', 'nothing else was said or done');
+
+  // Imported by something else on that Node, it throws the same words and loads nothing.
+  const code = `import(${JSON.stringify(pathToFileURL(script).href)}).then(() => console.log('loaded'), (e) => console.log(e.message));`;
+  const imported = spawnSync(process.execPath, [...old, '--input-type=module', '-e', code], { cwd: REPO, encoding: 'utf8', env: process.env, timeout: 60_000 });
+  assert.equal(imported.status, 0, imported.stderr);
+  assert.match(imported.stdout, /^Node 20\.11\.1 is too old: Threadbear needs Node 24 or newer\./);
+});
+
+// A saved login, and the deployment's other half of it, as a person who has run this before has.
+function saveLogin(w: ReturnType<typeof world>) {
+  w.acct.token = true;
+  fs.mkdirSync(path.join(w.profile, '.convex'), { recursive: true });
+  fs.writeFileSync(path.join(w.profile, '.convex', 'config.json'), JSON.stringify({ accessToken: ACCESS_TOKEN }));
+}
+
+test('a saved login that cannot be checked because the network is down is left alone: no forced browser login', async () => {
+  const downs = [
+    'Error: getaddrinfo ENOTFOUND api.convex.dev',
+    'connect ECONNREFUSED 104.18.0.1:443',
+    'TypeError: fetch failed',
+    'Error: connect ETIMEDOUT 104.18.0.1:443',
+    'Error: getaddrinfo EAI_AGAIN api.convex.dev',
+    'Error: read ECONNRESET',
+    'Error: socket hang up',
+    'Error: A network error occurred',
+  ];
+  for (const says of downs) {
+    const w = world({ statusSays: says });
+    saveLogin(w);
+    assert.equal(await w.run('--yes', '--no-restart', '--home', w.home), 1, `${says}: ${w.text()}`);
+    assert.match(w.errs.join('\n'), /Couldn't reach Convex to check the saved login/, says);
+    assert.match(w.errs.join('\n'), /internet connection/, says);
+    assert.doesNotMatch(w.text(), /didn't accept the saved login/, says);
+    assert.deepEqual(w.convexCalls().filter((c) => MUTATING.test(c)), [], `${says}: nothing was made or logged in`);
+    assert.equal(w.convexCalls().some((c) => /--force/.test(c)), false);
+    assert.equal(readJson(path.join(w.profile, '.convex', 'config.json')).accessToken, ACCESS_TOKEN, 'the saved login is as it was');
+    assert.equal(fs.existsSync(path.join(w.home, 'runner.json')), false, 'runner.json was not written');
+  }
+  // Anything else Convex says is still a login it did not accept: it logs in again, with --force.
+  const w = world({ statusSays: 'Error: Unauthorized: this access token is no longer valid.' });
+  saveLogin(w);
+  assert.equal(await w.run('--yes', '--no-restart', '--home', w.home), 0, w.text());
+  assert.match(w.text(), /Convex didn't accept the saved login \(.*Unauthorized/);
+  assert.ok(w.convexCalls().includes('login --device-name DESK-PC --login-flow poll --force'), w.convexCalls().join(' | '));
+  // Said in a dry run too: there it never asks Convex, so it is not a worry.
+  const dry = world({ statusSays: 'Error: getaddrinfo ENOTFOUND api.convex.dev' });
+  saveLogin(dry);
+  assert.equal(await dry.run('--dry-run', '--home', dry.home), 0, dry.text());
+  assert.deepEqual(dry.convexCalls().filter((c) => c.startsWith('login')), []);
+});
+
+test('what looks like the network being down, and what does not', () => {
+  for (const yes of ['getaddrinfo ENOTFOUND api.convex.dev', 'ECONNREFUSED', 'ETIMEDOUT', 'fetch failed', 'EAI_AGAIN', 'ENETUNREACH', 'Network request failed', 'socket hang up']) assert.equal(sync.looksOffline(yes), true, yes);
+  for (const no of ['', 'Not logged in.', 'Unauthorized: this access token is no longer valid.', 'Logged in.\nTeams:\n  - My Team (my-team)', undefined]) assert.equal(sync.looksOffline(no), false, String(no));
 });
 
 test('a deploy key already in the data folder, with no address anywhere, is used: another deployment is not made to go with it', async () => {

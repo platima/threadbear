@@ -317,9 +317,12 @@ this install has none until someone makes one. `node scripts/setup-sync.mjs
 --dry-run` from a clone of the repository shows what that would do, and without
 `--dry-run` it logs them in to Convex (**Ask** them to approve it in their
 browser), makes the project, the keys and the runner.json entries, deploys the
-backend and restarts the runner. Show them the dry run first, and never print
-or send what it writes under `secrets\`. docs/pairing.md has the rest. To join a
-deployment that already exists instead, copy its key and address as in section 6.
+backend and restarts the runner. From inside a Threadbear thread it does not
+restart the runner (that would end the thread's turn): it says how, and the
+person does it from the Runners page or a terminal outside any thread. Show them
+the dry run first, and never print or send what it writes under `secrets\`.
+docs/pairing.md has the rest. To join a deployment that already exists instead,
+copy its key and address as in section 6.
 
 What's left out on Windows: everything that needs a Mac (the iOS simulator,
 Xcode, BrowserBear, ComputerCub, dialogs on the screen), Threadbear installing

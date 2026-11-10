@@ -1,5 +1,7 @@
 // node --test desktop-tauri/src/ui/pages-lib/devices-words.test.ts
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { test } from 'node:test';
 import { NO_SYNC_URL, pairingOffNote } from './devices-words.ts';
 
@@ -23,4 +25,14 @@ test('every other reason is said as the runner gave it, with nothing added', () 
   // Only the exact reason gets the advice, not one that happens to mention it.
   const near = 'sync.url is set but no sync.url in runner.json worked';
   assert.equal(pairingOffNote(near), `Pairing needs the sync backend, and it's off: ${near}`);
+});
+
+// The page has to use the helper: the typecheck and the tests above would pass just the same if the
+// note went back to being written out by hand in the page, without the advice. This reads the page's
+// source, as tips.test.ts does.
+test('the Phone & browser page shows the note from pairingOffNote, and keeps no wording of its own', () => {
+  const page = fs.readFileSync(path.join(import.meta.dirname, 'settings-devices.tsx'), 'utf8');
+  assert.match(page, /import \{ pairingOffNote \} from '\.\/devices-words\.ts';/);
+  assert.match(page, /\{off && <Note>\{pairingOffNote\(reason \?\? ''\)\}<\/Note>\}/, "the note is shown while pairing is off, with the runner's reason");
+  assert.doesNotMatch(page, /Pairing needs the sync backend/, 'the words live in devices-words.ts only');
 });

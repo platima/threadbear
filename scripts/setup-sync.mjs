@@ -27,13 +27,21 @@
 //   6. runner.json: sync.url and sync.name merged in, everything else left as it is
 //   7. the backend and the website, deployed (runner/scripts/deploy-backend.mjs)
 //   8. the runner restarted, so it reads the new runner.json (the installed one, and
-//      only when --home is the data folder it uses: another folder's runner is left alone)
+//      only when --home is the data folder it uses: another folder's runner is left
+//      alone, and so is any runner when this is run inside a Threadbear thread, as
+//      stopping it there would end the thread's turn)
 //   9. where to pair: Settings > Phone & browser > Show a code
 //
-// Nothing here is Mike's or the fork's: the project, the deployment and the keys
-// are in your own Convex account and your own data folder.
+// Nothing in this script is Mike's or the fork's: the project, the deployment and
+// the keys are in your own Convex account and your own data folder. (The backend
+// it deploys sends phone notifications through the push relay, which is Mike's
+// unless PUSH_RELAY is off: docs/pairing.md, "Privacy".)
 //
-// Node built-ins only, so it runs before the repo's packages are installed.
+// Node built-ins and the runner's own sources only, so it runs before the repo's
+// packages are installed. Those sources are TypeScript, which only Node 24 and
+// newer (and some 22) load, so they are loaded after the Node version has been
+// checked and not at the top: on an older Node the check can still say what to
+// install, where a static import would die first with ERR_UNKNOWN_FILE_EXTENSION.
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -43,10 +51,50 @@ import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { isJoining, runnerKeyPlan } from './runner-key-plan.mjs';
-import { ConvexAdminError, convexEnv, readConvexAdmin, siteOf } from '../runner/src/convex-admin.ts';
-import { readRunnerJson, RunnerJsonError, writeRunnerJson } from '../runner/src/config.ts';
-import { dataDirFor, dataDirWarning } from '../runner/src/platform.ts';
-import { nodeBin, npmCommand, pathWith, tarProgram } from '../runner/src/node-tools.ts';
+
+export const MIN_NODE = 24;
+
+// Why this Node can't run the script, if it can't, and what to do about it.
+export function oldNodeMessage(version = process.versions.node) {
+  const major = Number(String(version).split('.')[0]);
+  if (major >= MIN_NODE) return undefined;
+  return `Node ${version} is too old: Threadbear needs Node ${MIN_NODE} or newer. Install it from https://nodejs.org (or with your package manager), open a new terminal, check that "node --version" says ${MIN_NODE} or more, and run this again.`;
+}
+
+// Whether this file is the program being run, not something a test imports.
+// Compared by real path, and without regard to case on Windows, where
+// `d:\repos\...` and `D:\Repos\...` are the same file.
+function ranAsScript() {
+  if (!process.argv[1]) return false;
+  const real = (p) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const a = real(process.argv[1]);
+  const b = real(fileURLToPath(import.meta.url));
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+// The runner's own modules, which the steps below use. Left unset on a Node too old to load them.
+let ConvexAdminError, convexEnv, readConvexAdmin, siteOf;
+let readRunnerJson, RunnerJsonError, writeRunnerJson;
+let dataDirFor, dataDirWarning;
+let nodeBin, npmCommand, pathWith, tarProgram;
+const tooOld = oldNodeMessage();
+if (tooOld) {
+  // Nothing more can be loaded. As a program it says so and stops; imported by something else it throws.
+  if (!ranAsScript()) throw new Error(tooOld);
+  console.error(`\nFailed: ${tooOld}`);
+  process.exitCode = 1;
+} else {
+  ({ ConvexAdminError, convexEnv, readConvexAdmin, siteOf } = await import('../runner/src/convex-admin.ts'));
+  ({ readRunnerJson, RunnerJsonError, writeRunnerJson } = await import('../runner/src/config.ts'));
+  ({ dataDirFor, dataDirWarning } = await import('../runner/src/platform.ts'));
+  ({ nodeBin, npmCommand, pathWith, tarProgram } = await import('../runner/src/node-tools.ts'));
+}
 
 export const USAGE = `node scripts/setup-sync.mjs [--dry-run] [--yes] [--team SLUG] [--project NAME]
                             [--region REGION] [--name NAME] [--home DIR] [--no-restart]
@@ -63,7 +111,8 @@ does what is missing.
   --name NAME    what the phone calls this computer (default: its host name)
   --home DIR     the runner's data folder (default $THREADBEAR_HOME, else the runner's own).
                  The installed runner is restarted only when this is the folder it uses
-  --no-restart   don't restart the runner; say how to do it
+  --no-restart   don't restart the runner; say how to do it. (It is never restarted
+                 from inside a Threadbear thread, as that would end the thread's turn)
 `;
 
 // The nearest Convex region to this computer's time zone, so the phone and the
@@ -96,6 +145,12 @@ export function redact(text) {
     .replace(/\b(?:prod|dev|preview):[a-z0-9-]+\|[A-Za-z0-9+/=_.-]+/gi, '[key]')
     .replace(/\btbr_[A-Za-z0-9_-]+/g, '[key]')
     .replace(/\b[0-9a-f]{40,}\b/gi, '[key]');
+}
+
+// Whether a command's output says the network failed (no connection, no DNS, a timeout), as against
+// Convex answering and saying no.
+export function looksOffline(text) {
+  return /\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)\b|fetch failed|getaddrinfo|network|socket/i.test(String(text ?? ''));
 }
 
 class Fail extends Error {}
@@ -305,8 +360,9 @@ class Setup {
     if (d.platform !== 'win32' && d.platform !== 'linux') throw new Fail(`Threadbear runs on Windows, Linux and macOS, and this is ${d.platform}.`);
     this.ok(`${d.platform === 'win32' ? 'Windows' : 'Linux'} ${d.arch}`);
 
-    const major = Number(String(d.nodeVersion).split('.')[0]);
-    if (!(major >= 24)) throw new Fail(`Node ${d.nodeVersion} is too old; Threadbear needs 24 or newer (https://nodejs.org). Install it, then run this again with the new one.`);
+    // The same check as the one at the top of the file, for a Node that was handed in.
+    const old = oldNodeMessage(d.nodeVersion);
+    if (old) throw new Fail(old);
     this.ok(`Node ${d.nodeVersion}`);
 
     const git = d.spawn({ file: 'git', args: ['--version'] }, { env: this.baseEnv() });
@@ -371,7 +427,8 @@ class Setup {
   // ---- 3. Convex login
   fetchTeams() {
     const r = this.convex(['login', 'status']);
-    return { ok: r.status === 0, teams: parseTeams(`${r.stdout}\n${r.stderr}`), text: tail(r) };
+    const all = `${r.stdout}\n${r.stderr}\n${r.error?.message ?? ''}`;
+    return { ok: r.status === 0, teams: parseTeams(all), text: tail(r), offline: r.status !== 0 && looksOffline(all) };
   }
 
   login() {
@@ -385,6 +442,11 @@ class Setup {
     if (status.ok) {
       this.teams = status.teams;
       return this.ok('logged in to Convex');
+    }
+    // No network is not a bad login: logging in again would replace one that is fine, and ask for
+    // a browser approval that can't finish either.
+    if (status.offline) {
+      throw new Fail(`Couldn't reach Convex to check the saved login (${status.text || 'no answer'}). The login itself was left as it is. Check your internet connection (and any proxy or VPN), then run this again.`);
     }
     this.note(`Convex didn't accept the saved login (${status.text || 'no answer'}), so logging in again.`);
     this.logIn(true);
@@ -625,15 +687,24 @@ class Setup {
     return path.join(this.d.repo, 'runner', 'scripts', this.d.platform === 'win32' ? 'install-windows.mjs' : 'install-linux.mjs');
   }
 
-  // A note, then how to restart the runner by hand, one note a line.
-  restartHelp(first) {
+  // A note, then how to restart the runner by hand, one note a line. The Runners page waits until
+  // no thread is busy (runner.restart with when: idle); the two commands cut short what is running.
+  restartHelp(first, { outsideThread = false } = {}) {
     const script = this.installerScript();
     this.note(first);
-    this.note("  Restart it from the app's Runners page, or run these two commands:");
+    this.note(`  Restart it from the app's Runners page, which waits until no thread is busy, or run these two commands${outsideThread ? ' from a terminal outside any thread' : ''} (they cut short what a thread is doing):`);
     this.note(`    node ${quote(script)} --stop`);
     this.note(`    node ${quote(script)} --start`);
-    this.note('  To let working threads finish first, run tb restart in a new terminal instead.');
     if (this.d.platform === 'linux') this.note('  (A runner installed with runner/scripts/install-runner.sh is restarted with: systemctl --user restart com.mikerosoft.threadbear.runner.service)');
+  }
+
+  // Whether this is running inside one of a runner's threads. The runner sets these in every
+  // thread it starts (runner/src/restart.ts, threadEnv). Stopping the installed runner from there
+  // ends this script before it starts it again, and the thread's turn with it, as it would for
+  // runner/scripts/install-runner.sh, which refuses the real runner from any thread at all.
+  inThread() {
+    const { env } = this.d;
+    return Boolean(env.THREADBEAR_THREAD_ID || env.THREADBARE_THREAD_ID);
   }
 
   async restart() {
@@ -652,6 +723,9 @@ class Setup {
     if (!samePath(this.home, standard, d.platform)) {
       this.note(`A runner installed on this computer (its ${d.platform === 'win32' ? 'Task Scheduler task' : 'systemd user service'}) uses the standard data folder, ${standard}, not ${this.home}. It was left alone: restarting it would not change the runner that uses ${this.home}.`);
       return this.note(`  To make that runner read the new settings, restart it yourself, the way you started it, with THREADBEAR_HOME set to ${this.home}.`);
+    }
+    if (this.inThread()) {
+      return this.restartHelp("Not restarting: this is running inside a Threadbear thread, and stopping the runner from here would end this thread's turn (and every other thread's work). To make the runner read the new settings:", { outsideThread: true });
     }
     const script = this.installerScript();
     const installer = path.basename(script);
@@ -805,21 +879,4 @@ export async function main(argv, d = realDeps()) {
   }
 }
 
-// Whether this file is the program being run, not something a test imports.
-// Compared by real path, and without regard to case on Windows, where
-// `d:\repos\...` and `D:\Repos\...` are the same file.
-function ranAsScript() {
-  if (!process.argv[1]) return false;
-  const real = (p) => {
-    try {
-      return fs.realpathSync.native(p);
-    } catch {
-      return path.resolve(p);
-    }
-  };
-  const a = real(process.argv[1]);
-  const b = real(fileURLToPath(import.meta.url));
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
-
-if (ranAsScript()) process.exitCode = await main(process.argv.slice(2));
+if (!tooOld && ranAsScript()) process.exitCode = await main(process.argv.slice(2));

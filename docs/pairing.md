@@ -23,8 +23,10 @@ is Mac-only for now, and the script stops if it finds that this computer has one
   with the one on your PATH. `node --version` should say 24 or more.
 - **A clone of the repository**, not the installed app and not a Download ZIP:
   the script lives in the repository, and the backend is deployed from the clone's
-  commit. `git clone https://github.com/platima/threadbear.git`, then work from
-  that folder. Folders with spaces or brackets in their names are fine.
+  commit. Clone the repository this copy of Threadbear comes from
+  (`git clone https://github.com/platima/threadbear.git` is this fork's address; if
+  you forked it again, use your own fork's), then work from that folder. Folders
+  with spaces or brackets in their names are fine.
 - **Threadbear installed, and opened once**, so it has a data folder
   (`%APPDATA%\Threadbear` on Windows, `~/Library/Application Support/Threadbear`
   on Linux). The script makes the folder if it isn't there, but the runner you
@@ -46,7 +48,7 @@ stopped.
 | Option | What it does |
 |---|---|
 | `--dry-run` | say what it would do, and change nothing |
-| `--yes`, `-y` | don't ask: go ahead, use the only Convex team, restart the runner |
+| `--yes`, `-y` | don't ask: go ahead, use the only Convex team, restart the runner (never from inside a Threadbear thread, see step 8) |
 | `--team SLUG` | the Convex team for the project (otherwise the only one, or you choose) |
 | `--project NAME` | the project's name (default `threadbear`) |
 | `--region REGION` | the Convex region (default: the one nearest this computer's time zone) |
@@ -61,7 +63,9 @@ The steps, in order:
    plainly what is missing. On a Mac it says to use `./threadbear setup` instead.
 2. **Packages.** `npm ci` in the clone, for the Convex command line.
 3. **Convex login.** Opens your browser, and you approve it there. Skipped if this
-   computer is already logged in to Convex.
+   computer is already logged in to Convex. If Convex says the saved login is no
+   good, it logs in again. If Convex can't be reached at all (no network), it stops
+   and leaves the saved login alone, since the login may be fine.
 4. **A Convex project** of your own with a production deployment. If you have more
    than one Convex team it asks which (or give `--team`). If the clone already
    points at a project (a `.env.local` from an earlier try), that one is used, and
@@ -90,12 +94,17 @@ The steps, in order:
    the script can do it, after asking, with `--stop` and then `--start` of
    `runner/scripts/install-windows.mjs` or `install-linux.mjs`. Anything a thread
    is doing at that moment is cut short. To let working threads finish first,
-   answer no (or pass `--no-restart`) and run `tb restart` in a new terminal, which
-   waits until no thread is busy, or use the app's Runners page. The installed task
+   answer no (or pass `--no-restart`) and restart it from the app's Runners page,
+   which waits until no thread is busy. The installed task
    or service runs with the standard data folder, so it is restarted only when
    `--home` (or `THREADBEAR_HOME`) is that folder. With another folder the script
    leaves it alone, since ending it would change nothing for the runner that uses
    the folder you named, and says to restart that runner yourself.
+
+   Run from inside a Threadbear thread (an agent running it for you, say), the
+   script never restarts the runner: stopping it from there would end the thread's
+   turn, and every other thread's work with it. It says so, and gives the Runners
+   page and the two commands to run from a terminal outside any thread.
 9. **Where to pair.** Open Threadbear, Settings > Phone & browser.
 
 ## Pairing
@@ -168,9 +177,12 @@ has no server of its own for this.
 
 ## Privacy
 
-The deployment is in your Convex account, and only you and the people you give
-access to the Convex team can read what is stored. Threadbear's maintainers
-see none of it. What the runner stores there is listed under "Who it talks to" in
+The deployment is in your own Convex account, and Convex hosts it: what the runner
+stores there sits on Convex's servers, under Convex's terms. You, the people you
+add to that Convex team, and the phones and browsers you pair can read it. A
+paired phone or browser reads the same data the runner stores, until you sign it
+out. Threadbear's maintainers see none of it, apart from what the push relay is
+sent (below). What the runner stores there is listed under "Who it talks to" in
 docs/on-your-mac.md: thread titles and status, the text of messages (each cut at
 8,000 characters, with the shapes of keys and tokens taken out first, which is a
 best effort and not a guarantee), one line per tool call, project names, and the
@@ -178,14 +190,14 @@ pictures you paste into a message. Tool output and diffs stay on the computer
 unless you turn on full sync (docs/full-convex.md).
 
 Phone notifications go through the push relay, which is Mike Cann's (the
-original author) and the one shared piece: the phone apps' push keys can't be in
-everyone's deployments. Your deployment registers with it, giving its own address,
-and sends it the notification sealed with a key only that phone and your
-deployment have. The relay sees a device token and a thread id, never the title
-or the text (docs/push-relay.md). To keep everything out of it, set the
-environment variable `PUSH_RELAY` to `off` on your production deployment (in the
-Convex dashboard, the deployment's Settings and Environment Variables); the
-phones then get no notifications.
+original author, not this fork's) and the one shared piece: the phone apps' push
+keys can't be in everyone's deployments. Your deployment registers with it,
+giving its own address, and sends it the notification sealed with a key only that
+phone and your deployment have. The relay sees a device token and a thread id,
+never the title or the text (docs/push-relay.md). To keep everything out of it,
+set the environment variable `PUSH_RELAY` to `off` on your production deployment
+(in the Convex dashboard, the deployment's Settings and Environment Variables);
+the phones then get no notifications.
 
 ## Undoing it
 
@@ -209,8 +221,13 @@ touched.
 
 It says what failed and that it can be run again. Common ones:
 
-- *"... is too old; Threadbear needs 24 or newer"*: install a newer Node and run it
-  with that one (`node --version`).
+- *"Node X is too old: Threadbear needs Node 24 or newer"*: install a newer Node
+  from https://nodejs.org and run it with that one (`node --version`). The script
+  checks this before it reads any of the repository's code, so an old Node gets
+  this message and not a stack trace.
+- *"Couldn't reach Convex to check the saved login"*: the network (or a proxy or
+  VPN) was down. The saved login was left as it was; run it again when you are
+  back online.
 - *"isn't a git clone"* or *"has no convex folder"*: you are in the installed app's
   folder or an unpacked ZIP. Use `git clone`.
 - *"Your Convex login has N teams"*: give `--team` with one of the slugs it lists.

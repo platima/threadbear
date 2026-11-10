@@ -46,8 +46,10 @@ File references are where to look.
   registry.npmjs.org. On Windows it starts npm with `node npm-cli.js` where it
   can, and otherwise `npm.cmd` through `cmd.exe`. At the end it can restart the
   runner (after asking) with `install-windows.mjs --stop` and `--start`, or
-  `install-linux.mjs`. On a Mac it does nothing and says to use `./threadbear
-  setup`. Self-hosted Convex stays Mac-only.
+  `install-linux.mjs`, but never from inside a Threadbear thread, where it only
+  says how (it goes by `THREADBEAR_THREAD_ID` in its environment). On a Mac it
+  does nothing and says to use `./threadbear setup`. Self-hosted Convex stays
+  Mac-only.
 - **Or a self-hosted backend** (`setup --self-hosted`, docs/self-hosting.md;
   Convex cloud is the one we recommend): no Convex login or deploy key.
   Instead two Docker containers, `threadbear-convex` (Convex's open source
