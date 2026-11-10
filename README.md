@@ -207,10 +207,13 @@ setup exe or MSI, the Linux `.deb` or `.tar.gz`, or the Android APK. Check it
 against `CHECKSUMS.txt`. The Windows and Linux apps need Claude Code (or Codex)
 signed in, and git, and bring their own Node. The runner works on its own on
 either; following your threads from a phone or the web needs a Convex
-deployment, which `./threadbear setup` on a Mac makes today, and a runner on
-Windows or Linux can join one that exists ([INSTALL.md](INSTALL.md), sections 6
-and 7). The Android app is paired with that deployment by the QR code under
-Settings > Phone & browser on a computer ([docs/android.md](docs/android.md)).
+deployment of your own. `./threadbear setup` on a Mac makes one, and on Windows
+or Linux `node scripts/setup-sync.mjs` does, from a clone of the repository
+([docs/pairing.md](docs/pairing.md): what it creates, what it costs, how to undo
+it). A runner on Windows or Linux can also join one that exists
+([INSTALL.md](INSTALL.md), sections 6 and 7). The Android app is paired with that
+deployment by the QR code under Settings > Phone & browser on a computer
+([docs/android.md](docs/android.md)).
 Android asks to allow installs from your browser or file manager, once.
 
 [docs/guide.md](docs/guide.md) is the full guide to using it (written for the

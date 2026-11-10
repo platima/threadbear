@@ -1195,7 +1195,9 @@ QR code: on the Mac, Settings (⌘,) > Phone & browser > Show the code, then
 scan it with the iPhone app. Keep the code to yourself: anyone who scans it
 can run your agents. The same tab lists each paired phone and browser with
 when it was paired and until when (90 days), and Revoke signs one out and
-stops its notifications; Settings > Unpair this phone on the iPhone forgets it from that side. The
+stops its notifications; Settings > Unpair this phone on the iPhone forgets it from that side. On Windows and
+Linux that button stays greyed, with "no sync.url in runner.json", until `node scripts/setup-sync.mjs` has made
+your Convex backend from a clone of the repository (docs/pairing.md says how, what it creates and how to undo it). The
 terminal command setup used to print still works too:
 
     swift ios/scripts/pair-qr.swift --prod --url <your deployment URL>
