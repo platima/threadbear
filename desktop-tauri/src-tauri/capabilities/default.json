@@ -1,11 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The window's own page, served by the local bridge on loopback. It may pick a folder, show a notification, open a web or mail link in the browser, read and set the Exit on close choice, ask how the runner is set up and for it to be started one of three fixed ways, and open a terminal on one of two fixed sign-in commands (the shell's own five commands: get_exit_on_close, set_exit_on_close, runner_setup, start_runner and open_claude_login), and nothing else.",
+  "description": "The window's own page, served by the local bridge on loopback. It may pick a folder, show a notification, open a web or mail link in the browser, read and set the Exit on close choice, ask how the runner is set up and for it to be started one of three fixed ways, and open a terminal on one of two fixed sign-in commands (the shell's own five commands: get_exit_on_close, set_exit_on_close, runner_setup, start_runner and open_claude_login, each granted by name below and declared in build.rs, as Tauri refuses a remote page its app's commands otherwise), and nothing else.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [
     "core:default",
+    "allow-get-exit-on-close",
+    "allow-set-exit-on-close",
+    "allow-runner-setup",
+    "allow-start-runner",
+    "allow-open-claude-login",
     "dialog:allow-open",
     "notification:default",
     {

@@ -156,8 +156,24 @@ export function threadEnv(threadId: string, home: string, basePath = process.env
     THREADBARE_THREAD_ID: threadId,
     THREADBARE_HOME: home,
     THREADBARE_RUNNER_HOME: home,
-    PATH: basePath ? `${BIN_DIR}${path.delimiter}${basePath}` : BIN_DIR,
+    PATH: threadPath(basePath),
   };
+}
+
+// What a thread's shell finds `tb` and its own tools on: the runner's bin folder first. On Windows the
+// folder of the Node this runner runs on goes next, because `tb` is a script that starts with
+// `#!/usr/bin/env node` and a copy installed with its own Node (the node folder beside the
+// app) has no Node on the user's PATH for Git Bash to find.
+export function threadPath(basePath: string | undefined, execPath = process.execPath, windows = process.platform === 'win32'): string {
+  const parts = [BIN_DIR];
+  if (windows) {
+    const nodeDir = path.win32.dirname(execPath);
+    const bare = (d: string) => d.replace(/[\\/]+$/, '').toLowerCase();
+    const onPath = (basePath ?? '').split(';').some((d) => bare(d) === bare(nodeDir));
+    if (!onPath) parts.push(nodeDir);
+  }
+  if (basePath) parts.push(basePath);
+  return parts.join(path.delimiter);
 }
 
 export type RestarterDeps = {

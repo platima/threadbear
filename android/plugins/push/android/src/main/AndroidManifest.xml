@@ -3,6 +3,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application>
+        <!-- Have Google Play services fetch the code scanner's module when the app is installed,
+             so the first "Scan the code" does not wait on a download -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
         <!-- Firebase hands a message to this, with the app asleep or not -->
         <service
             android:name="com.tinkerware.threadbear.push.ThreadbearMessagingService"

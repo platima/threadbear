@@ -26,6 +26,17 @@ particular. It is told which one to talk to by the link that pairs it:
   Point the phone's camera at it and open the link; Android offers it to
   Threadbear because the app is registered for that kind of link
   (`android/src-tauri/tauri.conf.json`, `plugins.deep-link`).
+- **Or scan it inside the app**: the first screen's "Scan the code" opens
+  Google's code scanner over the app (a command of the push plugin,
+  `plugin:threadbear-push|scan`, in `android/plugins/push`). It needs Google
+  Play services, has its own camera screen and asks for no camera permission
+  of the app's own. Its module is fetched by Google Play services: the manifest asks
+  for it at install (`com.google.mlkit.vision.DEPENDENCIES`), which only works for an
+  app installed from the Play Store, so the plugin also asks for it when the app starts
+  (`ModuleInstall`). On an APK installed by hand the first scan can still find it
+  fetching and says to wait a minute and try again. What it reads goes through the same
+  check as a pasted link, so a code that is not a pairing (a Wi-Fi code, a menu)
+  offers nothing. Backing out, or a phone without Play services, leaves the paste box.
 - **Or paste** that link, or the website's sign-in link, into the app's first
   screen (`web/src/pair.tsx`).
 
@@ -144,7 +155,10 @@ for every phone that has the app built for it. To set one up:
 - **Notifications on a real phone.** They have been seen on an emulator only
   (the check above); Firebase's delivery to a sleeping phone, its battery
   savers and a manufacturer's own app killers are not tested here.
-- **Scanning the code inside the app.** The phone's camera does it today.
+- **Scanning the code inside the app on a phone without Google Play
+  services.** The scanner is Google's; such a phone uses its camera app or the
+  paste box. The scanner has not been run on a phone yet: it is checked by
+  the build and by the page's tests against a stand-in for it.
 - **A Play Store listing.** It needs a release signing key, a developer
   account, the data safety form and a privacy policy; none of that is in the
   repo. `tauri android build --aab` makes the bundle once there is a key.

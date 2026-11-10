@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePairing, siteToDeployment } from './pairing.ts';
+import { parsePairing, siteToDeployment, unusualAddress } from './pairing.ts';
 
 test('a phone pairing link (the QR code the apps draw) gives the deployment, the token and the runner key', () => {
   const p = parsePairing('threadbear://pair?url=https%3A%2F%2Fearnest-puffin-640.ap-southeast-2.convex.cloud&token=aa_Xy-9.z&key=r1%3AAbCd%2Bef%3D');
@@ -77,4 +77,15 @@ test('a WebView that reads threadbear://pair with no hostname still takes the li
   } finally {
     globalThis.URL = RealURL;
   }
+});
+
+test('an address that is not a Convex one, or only looks like one, is called unusual', () => {
+  assert.equal(unusualAddress('https://happy-animal-123.convex.cloud'), false);
+  assert.equal(unusualAddress('https://happy-animal-123.eu-west-1.convex.cloud'), false);
+  assert.equal(unusualAddress('https://happy-animal-123.convex.site'), false);
+  assert.equal(unusualAddress('https://happyanimal123.convex.cloud.example.net'), true);
+  assert.equal(unusualAddress('https://convex.cloud.evil.example'), true);
+  assert.equal(unusualAddress('https://mymac.tail1234.ts.net'), true);
+  assert.equal(unusualAddress('http://127.0.0.1:3210'), true);
+  assert.equal(unusualAddress('not a url'), true);
 });
