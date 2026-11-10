@@ -5,6 +5,8 @@
 // the far end of the connection and walks up its parents to a thread's CLI.
 import { execFile } from 'node:child_process';
 import { lsofPath } from './handover.ts';
+import { IS_WINDOWS } from './platform.ts';
+import { netstatPids, windowsProcessTable } from './peer-windows.ts';
 import { psTable, type ProcessRegistry } from './proc.ts';
 import type { Logger } from './log.ts';
 
@@ -42,13 +44,14 @@ function lsofPids(port: number): Promise<number[]> {
 
 // The thread the connection from this client port belongs to, or undefined
 // when it isn't under a thread's CLI or the lookup can't tell (no lsof, on
-// a machine without it): then the credential presented decides.
+// a machine without it): then the credential presented decides. On Windows it
+// is netstat for the connection and PowerShell for the parents (peer-windows.ts).
 export async function threadOfPort(port: number, deps: PeerDeps): Promise<string | undefined> {
   try {
-    const pids = await (deps.lsof ?? lsofPids)(port);
+    const pids = await (deps.lsof ?? (IS_WINDOWS ? netstatPids : lsofPids))(port);
     const peer = pids.find((p) => p !== process.pid);
     if (peer === undefined) return undefined;
-    const table = await deadline((deps.table ?? psTable)());
+    const table = await deadline((deps.table ?? (IS_WINDOWS ? windowsProcessTable : psTable))());
     const parents = new Map(table.map((r) => [r.pid, r.ppid]));
     const seen = new Set<number>();
     for (let p: number | undefined = peer; p !== undefined && p > 1 && !seen.has(p); p = parents.get(p)) {
