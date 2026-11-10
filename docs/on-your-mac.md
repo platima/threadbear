@@ -490,7 +490,20 @@ said otherwise.
   --cd <folder>`). On Linux it reads `$SHELL` and `/etc/shells`. The window can
   only ask for a shell from that list, by its id; it never names a program. The
   choice of default is kept in the page's local storage (Settings, "This app",
-  or the menu in the Terminal). A shell is given the bridge's environment less
+  or the menu in the Terminal). On Windows the bridge also reads the font
+  Windows Terminal is set to (`desktop-tauri/bridge/windows-terminal-font.ts`),
+  so a prompt theme's symbols draw in the Nerd Font you chose there. It does
+  this when the Terminal panel opens and when you pick "Same as Windows
+  Terminal", not at start-up: it opens Windows Terminal's `settings.json` in
+  `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState`,
+  the same under `Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe`, and
+  `%LOCALAPPDATA%\Microsoft\Windows Terminal`, reads at most 2 MB of it, and
+  takes the default profile's font name and size, nothing else. Only that name
+  (letters, digits, spaces, hyphens, dots, underscores and brackets, up to 100
+  characters) and the size go to the window, to choose a font to draw with. The
+  file's text is not kept, logged or sent anywhere, and nothing is written to
+  it. The font choice (Same as Windows Terminal, Default, or a name you type) is
+  kept in the page's local storage as `threadbear.terminalFont`. A shell is given the bridge's environment less
   `THREADBEAR_BRIDGE_KEY` and any thread id, plus `TERM`, `COLORTERM` and
   `TERM_PROGRAM=Threadbear`. It runs what you type, as you, with no sandbox, the
   same as any terminal. Its socket (`/terminal` on the bridge) takes the same

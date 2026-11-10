@@ -6,9 +6,13 @@
 // a real shell.
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { Terminals, shellEnv, type Pty } from './terminal.ts';
 import type { ShellList } from './shells.ts';
+import type { TerminalFont } from './windows-terminal-font.ts';
 import { openUi, outcome, scratch, startBridge, freePort, type Running } from './testkit.ts';
 import WebSocket from 'ws';
 
@@ -49,7 +53,7 @@ const LIST: ShellList = {
   notes: [],
 };
 
-function rig(more: { shells?: ShellList; spawnFails?: string; hold?: boolean } = {}) {
+function rig(more: { shells?: ShellList; spawnFails?: string; hold?: boolean; font?: () => TerminalFont } = {}) {
   const ptys: FakePty[] = [];
   // With hold, finding the shells waits until release() is called, as wsl.exe can for a second.
   let release: () => void = () => {};
@@ -67,6 +71,8 @@ function rig(more: { shells?: ShellList; spawnFails?: string; hold?: boolean } =
       await gate;
       return more.shells ?? LIST;
     },
+    // Never the real one: that reads this PC's Windows Terminal settings.
+    font: more.font ?? (() => ({})),
     env: { PATH: 'x', THREADBEAR_BRIDGE_KEY: 'secret', THREADBEAR_THREAD_ID: 't1', THREADBARE_THREAD_ID: 't1', THREADBEAR_HOME: 'h' },
     platform: 'win32',
     home: 'C:\\Users\\me',
@@ -362,6 +368,55 @@ describe('the page connection', () => {
     assert.deepEqual(ws.sent[0], { t: 'shells', shells: [{ id: 'pwsh', label: 'PowerShell 7' }, { id: 'wsl:Debian', label: 'WSL: Debian' }], auto: 'pwsh', notes: [] });
   });
 
+  test("font says the face and size Windows Terminal is set to, read each time it is asked, and nothing else", async () => {
+    let now: TerminalFont = { face: 'CaskaydiaCove NF', size: 11 };
+    let reads = 0;
+    const r = rig({ font: () => (reads++, now) });
+    const ws = new FakeSocket();
+    r.terminals.serve(ws as unknown as WebSocket);
+    assert.equal(reads, 0, 'not read until asked');
+    ws.say({ t: 'font' });
+    assert.deepEqual(ws.sent.at(-1), { t: 'font', face: 'CaskaydiaCove NF', size: 11 });
+    now = { face: 'MesloLGS NF' };
+    ws.say({ t: 'font' });
+    assert.deepEqual(ws.sent.at(-1), { t: 'font', face: 'MesloLGS NF' });
+    assert.equal(reads, 2);
+  });
+
+  test('font with no Windows Terminal font to find says so with neither field', async () => {
+    const r = rig();
+    const ws = new FakeSocket();
+    r.terminals.serve(ws as unknown as WebSocket);
+    ws.say({ t: 'font' });
+    assert.deepEqual(ws.sent.at(-1), { t: 'font' });
+  });
+
+  test('font passes on a name and a size and no more, whatever the reader returns', async () => {
+    const hostile = { face: 'x"; } body { display: none }', size: 12, settings: '{"secret": true}', profiles: [] } as unknown as TerminalFont;
+    const r = rig({ font: () => hostile });
+    const ws = new FakeSocket();
+    r.terminals.serve(ws as unknown as WebSocket);
+    ws.say({ t: 'font' });
+    assert.deepEqual(ws.sent.at(-1), { t: 'font', size: 12 });
+    const r2 = rig({ font: () => ({ face: 'Fira Code', size: 5000 }) });
+    const ws2 = new FakeSocket();
+    r2.terminals.serve(ws2 as unknown as WebSocket);
+    ws2.say({ t: 'font' });
+    assert.deepEqual(ws2.sent.at(-1), { t: 'font', face: 'Fira Code' });
+  });
+
+  test('a reader that fails is no font, not a crash and not an error message', async () => {
+    const r = rig({
+      font: () => {
+        throw new Error('C:\\Users\\me\\AppData\\Local\\settings.json: EACCES');
+      },
+    });
+    const ws = new FakeSocket();
+    r.terminals.serve(ws as unknown as WebSocket);
+    ws.say({ t: 'font' });
+    assert.deepEqual(ws.sent, [{ t: 'font' }]);
+  });
+
   test('open, in, resize and stop do what they say', async () => {
     const { ws, ptys, terminals } = connect();
     ws.say({ t: 'open', key: 'k', cols: 90, rows: 20, create: true });
@@ -506,6 +561,43 @@ describe('a real shell through the real bridge', () => {
       }
     } finally {
       first.ws.close();
+    }
+  });
+});
+
+// The real bridge reads Windows Terminal's settings from %LOCALAPPDATA%. Here that is a folder of the
+// test's own, given to the bridge it starts, so the PC's real settings are not read.
+describe('the font through the real bridge', () => {
+  const files = scratch();
+  const appData = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-bridge-font-'));
+  after(() => {
+    files.remove();
+    fs.rmSync(appData, { recursive: true, force: true });
+  });
+  let bridge: Running | undefined;
+  after(async () => {
+    await bridge?.shutdown();
+  });
+
+  test('says what the settings file in the stand-in folder names, on Windows, and nothing elsewhere', async () => {
+    const dir = path.join(appData, 'Microsoft', 'Windows Terminal');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'settings.json'), '{ // comment\n "defaultProfile": "{a}", "profiles": { "defaults": { "font": { "face": "CaskaydiaCove NF", "size": 11, }, }, "list": [ { "guid": "{a}" }, ], }, }');
+    bridge = await startBridge({ THREADBEAR_HOME: files.home, THREADBEAR_DIST: files.dist, THREADBEAR_PORT: String(await freePort()), THREADBEAR_BRIDGE_PORT: '0', THREADBEAR_BRIDGE_WATCH_STDIN: '1', LOCALAPPDATA: appData });
+    const ws = new WebSocket(`ws://127.0.0.1:${bridge.port}/terminal?k=${encodeURIComponent(bridge.key)}`, { headers: { Origin: bridge.origin } });
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    const pipe = new Pipe(ws);
+    try {
+      pipe.send({ t: 'font' });
+      await pipe.until('the font', () => pipe.heard.some((m) => m.t === 'font'));
+      const said = pipe.heard.find((m) => m.t === 'font')!;
+      if (process.platform === 'win32') assert.deepEqual(said, { t: 'font', face: 'CaskaydiaCove NF', size: 11 });
+      else assert.deepEqual(said, { t: 'font' });
+    } finally {
+      ws.close();
     }
   });
 });

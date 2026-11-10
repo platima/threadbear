@@ -653,6 +653,19 @@ the next time a shell starts. End shell stops the one running, and Ctrl+J
 hides the panel without stopping it. It has no panel layout to drag about:
 it sits under the thread and its height can be dragged.
 
+The Font menu in the header says which font the terminal is drawing in, and
+changes it at once, on the shells already open too. On Windows the first choice
+is Same as Windows Terminal, which uses the font (and size) your Windows
+Terminal default profile is set to, so the symbols a prompt such as oh-my-posh
+draws show up as they do there. It is what you get until you choose, if
+Windows Terminal has a font set. Default is Cascadia Mono, or whatever
+monospace font the PC has. A font you name takes the name of any font installed
+on the PC (on Linux that and Default are the choices): type it in the box that
+appears and press Enter. Prompt symbols need a Nerd Font, and the terminal
+looks in the common ones (CaskaydiaCove, MesloLG, JetBrainsMono, FiraCode and
+Hack) after the font you picked, so one of those installed is enough even if
+you pick Default. The choice is kept.
+
 A shell command an agent gives you (a ```` ```bash ````, `sh`, `zsh` or
 `shell` block) has a play icon and a copy icon at its top right. Play
 opens the Terminal with the command typed at the prompt and the keyboard

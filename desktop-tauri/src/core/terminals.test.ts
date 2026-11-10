@@ -291,3 +291,73 @@ test('a shell list that never came is an error in the snapshot, with the retry a
   assert.equal(r.sessions.getSnapshot().shells?.auto, 'pwsh', 'a drop with nothing asked for leaves the list');
   r.sessions.close();
 });
+
+test("Windows Terminal's font is asked for, and kept as the bridge said it", () => {
+  const r = rig();
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined, 'not asked at construction');
+  r.sessions.loadFont();
+  r.t.open();
+  assert.deepEqual(r.ask(), [{ t: 'font' }]);
+  r.say({ t: 'font', face: 'CaskaydiaCove Nerd Font Mono', size: 11 });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont, { face: 'CaskaydiaCove Nerd Font Mono', size: 11 });
+  r.say({ t: 'font' });
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined, 'Windows Terminal no longer names a font');
+  r.sessions.close();
+});
+
+test('a font answer is checked again: only a plain name and a sensible size are kept', () => {
+  const r = rig();
+  r.sessions.loadFont();
+  r.t.open();
+  r.say({ t: 'font', face: 'x"; } body { display: none }', size: 'big', settings: { secret: 1 } });
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined);
+  r.say({ t: 'font', face: 'Fira Code', size: 5000, settings: { secret: 1 } });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont, { face: 'Fira Code' });
+  r.say({ t: 'font', face: 7 });
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined);
+});
+
+test('the same font said again changes nothing the window would redraw for', () => {
+  const r = rig();
+  r.sessions.loadFont();
+  r.t.open();
+  r.say({ t: 'font', face: 'Fira Code' });
+  const v = r.sessions.getSnapshot().version;
+  r.say({ t: 'font', face: 'Fira Code' });
+  assert.equal(r.sessions.getSnapshot().version, v);
+  r.say({ t: 'font' });
+  r.say({ t: 'font' });
+  assert.equal(r.sessions.getSnapshot().version, v + 1);
+});
+
+test('the font choice is kept under its own key, read at the start, and shown at once', () => {
+  const r = rig();
+  assert.equal(r.sessions.getSnapshot().fontChoice, undefined, 'none made');
+  assert.equal(r.sessions.setFont({ kind: 'custom', name: 'Iosevka Term' }), true);
+  assert.equal(r.kept['threadbear.terminalFont'], 'custom:Iosevka Term');
+  assert.deepEqual(r.sessions.getSnapshot().fontChoice, { kind: 'custom', name: 'Iosevka Term' });
+  assert.equal(r.kept['threadbear.terminalShell'], undefined, "the shell's choice is not touched");
+
+  const { t } = fake();
+  const again = new TerminalSessions(() => t, { getItem: (k) => r.kept[k] ?? null, setItem: () => {} });
+  assert.deepEqual(again.getSnapshot().fontChoice, { kind: 'custom', name: 'Iosevka Term' }, 'after a reload');
+});
+
+test("picking Windows Terminal's font asks the bridge again; other choices ask nothing", () => {
+  const r = rig();
+  r.sessions.setFont({ kind: 'default' });
+  r.sessions.setFont({ kind: 'custom', name: 'Fira Code' });
+  r.sessions.look('t1'); // something to connect for; the socket opens on it
+  r.t.open();
+  assert.deepEqual(r.ask(), [{ t: 'open', key: 't1', cols: 80, rows: 24, create: false }]);
+  r.sessions.setFont({ kind: 'wt' });
+  assert.deepEqual(r.ask().at(-1), { t: 'font' });
+  assert.equal(r.ask().filter((m) => m.t === 'font').length, 1);
+});
+
+test("a window that can't keep the font choice says so, and still applies it", () => {
+  const { t } = fake();
+  const sessions = new TerminalSessions(() => t, { getItem: () => null, setItem: () => {} });
+  assert.equal(sessions.setFont({ kind: 'default' }), false);
+  assert.deepEqual(sessions.getSnapshot().fontChoice, { kind: 'default' });
+});
