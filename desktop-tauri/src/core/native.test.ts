@@ -1,7 +1,7 @@
 // node --test desktop-tauri/src/core/native.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { SHELL_SILENT, getExitOnClose, openClaudeLogin, openExternal, runnerSetup, setExitOnClose, startRunner } from './native.ts';
+import { getExitOnClose, openClaudeLogin, openExternal, pagePlatform, runnerSetup, setExitOnClose, shellSilent, startRunner } from './native.ts';
 
 test('a link is opened through the shell, as the address given', async () => {
   const calls: { command: string; args?: Record<string, unknown> }[] = [];
@@ -71,11 +71,27 @@ test('starting the runner is a request the shell answers when it is done, and a 
 
 test('a shell that never answers about the runner is given up on, with the words that say where to look', async () => {
   const never = () => new Promise<never>(() => {});
-  assert.equal(await startRunner('start', { call: never, waitMs: 20 }), SHELL_SILENT);
-  assert.match(SHELL_SILENT, /shell\.log/);
-  assert.match(SHELL_SILENT, /--runner --on-demand/);
-  // Not knowing how the runner is set up is "don't know", not "none".
-  assert.equal(await runnerSetup({ call: never, waitMs: 20 }), undefined);
+  assert.equal(await startRunner('start', { call: never, waitMs: 20 }), shellSilent());
+  // Not answering is its own result: it is not "none" and not "don't know".
+  assert.equal(await runnerSetup({ call: never, waitMs: 20 }), 'silent');
+});
+
+test('the words for a silent shell name the right program, folder and log for each system', () => {
+  const windows = shellSilent('windows');
+  assert.match(windows, /%LOCALAPPDATA%\\Threadbear/);
+  assert.match(windows, /\.\\Threadbear\.exe --runner --on-demand/);
+  assert.doesNotMatch(windows, /threadbear-desktop/);
+  const linux = shellSilent('linux');
+  assert.match(linux, /~\/\.local\/state\/Threadbear/);
+  assert.match(linux, /\.\/threadbear-desktop --runner --on-demand/);
+  assert.doesNotMatch(linux, /Threadbear\.exe/);
+  assert.match(linux, /folder Threadbear is installed in/);
+});
+
+test('the system is told from the webview\'s user agent', () => {
+  assert.equal(pagePlatform('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36 Edg/131'), 'windows');
+  assert.equal(pagePlatform('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)'), 'linux');
+  assert.equal(pagePlatform(''), 'linux');
 });
 
 test('how the runner is set up is asked of the shell, and only its three words count', async () => {

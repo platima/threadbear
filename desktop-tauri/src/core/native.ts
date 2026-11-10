@@ -86,11 +86,24 @@ export async function openClaudeLogin(kind: 'login' | 'setup-token', configDir?:
 // staying that way for ever if the shell never answers (the button once did nothing,
 // with no word about why).
 const SHELL_WAIT_MS = 60_000;
-export const SHELL_SILENT = "The app did not answer. Its shell.log says what it did (in %LOCALAPPDATA%\\Threadbear on Windows, ~/.local/state/Threadbear on Linux). You can also set the runner up yourself: run Threadbear --runner --on-demand in a terminal.";
+
+// Which of the two systems the app is on, as the page can tell (the user agent of the
+// shell's webview): the program, its folders and what it is called differ.
+export type PagePlatform = 'windows' | 'linux';
+export const pagePlatform = (userAgent: string = typeof navigator === 'undefined' ? '' : navigator.userAgent): PagePlatform => (/windows/i.test(userAgent) ? 'windows' : 'linux');
+
+// The app's program, as typed in a terminal opened in the folder it is installed in (it
+// need not be on the PATH), and where it keeps shell.log.
+export const appCommand = (platform: PagePlatform = pagePlatform()): string => (platform === 'windows' ? '.\\Threadbear.exe' : './threadbear-desktop');
+export const shellLogFolder = (platform: PagePlatform = pagePlatform()): string => (platform === 'windows' ? '%LOCALAPPDATA%\\Threadbear' : '~/.local/state/Threadbear');
+
+// What is said when the shell does not answer.
+export const shellSilent = (platform: PagePlatform = pagePlatform()): string =>
+  `The app did not answer. Its shell.log (in ${shellLogFolder(platform)}) says what it did. You can also set the runner up yourself: in a terminal opened in the folder Threadbear is installed in, run ${appCommand(platform)} --runner --on-demand`;
 
 function within<T>(work: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(SHELL_SILENT), ms);
+    const timer = setTimeout(() => reject(shellSilent()), ms);
     work.then(
       (v) => {
         clearTimeout(timer);
@@ -107,17 +120,19 @@ function within<T>(work: Promise<T>, ms: number): Promise<T> {
 const words = (e: unknown): string => (typeof e === 'string' ? e : ((e as Error)?.message ?? 'unknown'));
 
 // How the runner is set up: at sign-in, only while the app is open, or 'none' (no task
-// of ours). Undefined outside the shell, and when the shell won't say.
+// of ours). Undefined outside the shell, and when the shell refuses or gives a word that
+// is not one of these; 'silent' when it did not answer in time, which is a failure of its
+// own and not a reason to ask it for anything more.
 export type RunnerSetup = 'none' | 'sign-in' | 'on-demand';
 
-export async function runnerSetup(using: Using = {}): Promise<RunnerSetup | undefined> {
+export async function runnerSetup(using: Using = {}): Promise<RunnerSetup | 'silent' | undefined> {
   const call = channel(using);
   if (!call) return undefined;
   try {
     const word = await within(call<string>('runner_setup'), using.waitMs ?? SHELL_WAIT_MS);
     return word === 'sign-in' || word === 'on-demand' || word === 'none' ? word : undefined;
-  } catch {
-    return undefined;
+  } catch (e) {
+    return e === shellSilent() ? 'silent' : undefined;
   }
 }
 

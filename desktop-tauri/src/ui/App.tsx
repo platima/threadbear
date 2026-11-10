@@ -10,7 +10,7 @@ import { TOUR_KEY, Tour } from './Tour.tsx';
 import { PAGES } from './registry.ts';
 import { TerminalDock } from './TerminalDock.tsx';
 import { isNative, startRunner, type RunnerWay } from '../core/native.ts';
-import { RUNNER_CHOICE_TEXT, RUNNER_WAYS, startClick } from '../core/runner-start.ts';
+import { RUNNER_WAYS, runnerChoiceText, startClick } from '../core/runner-start.ts';
 import { targetFor, terminals } from '../core/terminals.ts';
 import { runUpdateCheck } from './update-state.ts';
 
@@ -191,7 +191,7 @@ export function App({ store }: { store: AppStore }) {
             )}
             {snap.conn === 'closed' && isNative() && choosing && (
               <div className="runnerChoice">
-                <p>{RUNNER_CHOICE_TEXT}</p>
+                <p>{runnerChoiceText()}</p>
                 {RUNNER_WAYS.map((w) => (
                   <button key={w.way} className="ghost" disabled={starting} onClick={() => void start(w.way)} title={w.tip}>
                     {w.label}
