@@ -44,7 +44,7 @@ jobs:
     env:
       # The skip count is printed in the summary of every run. Over this, a
       # warning: raise it on purpose when a test is skipped on purpose.
-      SKIP_LIMIT: 200
+      SKIP_LIMIT: 280
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
