@@ -12,6 +12,10 @@ android {
     defaultConfig {
         minSdk = 26
 
+        // What the app's release build (R8) must keep for ML Kit and Firebase to start
+        // (consumer-rules.pro says what and why)
+        consumerProguardFiles("consumer-rules.pro")
+
         // For the emulator check in CI (.github/workflows/android.yml) only, which
         // builds a copy of its own: a key it knows, so it can seal a message the
         // app will open, and the token logged, so it knows where to send it. The

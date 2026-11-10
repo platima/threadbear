@@ -37,6 +37,7 @@ particular. It is told which one to talk to by the link that pairs it:
   fetching and says to wait a minute and try again. What it reads goes through the same
   check as a pasted link, so a code that is not a pairing (a Wi-Fi code, a menu)
   offers nothing. Backing out, or a phone without Play services, leaves the paste box.
+  If it cannot open, the red line says why (see "When Scan the code fails" below).
 - **Or paste** that link, or the website's sign-in link, into the app's first
   screen (`web/src/pair.tsx`).
 
@@ -92,8 +93,47 @@ base64 on one line: `base64 -w0 threadbear-release.jks`, or in PowerShell
 A second job in the same workflow runs the release build on an Android 14
 emulator (x86_64, with KVM) on every change: it installs the APK, opens it from
 the launcher, sends it a `threadbear://pair` link and keeps the screenshots
-and log (`threadbear-android-emulator`). That shows the app starts and takes a
-link; it is not a phone with a camera or a notification shade.
+and log (`threadbear-android-emulator`). It then opens the first screen again and
+taps "Scan the code". That shows the app starts, takes a link and gets as far as
+Google's scanner; it is not a phone with a camera or a notification shade. The
+emulator cannot download the scanner's module, so Google answers that the scanner is
+unavailable and the tap ends at the app's "still getting its scanner ready" line
+there. The step waits for that answer (or Google's own scanner screen) and fails if
+the app broke before it (below), crashed, or never got one, so a button that is
+still on "Scanning..." does not pass.
+
+### When Scan the code fails
+
+The red line under the button is one of three kinds. The words are this app's
+(`scanFailure` and `scanBroke` in `PushPlugin.kt`): Google supplies an error code, and
+the app chooses the line for it.
+
+- **A line for a code the app knows**: "Google is still getting its scanner ready",
+  "Google Play services needs updating before it can scan", or no camera permission
+  for Google Play services. The scanner was reached and said no; each line says what
+  to do, and the paste box still works.
+- **"The scanner could not open (...)"**: Google gave a code the app has no line for,
+  so the line carries the message that came with the code.
+- **"The scanner could not start (NullPointerException at Class.method (File:line))"**,
+  or "could not read the code": something inside the app broke before or after the
+  scanner. The brackets name the exception's class and the first frame that is not
+  Android's or Kotlin's, to send on with a bug report. A release build renames most
+  of those, so they are for finding the place in the log. With the phone on USB
+  debugging, `adb logcat -s ThreadbearPush:W` shows the whole trace and the thread
+  it ran on, and `adb logcat -s ComponentDiscovery:W` any part of ML Kit or Firebase
+  that could not start at launch.
+
+If nothing comes back for five minutes, the page says the scanner did not answer.
+
+A phone running rc.4 showed none of these, because the app then passed the
+exception's own message straight to the page: "Attempt to invoke virtual method
+'java.lang.Class java.lang.Object.getClass()' on a null object reference". The
+release build's shrinker (R8) had removed the empty constructors of the classes that
+ML Kit and Firebase find by name at start-up, so ML Kit had none of its parts and
+Google's code threw a null error when the scanner was made. The plugin's
+`consumer-rules.pro` keeps them, and the emulator step fails if any part of ML Kit
+or Firebase reports "Invalid component registrar" again. The page's own error text
+(`web/src/scan.ts`) passes the shell's words through as they are.
 
 To build it yourself you need Android Studio (for the SDK, an NDK and a JDK),
 Rust with the Android targets (`rustup target add aarch64-linux-android

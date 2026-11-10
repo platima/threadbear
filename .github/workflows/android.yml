@@ -409,6 +409,118 @@ jobs:
             fi
             echo "The screen changed after the pairing link"
           fi
+      # The first screen's "Scan the code", tapped as a person would. It failed on a
+      # phone with "Attempt to invoke virtual method ... getClass() on a null object
+      # reference" because the release build's shrinker (R8) had removed what ML Kit
+      # starts itself from by name (android/plugins/push/android/consumer-rules.pro),
+      # and neither the build nor the checks above ever tapped it. The emulator cannot
+      # download the scanner's module (Google's log says the request failed and is
+      # retried), so the scanner answers "still getting its scanner ready": what is
+      # checked is that the app gets as far as that answer (Google's code for it, in the
+      # app's words), and that nothing in the app's own start-up was left unable to start.
+      - name: Scan the code is tapped
+        timeout-minutes: 10
+        run: |
+          set -u
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          pkg=com.tinkerware.threadbear
+          adb logcat -c
+          # The log as the app wrote it holds the copy's Firebase token, which is no use
+          # without the project's key but is not for an artifact either. It is kept here,
+          # outside what is uploaded, and shots/ only ever gets the copy with the token
+          # taken out, whenever the step ends.
+          raw="${RUNNER_TEMP:-/tmp}/threadbear-logcat-scan-raw.txt"
+          take_log() {
+            adb logcat -d > "$raw"
+            sed 's/test token .*/test token (removed)/' "$raw" > shots/logcat-scan.txt
+          }
+          # From the launcher again, so it is the first screen (the pairing link above was
+          # never accepted)
+          adb shell am force-stop "$pkg"
+          adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1
+          sleep 25
+          adb exec-out screencap -p > shots/3-scan-before.png
+          # The button's place: from the screen's text when the page's content shows in it
+          # (the first dump of a WebView often holds only the WebView; a later one has the
+          # page), else where it is on this device's first screen (1080 by 2400)
+          x=540; y=959
+          found=""
+          for i in 1 2 3 4; do
+            adb exec-out uiautomator dump /dev/tty > shots/3-scan-before.xml || true
+            found=$(node -e 'const t = require("fs").readFileSync("shots/3-scan-before.xml", "utf8"); const m = /text="Scan the code"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/.exec(t); if (m) console.log(Math.round((+m[1] + +m[3]) / 2) + " " + Math.round((+m[2] + +m[4]) / 2));')
+            if [ -n "$found" ]; then x=${found% *}; y=${found#* }; echo "The button is in the screen's text, at $x,$y"; break; fi
+            sleep 3
+          done
+          [ -n "$found" ] || echo "The button is not in the screen's text: tapping where it was on the first picture, $x,$y"
+          adb shell input tap "$x" "$y"
+          # Wait for the scanner's answer, not for a change on the screen: the button says
+          # "Scanning..." at once, and the page waits minutes for the shell, so a screen that
+          # is different says nothing about whether Google's scanner was reached. What counts,
+          # in the order they are looked for (about 90 seconds at most):
+          #   app-failure      the app's own catch ("failed to start") or its words for a null error
+          #   google-answered  Google's failure listener ran, with one of its codes ("failed: ... 200")
+          #   google-screen    Google's own scanner screen is in front (a device that has the module)
+          reached=""
+          for i in $(seq 1 18); do
+            sleep 5
+            adb exec-out uiautomator dump /dev/tty > shots/3-scan-after.xml || true
+            take_log
+            if grep -q 'ThreadbearPush: the code scanner failed to ' shots/logcat-scan.txt || grep -qE 'The scanner could not start|Attempt to invoke virtual method' shots/3-scan-after.xml; then reached=app-failure; break; fi
+            if grep -q 'ThreadbearPush: the code scanner failed: ' shots/logcat-scan.txt; then reached=google-answered; break; fi
+            if grep -q 'package="com.google.android.gms"' shots/3-scan-after.xml && ! grep -q 'package="com.tinkerware.threadbear"' shots/3-scan-after.xml; then reached=google-screen; break; fi
+          done
+          # Google answered: the page must have been told, and the button must be back (a page
+          # still on "Scanning..." was never given the answer)
+          if [ "$reached" = google-answered ]; then
+            for i in 1 2 3 4 5 6; do
+              adb exec-out uiautomator dump /dev/tty > shots/3-scan-after.xml || true
+              if grep -q 'text="Scan the code"' shots/3-scan-after.xml && ! grep -q 'text="Scanning' shots/3-scan-after.xml; then break; fi
+              sleep 5
+            done
+          fi
+          adb exec-out screencap -p > shots/3-scan-after.png
+          take_log
+          echo "--- what the screen says now:"
+          grep -o 'text="[^"]\+"' shots/3-scan-after.xml | head -30 || true
+          echo "--- the app's lines, and Google's, about the scanner:"
+          grep -E 'ThreadbearPush|FATAL EXCEPTION|Could not instantiate|Invalid component|codescanner' shots/logcat-scan.txt | cut -c1-320 | head -80 || true
+          echo "---"
+          # Away from the scanner (if it opened) and the app
+          adb shell input keyevent KEYCODE_BACK || true
+          sleep 2
+          adb shell am force-stop "$pkg"
+          failed=0
+          # ML Kit and Firebase start from classes found by name, which the release build's
+          # shrinker removes the constructors of unless told not to
+          if grep -q 'Invalid component registrar' shots/logcat-scan.txt; then
+            echo "::error::A part of ML Kit or Firebase could not start (Invalid component registrar): the release build's shrinker removed what starts it. See android/plugins/push/android/consumer-rules.pro"
+            failed=1
+          fi
+          # The app crashing, whatever the scanner did: the same check as the launch step's, for
+          # this app's process only (another process's crash, such as uiautomator's, is not ours)
+          if grep -A 3 'FATAL EXCEPTION' shots/logcat-scan.txt | grep -q 'Process: com.tinkerware.threadbear'; then
+            echo "::error::The app crashed while Scan the code was tapped. Its lines:"
+            grep -A 20 'FATAL EXCEPTION' shots/logcat-scan.txt | head -60
+            failed=1
+          fi
+          # The scanner failing inside the app, before Google gave a code (the app's own catch,
+          # scanBroke in PushPlugin.kt)
+          if [ "$reached" = app-failure ]; then
+            echo "::error::Scan the code failed inside the app, before reaching Google's scanner. Its lines are above"
+            failed=1
+          fi
+          # Nothing came back at all: the button is still on "Scanning...", or the page and
+          # the log both stayed quiet
+          if [ -z "$reached" ]; then
+            echo "::error::Scan the code was tapped and neither Google's scanner nor its answer turned up in 90 seconds, so the scan command never answered"
+            failed=1
+          fi
+          # Google answered but the page was not told, or did not take it
+          if [ "$reached" = google-answered ] && { ! grep -q 'text="Scan the code"' shots/3-scan-after.xml || grep -q 'text="Scanning' shots/3-scan-after.xml; }; then
+            echo "::error::Google's scanner answered, but the page is still on Scanning... or has lost its button: the answer did not reach the page"
+            failed=1
+          fi
+          [ "$failed" = 0 ]
       # The notification a thread that needs the person becomes, end to end but
       # for the backend: sealed with the app's key as the backend seals it, sent
       # through Firebase with the service account (as the relay does), to an

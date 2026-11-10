@@ -22,6 +22,11 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 
+// Frames of these are the language's, Android's and Tauri's own: not where a failure came from
+private val SYSTEM_PACKAGES = listOf(
+    "java.", "javax.", "kotlin.", "android.", "androidx.", "dalvik.", "libcore.", "sun.", "com.android.internal.", "app.tauri.",
+)
+
 /**
  * What the page can ask of the phone (android/plugins/push):
  *
@@ -94,10 +99,10 @@ class PushPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(answer)
     }
 
-    // Why the scanner did not open, in words for the person, by Google's own codes: the
-    // first scan on an APK installed by hand is likely to find Play services still
-    // fetching the scanner's module, and "needs Google Play services" would be the wrong
-    // thing to tell a phone that has them.
+    // Why the scanner did not open, in words for the person, chosen by the error code Google
+    // gives (the words are ours, Google supplies only the code): the first scan on an APK
+    // installed by hand is likely to find Play services still fetching the scanner's module,
+    // and "needs Google Play services" would be the wrong thing to tell a phone that has them.
     private fun scanFailure(e: Exception): String {
         val code = (e as? MlKitException)?.errorCode
         return when (code) {
@@ -115,14 +120,40 @@ class PushPlugin(private val activity: Activity) : Plugin(activity) {
     // Asks Google Play services for the scanner's module now, without waiting for it, so it is
     // there by the first scan. The manifest's own request (com.google.mlkit.vision.DEPENDENCIES)
     // only fetches it for an app installed from the Play Store, and this one is installed by hand.
+    // Whatever goes wrong here is only logged: it must never stop the plugin from loading, and
+    // the scan will say what is wrong by itself.
     private fun fetchScannerModule() {
         try {
             val scanner = GmsBarcodeScanning.getClient(activity, scannerOptions())
             ModuleInstall.getClient(activity)
                 .installModules(ModuleInstallRequest.newBuilder().addApi(scanner).build())
                 .addOnFailureListener { e -> Log.i(TAG, "the scanner module was not requested: ${e.javaClass.simpleName}") }
-        } catch (e: Exception) {
-            Log.i(TAG, "the scanner module was not requested: ${e.javaClass.simpleName}")
+        } catch (e: Throwable) {
+            Log.w(TAG, "the scanner module was not requested", e)
+        }
+    }
+
+    // Where a throwable came from, for the person and the log: its class, and the first frame
+    // that is not the language's or Android's own (ours, or Google's). A release build has
+    // renamed most of what is in a frame, so the class and line are what to look for in
+    // `adb logcat -s ThreadbearPush:W`, which has the whole trace.
+    private fun whereFrom(e: Throwable): String {
+        val frames = e.stackTrace
+        val frame = frames.firstOrNull { f -> SYSTEM_PACKAGES.none { f.className.startsWith(it) } } ?: frames.firstOrNull()
+        val at = if (frame == null) "" else " at ${frame.className.substringAfterLast('.')}.${frame.methodName} (${frame.fileName?.take(24) ?: "unknown"}:${frame.lineNumber})"
+        return "${e.javaClass.simpleName}$at"
+    }
+
+    // The scan went wrong somewhere our own code did not expect, so it is said in words the
+    // person can read and send on, not whatever the exception's own message happens to be (a null
+    // inside Google's code says "Attempt to invoke virtual method ... getClass() on a null
+    // object reference", which names nothing).
+    private fun scanBroke(invoke: Invoke, step: String, e: Throwable) {
+        Log.w(TAG, "the code scanner failed to $step, on the ${Thread.currentThread().name} thread", e)
+        try {
+            invoke.reject("The scanner could not $step (${whereFrom(e)}). You can paste the link instead.")
+        } catch (again: Throwable) {
+            Log.w(TAG, "and the page could not be told", again)
         }
     }
 
@@ -131,18 +162,26 @@ class PushPlugin(private val activity: Activity) : Plugin(activity) {
     // with words that say which, and the page leaves the paste box.
     @Command
     fun scan(invoke: Invoke) {
-        GmsBarcodeScanning.getClient(activity, scannerOptions()).startScan()
-            .addOnSuccessListener { barcode ->
-                val answer = JSObject()
-                answer.put("text", barcode.rawValue ?: "")
-                invoke.resolve(answer)
-            }
-            .addOnCanceledListener { cancelled(invoke) }
-            .addOnFailureListener { e ->
-                Log.w(TAG, "the code scanner failed: ${e.javaClass.simpleName} ${(e as? MlKitException)?.errorCode ?: ""}")
-                if ((e as? MlKitException)?.errorCode == MlKitException.CODE_SCANNER_CANCELLED) cancelled(invoke)
-                else invoke.reject(scanFailure(e))
-            }
+        try {
+            GmsBarcodeScanning.getClient(activity, scannerOptions()).startScan()
+                .addOnSuccessListener { barcode ->
+                    try {
+                        val answer = JSObject()
+                        answer.put("text", barcode.rawValue ?: "")
+                        invoke.resolve(answer)
+                    } catch (e: Throwable) {
+                        scanBroke(invoke, "read the code", e)
+                    }
+                }
+                .addOnCanceledListener { cancelled(invoke) }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "the code scanner failed: ${e.javaClass.simpleName} ${(e as? MlKitException)?.errorCode ?: ""}")
+                    if ((e as? MlKitException)?.errorCode == MlKitException.CODE_SCANNER_CANCELLED) cancelled(invoke)
+                    else invoke.reject(scanFailure(e))
+                }
+        } catch (e: Throwable) {
+            scanBroke(invoke, "start", e)
+        }
     }
 
     @PermissionCallback
