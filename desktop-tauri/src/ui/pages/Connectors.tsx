@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import type { PageDef, PageProps } from '../registry.ts';
 import { isNative, openExternal } from '../../core/native.ts';
+import { REPO } from '../../core/updates.ts';
 import { Card, Note } from '../pages-lib/ops-ui.tsx';
-import { buttonTitle, emptyLine, host, manageUrl, needsYou, quiet, serviceUrl, stateLine, tooltip } from '../pages-lib/connectors-text.ts';
+import { ABOUT_GATEWAY, buttonTitle, emptyLine, guideUrl, hasPage, host, manageUrl, needsYou, quiet, serviceUrl, stateLine, tooltip, whyOff } from '../pages-lib/connectors-text.ts';
 
 // An address in the person's browser: through the shell in the installed app, in a new tab otherwise.
 const open = (url: string) => (isNative() ? void openExternal(url) : void window.open(url, '_blank', 'noopener,noreferrer'));
 
 // The services the runner's Connectors gateway gives the agents, and which of them need
-// signing in (the Mac app's Connectors panel). Only for a runner that has a gateway set up
+// signing in (the Mac app's Connectors panel), or says there is no gateway set up on the runner
 // (docs/protocol.md, "Connectors"). The app never calls the gateway: the runner looks every
 // few minutes, and when this page opens or its refresh button is pressed.
 function ConnectorsPage({ store, snap }: PageProps) {
@@ -28,6 +29,29 @@ function ConnectorsPage({ store, snap }: PageProps) {
   };
   const manage = manageUrl(status);
   const empty = emptyLine(status);
+  // No gateway: nothing to list or check, so the page says that, what a gateway is for, and where it is written up.
+  if (status?.state === 'off') {
+    const why = whyOff(status);
+    return (
+      <div className="page ops">
+        <div className="ops-col">
+          <div className="ops-title">
+            <h2>Connectors</h2>
+          </div>
+          <Card>
+            <h3>{empty}</h3>
+            <Note>{ABOUT_GATEWAY}</Note>
+            {why && <Note tone="bad">{why}</Note>}
+            <div className="ops-row">
+              <button onClick={() => open(guideUrl(REPO))} title="Open the Connectors section of the guide in your browser: what a gateway does and how to set one up">
+                Read about the gateway
+              </button>
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="page ops">
       <div className="ops-col">
@@ -85,8 +109,9 @@ const page: PageDef = {
   icon: '🔌',
   foot: true,
   order: 60,
-  // Only for a runner that has a gateway: with none, the button would be clutter.
-  available: (snap) => !!snap.connectors && snap.connectors.state !== 'off',
+  // For any runner that knows about Connectors, with or without a gateway: with none, the page says so
+  // and where to read about one. Left out only for a runner too old to answer (hasPage).
+  available: (snap) => hasPage(snap.connectors),
   signal: (snap) => (needsYou(snap.connectors) ? { dot: 'accent', tip: tooltip(snap.connectors) } : quiet(snap.connectors) ? { dot: 'quiet', tip: tooltip(snap.connectors) } : undefined),
   Main: ConnectorsPage,
 };

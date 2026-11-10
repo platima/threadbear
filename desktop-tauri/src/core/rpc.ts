@@ -53,6 +53,8 @@ export class RpcClient {
   private readonly requestMs: number;
   private readonly handshakeMs: number;
   private retry: number;
+  // While set, a retry comes after the first delay every time instead of growing (see retryNow).
+  private hurrying?: ReturnType<typeof setTimeout>;
   handshake?: Handshake;
   state: ConnState = 'closed';
 
@@ -75,7 +77,34 @@ export class RpcClient {
   stop(): void {
     this.stopped = true;
     clearTimeout(this.timer);
+    this.timer = undefined;
+    clearTimeout(this.hurrying);
+    this.hurrying = undefined;
     this.transport?.close();
+  }
+
+  // Asks for a connection now. For when something outside knows the runner has just come up
+  // (the shell started it): waiting out the delay, which grows to maxRetryMs, would show a
+  // closed connection beside a runner that is already there. The delay starts over, and for
+  // `hurryMs` it stays at its first value, so the runner is found within that long of
+  // answering. A connection already open, or being tried, is left alone. Does nothing before
+  // start() or after stop().
+  retryNow(hurryMs = 0): void {
+    if (this.stopped) return;
+    this.retry = this.firstRetry;
+    clearTimeout(this.hurrying);
+    this.hurrying = undefined;
+    if (hurryMs > 0) {
+      this.hurrying = setTimeout(() => {
+        this.hurrying = undefined;
+      }, hurryMs);
+    }
+    // Only a retry that is waiting is brought forward: before the first start() there is none.
+    if (this.state === 'closed' && this.timer !== undefined) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+      this.open();
+    }
   }
 
   private setState(s: ConnState, why?: string): void {
@@ -119,8 +148,11 @@ export class RpcClient {
       this.pending.clear();
       this.setState('closed', reason);
       if (!this.stopped) {
-        this.timer = setTimeout(() => this.open(), this.retry);
-        this.retry = Math.min(this.retry * 2, this.maxRetry);
+        this.timer = setTimeout(() => {
+          this.timer = undefined;
+          this.open();
+        }, this.retry);
+        if (!this.hurrying) this.retry = Math.min(this.retry * 2, this.maxRetry);
       }
     };
   }

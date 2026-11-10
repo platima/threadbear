@@ -23,7 +23,7 @@ export type PageDef = {
   // In the group at the foot of the rail, with Settings, as the Mac app puts Connectors, Runners,
   // Updates, Usage and Settings. Pages without it sit under Threads.
   foot?: boolean;
-  // False leaves the page's button out of the rail (Connectors, with no gateway set up).
+  // False leaves the page's button out of the rail (Connectors, on a runner too old to know about it).
   available?: (snap: Snapshot) => boolean;
   // What the page's rail tooltip adds, and a dot on its button when there is one: the accent one for
   // something that is the person's to do, a quiet one for trouble that usually mends itself.

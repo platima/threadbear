@@ -1,7 +1,7 @@
 // node --test desktop-tauri/src/ui/pages-lib/connectors-text.test.ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buttonTitle, emptyLine, host, list, manageUrl, needsYou, quiet, serviceUrl, stateLine, tooltip } from './connectors-text.ts';
+import { ABOUT_GATEWAY, buttonTitle, emptyLine, guideUrl, hasPage, host, list, manageUrl, needsYou, quiet, serviceUrl, stateLine, tooltip, whyOff } from './connectors-text.ts';
 import type { ConnectorService, ConnectorsStatus } from '../../core/types.ts';
 
 const svc = (id: string, state: ConnectorService['state'], extra: Partial<ConnectorService> = {}): ConnectorService => ({ id, title: id[0]!.toUpperCase() + id.slice(1), state, ...extra });
@@ -69,4 +69,36 @@ test("the gateway's own pages: admin, and a service's page whatever its state; o
   assert.equal(serviceUrl(s, svc('gmail', 'connected')), 'https://bruce.example.ts.net:7200/admin/connect/gmail');
   assert.equal(serviceUrl(s, svc('a/b', 'connected')), 'https://bruce.example.ts.net:7200/admin/connect/a%2Fb');
   assert.equal(serviceUrl(s, svc('gmail', 'signed_out', { connectUrl: 'javascript:alert(1)' })), 'https://bruce.example.ts.net:7200/admin/connect/gmail', 'a script address is never opened');
+});
+
+// rc.4 left the button out for a runner with no gateway, and the person who went looking for it
+// (the test list said to try Connectors) found nothing and no word about why.
+test('the page is there once the runner has answered, with a gateway or without, and not for one too old to answer', () => {
+  assert.equal(hasPage(undefined), false, 'a runner from before Connectors says -32601 and the store keeps none');
+  assert.equal(hasPage({ state: 'off', services: [] }), true, 'no gateway set up: the page says so');
+  assert.equal(hasPage({ state: 'off', error: 'connectors.url in runner.json is not https', services: [] }), true);
+  assert.equal(hasPage({ state: 'checking', url: 'https://bruce.example.ts.net:7200', services: [] }), true);
+  assert.equal(hasPage({ state: 'unreachable', url: 'https://bruce.example.ts.net:7200', error: 'timed out', services: [] }), true);
+  assert.equal(hasPage(ok([svc('gmail', 'connected')])), true);
+});
+
+test('with no gateway the page says there is none, what one is for, and where it is written up, with no dot or button to press', () => {
+  const off: ConnectorsStatus = { state: 'off', services: [] };
+  assert.equal(emptyLine(off), 'No Connectors gateway is set up for this runner.');
+  assert.match(ABOUT_GATEWAY, /signs in to services such as Notion and Sentry once/);
+  assert.match(ABOUT_GATEWAY, /claude\.ai's connectors/);
+  assert.equal(guideUrl('platima/threadbear'), 'https://github.com/platima/threadbear/blob/main/docs/guide.md#connectors');
+  assert.equal(whyOff(off), undefined, 'no word about an address when none was found');
+  // Nothing for the person to do from the rail, so no dot; and no gateway to manage or sign in to.
+  assert.equal(needsYou(off), false);
+  assert.equal(quiet(off), false);
+  assert.equal(manageUrl(off), undefined);
+});
+
+test('an address that was found and refused is said, so the person can fix it', () => {
+  const refused: ConnectorsStatus = { state: 'off', error: 'connectors.url in runner.json is plain http to bruce:8443, so its keys would go in the clear; use https', services: [] };
+  assert.equal(whyOff(refused), 'An address for one was found but not used: connectors.url in runner.json is plain http to bruce:8443, so its keys would go in the clear; use https.');
+  assert.equal(whyOff({ ...refused, error: "isn't a URL." }), "An address for one was found but not used: isn't a URL.", 'one full stop, not two');
+  assert.equal(whyOff(ok([])), undefined, 'only a gateway that is off has a reason');
+  assert.equal(whyOff(undefined), undefined);
 });

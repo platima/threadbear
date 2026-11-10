@@ -557,8 +557,13 @@ said otherwise.
   "Start the runner" button starts a set-up runner or, with none, shows the two
   ways to set one up in the window itself (it asks the shell `runner_setup`,
   then `start_runner` with `start`, `on-demand` or `sign-in`, and the shell
-  maps each to one fixed option of the same script). What the shell does about
-  the runner is noted, one line each with the time in seconds since 1970, in
+  maps each to one fixed option of the same script). When the shell says it
+  started the runner, or that it was already running, the window tries to
+  connect at once and then every half second for about 20 seconds, with
+  "Waiting for the runner to answer..." where the button was; if the runner has
+  not answered by then it says so and points at `shell.log`, and goes on
+  trying at the usual slower pace. What the shell does about the runner is
+  noted, one line each with the time in seconds since 1970, in
   `%LOCALAPPDATA%\Threadbear\shell.log` (`~/.local/state/Threadbear/shell.log`
   on Linux; it starts over past 200 KB and keeps the old one as
   `shell.log.old`), with no text from the window.

@@ -8,7 +8,8 @@
 // nothing else (docs/on-your-mac.md). The logic is here, with the fetch and the
 // storage passed in, so it can be tested with node --test (updates.test.ts).
 
-// The repository whose releases are checked. A fork changes this (docs/forking.md).
+// The repository whose releases are checked, and whose guide the Connectors page links to
+// (guideUrl in pages-lib/connectors-text.ts). A fork changes this (docs/forking.md).
 export const REPO = 'platima/threadbear';
 
 // How a release asset's name ends, per architecture. installer/validate-release-assets.sh

@@ -137,6 +137,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .banner .runnerChoice { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.35); }
 .banner .runnerChoice p { margin: 0 0 6px; max-width: 70ch; }
 .banner .runnerChoice button { margin-right: 6px; }
+/* Start the runner, while the shell is working or the runner is being waited for: it shows busy and takes no click. */
+.banner button[aria-busy='true'] { cursor: progress; opacity: 0.75; }
 .empty { margin: auto; color: var(--dim); text-align: center; padding: 40px; }
 .loadmore { text-align: center; padding: 8px; }
 
