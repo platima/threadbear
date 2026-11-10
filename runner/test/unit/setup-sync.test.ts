@@ -146,7 +146,9 @@ function world(o: Opts = {}) {
     return res(1, '', `fake: unexpected ${command.file} ${command.args.join(' ')}`);
   };
 
-  const real = (f: string) => fs.existsSync(f);
+  // The made-up Node folder of a Windows computer is only what the test says is in it: a real Windows
+  // machine (GitHub's, say) has a Node of its own at that very path, with an npm-cli.js beside it.
+  const real = (f: string) => !f.startsWith('C:\\Program Files\\nodejs') && fs.existsSync(f);
   // flock is where a Linux machine has it, whatever this one (a Mac, say) does.
   const extra = new Set(['/usr/bin/flock', ...(o.exists ?? [])]);
   const deps = {
