@@ -413,9 +413,10 @@ jobs:
       # phone with "Attempt to invoke virtual method ... getClass() on a null object
       # reference" because the release build's shrinker (R8) had removed what ML Kit
       # starts itself from by name (android/plugins/push/android/consumer-rules.pro),
-      # and neither the build nor the checks above ever tapped it. The emulator's image
-      # has Google Play services but no camera to speak of, so what is checked is that
-      # the scanner is asked for and answers in its own words, or opens, and that
+      # and neither the build nor the checks above ever tapped it. The emulator cannot
+      # download the scanner's module (Google's log says the request failed and is
+      # retried), so the scanner answers "still getting its scanner ready": what is
+      # checked is that the app gets as far as that answer, in Google's words, and that
       # nothing in the app's own start-up was left unable to start.
       - name: Scan the code is tapped
         timeout-minutes: 10
