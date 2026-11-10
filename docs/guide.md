@@ -1121,6 +1121,18 @@ usually sorts itself out, such as the gateway not answering for a moment.
 The arrow in the panel checks again, and the ⓘ says more. If the gateway
 can't be reached at all, the panel says so.
 
+The Windows and Linux app keeps the Connectors button on its rail when there
+is no gateway too: the page says there isn't one, what one is for, and links
+here. (The Mac app leaves the button out until there is one.) PlugBear runs
+on macOS, so a Windows or Linux PC has no gateway of its own, but its runner
+can show one on a Mac it can reach: put the gateway's https address in
+`runner.json`, in the runner's data folder (`%APPDATA%\Threadbear` on
+Windows), as `"connectors": { "url": "https://..." }`, and restart the runner.
+It also finds one by itself when Claude Code's `~/.claude.json` has a
+`connectors` MCP server with a URL. Agents still reach the gateway through
+that MCP server in their own login. A runner too old to know about Connectors
+has no button.
+
 When an agent runs into a service that needs signing in, it asks you in its
 reply, with a button that opens the page to do it on. That's only when the
 gateway itself says the service is signed out (or claude.ai's own sign-in

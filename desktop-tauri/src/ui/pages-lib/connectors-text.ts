@@ -9,6 +9,25 @@ import type { ConnectorService, ConnectorsStatus } from '../../core/types.ts';
 
 type Status = ConnectorsStatus | undefined;
 
+// Whether the page and its rail button are there: once the runner has answered connectors.status.
+// A runner from before Connectors never does (it says -32601, which leaves this undefined), and the
+// page is left out for it. One with no gateway answers state 'off', and the page says so: the Mac
+// app leaves the button out then, but a copy where the gateway can't be set up from the app (a
+// Windows or Linux PC, whose only gateway is another machine's) would otherwise have no button
+// and no word about why.
+export const hasPage = (s: Status): boolean => s !== undefined;
+
+// What a gateway is for, said where there is none.
+export const ABOUT_GATEWAY =
+  "A Connectors gateway is a small server of your own that signs in to services such as Notion and Sentry once, and gives all your agents the same address for them. Without one, your agents only get claude.ai's connectors, which are signed in on claude.ai for each login.";
+
+// Why a gateway address was found and not used (it is not https), when the runner says so.
+export const whyOff = (s: Status): string | undefined => (s?.state === 'off' && s.error ? `An address for one was found but not used: ${s.error.replace(/\.+$/, '')}.` : undefined);
+
+// Where the gateway is written up: the Connectors section of this copy's own guide (`repo` is
+// owner/name, as updates.ts has it).
+export const guideUrl = (repo: string): string => `https://github.com/${repo}/blob/main/docs/guide.md#connectors`;
+
 // The services that need signing in again.
 export const signedOut = (s: Status): ConnectorService[] => (s?.state === 'ok' ? s.services.filter((x) => x.state === 'signed_out') : []);
 
