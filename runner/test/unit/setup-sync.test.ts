@@ -342,7 +342,47 @@ test('a self-hosted backend, and a runner key of its own from another computer, 
   fs.writeFileSync(path.join(b.home, 'secrets', 'convex-key'), 'tbr_somethingminted');
   assert.equal(await b.run('--yes', '--home', b.home), 1);
   assert.match(b.text(), /key of this runner's own/);
+  // It says what that means for this computer, rather than leaving it at "nothing to set up".
+  assert.match(b.text(), /this computer has joined that backend and has nothing to set up/);
   assert.deepEqual(b.convexCalls(), []);
+});
+
+test('a runner.json that already names a backend, with no deploy key here and no linked clone, stops at step 1, before the plan promises packages or a login', async () => {
+  // A computer that mirrors to a backend somebody else made (it has the address and nothing to deploy with).
+  // The plan pass always refused it, so nothing was ever installed or logged in, but only at step 4: after
+  // the list had said "todo npm ci" and "todo log in to Convex", which is what the person reads in the
+  // failure. Now it stops at step 1 and says only why.
+  for (const flags of [['--yes'], ['--dry-run']]) {
+    const w = world({ packages: false });
+    fs.mkdirSync(w.home, { recursive: true });
+    const text = JSON.stringify({ sync: { url: URL_, runnerId: 'abc123def456' } });
+    fs.writeFileSync(path.join(w.home, 'runner.json'), text);
+    assert.equal(await w.run(...flags, '--home', w.home), 1, w.text());
+    assert.match(w.errs.join('\n'), new RegExp(`runner\\.json already mirrors to ${URL_.replaceAll('.', '\\.')}`));
+    assert.match(w.errs.join('\n'), /Either remove the "url" line/);
+    assert.doesNotMatch(w.text(), /npm ci|log in to Convex|2\. Packages|3\. Convex login/, 'nothing about packages or a login is promised first');
+    assert.deepEqual(w.convexCalls(), [], 'no Convex command ran, so no login either');
+    assert.ok(!w.calls.some((c) => c.args.includes('ci')), 'no packages were installed');
+    assert.equal(fs.existsSync(path.join(w.profile, '.convex')), false);
+    assert.equal(fs.readFileSync(path.join(w.home, 'runner.json'), 'utf8'), text, 'runner.json is as it was');
+  }
+  // With a deploy key, or a clone linked to its project, it carries on as before.
+  const keyed = world({ packages: false });
+  fs.mkdirSync(path.join(keyed.home, 'secrets'), { recursive: true });
+  fs.writeFileSync(path.join(keyed.home, 'runner.json'), JSON.stringify({ sync: { url: URL_ } }));
+  fs.writeFileSync(path.join(keyed.home, 'secrets', 'convex-deploy.env'), `CONVEX_DEPLOY_KEY=${DEPLOY_KEY}\n`);
+  keyed.acct.token = true;
+  fs.mkdirSync(path.join(keyed.profile, '.convex'), { recursive: true });
+  fs.writeFileSync(path.join(keyed.profile, '.convex', 'config.json'), JSON.stringify({ accessToken: ACCESS_TOKEN }));
+  assert.equal(await keyed.run('--yes', '--no-restart', '--home', keyed.home), 0, keyed.text());
+  const linked = world({ packages: false });
+  fs.mkdirSync(linked.home, { recursive: true });
+  fs.writeFileSync(path.join(linked.home, 'runner.json'), JSON.stringify({ sync: { url: URL_ } }));
+  fs.writeFileSync(path.join(linked.repo, '.env.local'), 'CONVEX_DEPLOYMENT=dev:old-owl-5 # team: platima, project: threadbear\n');
+  linked.acct.token = true;
+  fs.mkdirSync(path.join(linked.profile, '.convex'), { recursive: true });
+  fs.writeFileSync(path.join(linked.profile, '.convex', 'config.json'), JSON.stringify({ accessToken: ACCESS_TOKEN }));
+  assert.equal(await linked.run('--yes', '--no-restart', '--home', linked.home), 0, linked.text());
 });
 
 test('on a Mac it says to use ./threadbear setup, and touches nothing', async () => {

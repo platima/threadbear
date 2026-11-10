@@ -352,8 +352,15 @@ class Setup {
 
   // ---- 1. this computer
   checkComputer() {
-    const { d, v } = this;
     this.say('1. This computer');
+    this.checkPlatform();
+    this.checkTools();
+    this.checkDataFolder();
+    this.checkFirstComputer();
+  }
+
+  checkPlatform() {
+    const { d } = this;
     if (d.platform === 'darwin') {
       throw new Fail('This script is for Windows and Linux. On a Mac, run ./threadbear setup instead: it does this and builds the runner and the Mac app (docs/setup-and-updates.md, section 2.2).');
     }
@@ -364,7 +371,11 @@ class Setup {
     const old = oldNodeMessage(d.nodeVersion);
     if (old) throw new Fail(old);
     this.ok(`Node ${d.nodeVersion}`);
+  }
 
+  // What the backend deploy needs: git and the clone, npm, tar and (on Linux) flock.
+  checkTools() {
+    const { d } = this;
     const git = d.spawn({ file: 'git', args: ['--version'] }, { env: this.baseEnv() });
     if (git.status !== 0) throw new Fail(`git is missing, or won't run. ${d.platform === 'win32' ? 'Install Git for Windows (https://git-scm.com/download/win)' : 'Install it with your package manager'}, then run this again.`);
     this.ok(git.stdout.trim() || 'git');
@@ -385,7 +396,11 @@ class Setup {
     if (tar.status !== 0) throw new Fail(d.platform === 'win32' ? "tar.exe isn't in the Windows folder (C:\\Windows\\System32\\tar.exe comes with Windows 10 and 11). Without it the backend can't be unpacked for deploying." : "tar isn't installed. Install it with your package manager, then run this again.");
     this.ok('tar');
     if (d.platform === 'linux' && !['/usr/bin/flock', '/bin/flock'].some((f) => d.exists(f))) throw new Fail("flock isn't installed (it is in util-linux). The backend deploy needs it. Install it with your package manager, then run this again.");
+  }
 
+  // The runner's data folder, made if it isn't there. `writes` is what gets put in it, for the warning.
+  checkDataFolder(writes = 'a deploy key and the runner key') {
+    const { d } = this;
     if (d.exists(this.home)) this.ok(`data folder ${this.home}`);
     else if (this.dry) this.todo(`make the data folder ${this.home}`);
     else {
@@ -393,25 +408,31 @@ class Setup {
       this.ok(`made the data folder ${this.home}`);
     }
     const outside = d.homeWarning(this.home);
-    if (outside) this.warn(`${outside} This setup writes a deploy key and the runner key there.`);
+    if (outside) this.warn(`${outside} This setup writes ${writes} there.`);
     if (!d.exists(this.runnerJsonPath)) this.note("there is no runner.json yet, so Threadbear hasn't run with this data folder. That is fine: this makes one, and the runner fills in the rest when it starts.");
+  }
 
-    // Things that mean this isn't a job for this script.
+  // Things that mean this isn't a job for this script, and the options that can't be used.
+  checkFirstComputer() {
+    const { v } = this;
     const admin = this.admin();
     if (admin.kind === 'selfHosted') {
       throw new Fail(`This computer has a self-hosted Convex backend (${admin.file}). This script sets up Convex cloud only; a self-hosted backend is Mac-only for now (docs/self-hosting.md), so nothing was changed.`);
     }
     if (isJoining({ existing: false, local: this.localKey() })) {
-      throw new Fail(`${this.runnerKeyFile} is a key of this runner's own, given by another computer's Threadbear (tb runner add). That computer owns the backend, and has its own phone pairing; there is nothing to set up here.`);
+      throw new Fail(`${this.runnerKeyFile} is a key of this runner's own, given by another computer's Threadbear (tb runner add). That computer owns the backend, and has its own phone pairing; this computer has joined that backend and has nothing to set up.`);
     }
     const json = this.readRunner();
     if (json.sync?.enabled === false) {
       throw new Fail(`${this.runnerJsonPath} has "sync": { "enabled": false }, so the runner won't use a backend whatever this sets up. Remove that line (or set it to true) and run this again. Nothing has been changed.`);
     }
-    if (v.team && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(v.team)) throw new Fail(`--team wants a team slug like my-team, not ${JSON.stringify(v.team)}.`);
+    if (v.team &&!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(v.team)) throw new Fail(`--team wants a team slug like my-team, not ${JSON.stringify(v.team)}.`);
     if (v.region && !/^[a-z0-9-]+$/.test(v.region)) throw new Fail(`--region wants a Convex region like aws-ap-southeast-2, not ${JSON.stringify(v.region)}.`);
     if (v.project !== undefined && !/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/.test(v.project)) throw new Fail(`--project wants a name of letters, numbers, spaces, dots, dashes and underscores, not ${JSON.stringify(v.project)}.`);
     if (v.name !== undefined && (!v.name.trim() || v.name.length > 64 || /[\u0000-\u001f]/.test(v.name))) throw new Fail('--name wants a short name for this computer, such as Desk PC.');
+    // An address with no way to deploy to it here: a backend somebody else made. Said now, not at
+    // step 4 after the list has promised packages and a Convex login that would come to nothing.
+    if (json.sync?.url && admin.kind !== 'cloud' && !this.envLocal()) throw new Fail(this.noDeployKeyHere(json.sync.url));
   }
 
   // ---- 2. packages
@@ -492,6 +513,10 @@ class Setup {
     }
   }
 
+  noDeployKeyHere(have) {
+    return `runner.json already mirrors to ${have}, so this won't make a second backend, but there is no deploy key for it here and this clone isn't linked to its project. Either remove the "url" line under "sync" in ${this.runnerJsonPath} to start a new backend, or link this clone to the project that owns it (npx convex dev --once --configure existing) and run this again.`;
+  }
+
   async project() {
     const { d, v } = this;
     this.say('4. Convex project');
@@ -517,9 +542,8 @@ class Setup {
     }
     const env = this.envLocal();
     if (have) {
-      if (!env) {
-        throw new Fail(`runner.json already mirrors to ${have}, so this won't make a second backend, but there is no deploy key for it here and this clone isn't linked to its project. Either remove the "url" line under "sync" in ${this.runnerJsonPath} to start a new backend, or link this clone to the project that owns it (npx convex dev --once --configure existing) and run this again.`);
-      }
+      // (checkFirstComputer has said so already; this is for a clone that lost its .env.local since.)
+      if (!env) throw new Fail(this.noDeployKeyHere(have));
       this.ok(`runner.json already mirrors to ${have}; the deploy key made next must be for that deployment`);
       return have;
     }
