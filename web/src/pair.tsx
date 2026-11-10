@@ -4,7 +4,7 @@
 // before anything is kept, because the token goes to the address in the link.
 import { useEffect, useState } from 'react';
 import { note, savePairing, watchLinks } from './deployment';
-import { parsePairing, type Pairing } from './pairing';
+import { parsePairing, unusualAddress, type Pairing } from './pairing';
 import { canScan, scanCode } from './scan';
 
 export function PairScreen({ expired }: { expired?: boolean }) {
@@ -66,7 +66,12 @@ export function PairScreen({ expired }: { expired?: boolean }) {
     return (
       <main className="signin pair">
         <img src="/icon.png" alt="" width={72} height={72} />
-        <h1>Pair with {host}?</h1>
+        <h1 style={{ overflowWrap: 'anywhere' }}>Pair with {host}?</h1>
+        {unusualAddress(offer.url) ? (
+          <p className="small bad" style={{ overflowWrap: 'anywhere' }}>
+            That is not a Convex address: {offer.url}. It can be a backend you host yourself. If you did not set one up, do not pair.
+          </p>
+        ) : null}
         <p>This phone will show the threads of the Threadbear whose deployment that is, and can send to them. Only pair with one that is yours.</p>
         <p>
           <button className="primary" onClick={() => savePairing(offer)}>Pair</button>{' '}

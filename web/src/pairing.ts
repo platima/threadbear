@@ -87,3 +87,15 @@ export function parsePairing(text: string): Pairing | undefined {
   }
   return undefined;
 }
+
+// Whether a deployment's address is not a Convex-hosted one (name.convex.cloud, or the
+// .convex.site of the website): a self-hosted backend is one of those, which is fine if
+// the person set one up, and a reason to look twice at a code from anywhere else. The
+// offer screen says so beside the address. A look-alike (convex.cloud.example.net) is one.
+export function unusualAddress(url: string): boolean {
+  try {
+    return !/^[a-z0-9-]+(.[a-z0-9-]+)*.convex.(cloud|site)$/i.test(new URL(url).hostname);
+  } catch {
+    return true;
+  }
+}

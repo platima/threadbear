@@ -30,8 +30,11 @@ particular. It is told which one to talk to by the link that pairs it:
   Google's code scanner over the app (a command of the push plugin,
   `plugin:threadbear-push|scan`, in `android/plugins/push`). It needs Google
   Play services, has its own camera screen and asks for no camera permission
-  of the app's own; the manifest has it fetch the scanner's module at install
-  (`com.google.mlkit.vision.DEPENDENCIES`). What it reads goes through the same
+  of the app's own. Its module is fetched by Google Play services: the manifest asks
+  for it at install (`com.google.mlkit.vision.DEPENDENCIES`), which only works for an
+  app installed from the Play Store, so the plugin also asks for it when the app starts
+  (`ModuleInstall`). On an APK installed by hand the first scan can still find it
+  fetching and says to wait a minute and try again. What it reads goes through the same
   check as a pasted link, so a code that is not a pairing (a Wi-Fi code, a menu)
   offers nothing. Backing out, or a phone without Play services, leaves the paste box.
 - **Or paste** that link, or the website's sign-in link, into the app's first

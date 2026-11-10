@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parsePairing } from './pairing.ts';
-import { canScan, readScan, scanCode } from './scan.ts';
+import { SCAN_SILENT, canScan, readScan, scanCode } from './scan.ts';
 
 const LINK = 'threadbear://pair?url=https%3A%2F%2Fexample-123.convex.cloud&token=abc123&key=r1%3Akey';
 
@@ -51,4 +51,12 @@ test('outside the app there is no scanner to offer', async () => {
   await assert.rejects(scanCode(), /Android app/);
   // With a shell to ask, there is one.
   assert.equal(canScan(async () => undefined), true);
+});
+
+test('a scanner that never answers is given up on, so the button does not stay on Scanning', async () => {
+  const never = () => new Promise<never>(() => {});
+  await assert.rejects(scanCode(never, 20), (e: Error) => e.message === SCAN_SILENT);
+  assert.match(SCAN_SILENT, /try again/);
+  // A slow answer inside the wait is still an answer.
+  assert.deepEqual(await scanCode(async () => { await new Promise((r) => setTimeout(r, 10)); return { cancelled: true }; }, 500), { cancelled: true });
 });
