@@ -490,15 +490,31 @@ said otherwise.
   --cd <folder>`). On Linux it reads `$SHELL` and `/etc/shells`. The window can
   only ask for a shell from that list, by its id; it never names a program. The
   choice of default is kept in the page's local storage (Settings, "This app",
-  or the menu in the Terminal). A shell is given the bridge's environment less
-  `THREADBEAR_BRIDGE_KEY` and any thread id, plus `TERM`, `COLORTERM` and
-  `TERM_PROGRAM=Threadbear`. It runs what you type, as you, with no sandbox, the
-  same as any terminal. Its socket (`/terminal` on the bridge) takes the same
-  key and origin checks as the runner's, so another program on the PC without
-  the launch key can't open one. Nothing is sent anywhere. The pseudo-terminal
-  comes from `@lydell/node-pty` (MIT), a package of prebuilt binaries for the
-  platform (nothing is compiled), which on Windows includes Microsoft's
-  `conpty.dll` and `OpenConsole.exe` (MIT).
+  or the menu in the Terminal). On Windows the bridge also reads the font
+  Windows Terminal is set to (`desktop-tauri/bridge/windows-terminal-font.ts`),
+  so a prompt theme's symbols draw in the Nerd Font you chose there. It does
+  this when the Terminal panel opens and when you pick "Same as Windows
+  Terminal", not at start-up. It tries Windows Terminal's `settings.json` in
+  `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState`,
+  then the same under `Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe`, then
+  `%LOCALAPPDATA%\Microsoft\Windows Terminal`, and uses the first that is
+  there and reads as settings. A file that is missing, can't be read, is over
+  2 MB or is not JSON is passed over. From the one it uses it takes the default
+  profile's font names (a list, up to six) and size, nothing else. Only those
+  names (letters, digits, spaces, hyphens, dots, underscores, brackets, plus
+  signs and ampersands, up to 100 characters each) and the size go to the
+  window, which uses them to choose the fonts to draw with. The file's text is
+  not kept, logged or sent anywhere, and nothing is written to it. The font
+  choice (Same as Windows Terminal, Default, or a name you type) is kept in the
+  page's local storage as `threadbear.terminalFont`. A shell is given the
+  bridge's environment less `THREADBEAR_BRIDGE_KEY` and any thread id, plus
+  `TERM`, `COLORTERM` and `TERM_PROGRAM=Threadbear`. It runs what you type, as
+  you, with no sandbox, the same as any terminal. Its socket (`/terminal` on the
+  bridge) takes the same key and origin checks as the runner's, so another
+  program on the PC without the launch key can't open one. Nothing is sent
+  anywhere. The pseudo-terminal comes from `@lydell/node-pty` (MIT), a package
+  of prebuilt binaries for the platform (nothing is compiled), which on Windows
+  includes Microsoft's `conpty.dll` and `OpenConsole.exe` (MIT).
 - **Installers** (`installer/`, built by `.github/workflows/installers.yml`
   from `release.yml`): a setup exe (Inno Setup), an MSI (WiX) and a zip, for
   x64 and arm64. They put the app in `%LOCALAPPDATA%\Programs\Threadbear` (or

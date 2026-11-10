@@ -291,3 +291,115 @@ test('a shell list that never came is an error in the snapshot, with the retry a
   assert.equal(r.sessions.getSnapshot().shells?.auto, 'pwsh', 'a drop with nothing asked for leaves the list');
   r.sessions.close();
 });
+
+test("Windows Terminal's font is asked for, and kept as the bridge said it", () => {
+  const r = rig();
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined, 'not asked at construction');
+  r.sessions.loadFont();
+  r.t.open();
+  assert.deepEqual(r.ask(), [{ t: 'font' }]);
+  r.say({ t: 'font', face: 'CaskaydiaCove Nerd Font Mono', size: 11 });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont, { face: 'CaskaydiaCove Nerd Font Mono', size: 11 });
+  r.say({ t: 'font' });
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined, 'Windows Terminal no longer names a font');
+  r.sessions.close();
+});
+
+test('whether the bridge has answered about the font is kept, even for an answer that says there is none', () => {
+  const r = rig();
+  assert.equal(r.sessions.getSnapshot().wtAnswered, false, 'not at construction');
+  r.sessions.loadFont();
+  r.t.open();
+  assert.equal(r.sessions.getSnapshot().wtAnswered, false, 'asked is not answered');
+  const v = r.sessions.getSnapshot().version;
+  r.say({ t: 'font' });
+  assert.equal(r.sessions.getSnapshot().wtAnswered, true, 'an answer of none is an answer');
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined);
+  assert.equal(r.sessions.getSnapshot().version, v + 1, 'and the window is told');
+  r.say({ t: 'font' });
+  assert.equal(r.sessions.getSnapshot().version, v + 1, 'the same answer again is not news');
+  r.say({ t: 'font', face: 'Fira Code' });
+  assert.equal(r.sessions.getSnapshot().wtAnswered, true);
+  r.sessions.close();
+  // An answer with nothing usable in it still counts as one.
+  const bad = rig();
+  bad.sessions.loadFont();
+  bad.t.open();
+  bad.say({ t: 'font', face: 'x"; }' });
+  assert.equal(bad.sessions.getSnapshot().wtAnswered, true);
+  assert.equal(bad.sessions.getSnapshot().wtFont, undefined);
+  bad.sessions.close();
+});
+
+test('a font answer is checked again: only a plain name and a sensible size are kept', () => {
+  const r = rig();
+  r.sessions.loadFont();
+  r.t.open();
+  r.say({ t: 'font', face: 'x"; } body { display: none }', size: 'big', settings: { secret: 1 } });
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined);
+  r.say({ t: 'font', face: 'Fira Code', size: 5000, settings: { secret: 1 } });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont, { face: 'Fira Code' });
+  r.say({ t: 'font', face: 7 });
+  assert.equal(r.sessions.getSnapshot().wtFont, undefined);
+});
+
+test("a list of faces is kept whole, checked again, and a changed list is a change", () => {
+  const r = rig();
+  r.sessions.loadFont();
+  r.t.open();
+  r.say({ t: 'font', face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono', 'x"; }'], size: 12 });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont, { face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'], size: 12 });
+  const v = r.sessions.getSnapshot().version;
+  r.say({ t: 'font', face: 'Cascadia Code', faces: ['Cascadia Code', 'Symbols Nerd Font Mono'], size: 12 });
+  assert.equal(r.sessions.getSnapshot().version, v, 'the same list again changes nothing');
+  r.say({ t: 'font', face: 'Cascadia Code', faces: ['Cascadia Code', 'Hack NF'], size: 12 });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont?.faces, ['Cascadia Code', 'Hack NF'], 'only the second face changed, and it is still seen');
+  r.say({ t: 'font', face: 'Cascadia Code', size: 12 });
+  assert.deepEqual(r.sessions.getSnapshot().wtFont, { face: 'Cascadia Code', size: 12 }, 'back to one face');
+  r.sessions.close();
+});
+
+test('the same font said again changes nothing the window would redraw for', () => {
+  const r = rig();
+  r.sessions.loadFont();
+  r.t.open();
+  r.say({ t: 'font', face: 'Fira Code' });
+  const v = r.sessions.getSnapshot().version;
+  r.say({ t: 'font', face: 'Fira Code' });
+  assert.equal(r.sessions.getSnapshot().version, v);
+  r.say({ t: 'font' });
+  r.say({ t: 'font' });
+  assert.equal(r.sessions.getSnapshot().version, v + 1);
+});
+
+test('the font choice is kept under its own key, read at the start, and shown at once', () => {
+  const r = rig();
+  assert.equal(r.sessions.getSnapshot().fontChoice, undefined, 'none made');
+  assert.equal(r.sessions.setFont({ kind: 'custom', name: 'Iosevka Term' }), true);
+  assert.equal(r.kept['threadbear.terminalFont'], 'custom:Iosevka Term');
+  assert.deepEqual(r.sessions.getSnapshot().fontChoice, { kind: 'custom', name: 'Iosevka Term' });
+  assert.equal(r.kept['threadbear.terminalShell'], undefined, "the shell's choice is not touched");
+
+  const { t } = fake();
+  const again = new TerminalSessions(() => t, { getItem: (k) => r.kept[k] ?? null, setItem: () => {} });
+  assert.deepEqual(again.getSnapshot().fontChoice, { kind: 'custom', name: 'Iosevka Term' }, 'after a reload');
+});
+
+test("picking Windows Terminal's font asks the bridge again; other choices ask nothing", () => {
+  const r = rig();
+  r.sessions.setFont({ kind: 'default' });
+  r.sessions.setFont({ kind: 'custom', name: 'Fira Code' });
+  r.sessions.look('t1'); // something to connect for; the socket opens on it
+  r.t.open();
+  assert.deepEqual(r.ask(), [{ t: 'open', key: 't1', cols: 80, rows: 24, create: false }]);
+  r.sessions.setFont({ kind: 'wt' });
+  assert.deepEqual(r.ask().at(-1), { t: 'font' });
+  assert.equal(r.ask().filter((m) => m.t === 'font').length, 1);
+});
+
+test("a window that can't keep the font choice says so, and still applies it", () => {
+  const { t } = fake();
+  const sessions = new TerminalSessions(() => t, { getItem: () => null, setItem: () => {} });
+  assert.equal(sessions.setFont({ kind: 'default' }), false);
+  assert.deepEqual(sessions.getSnapshot().fontChoice, { kind: 'default' });
+});

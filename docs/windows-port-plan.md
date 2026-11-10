@@ -654,6 +654,36 @@ it is decoded as that (`parseWslList`). Not run: the installed app (the shell's 
 arm64 and Linux packages (`stage.ps1` and `stage.mjs` fetch the target's package with
 `npm ci --os --cpu`, tried here for win32-arm64 only), and a Linux desktop.
 
+The Terminal's font (10 Nov 2026). On rc.4 the panel drew in a fixed stack of fonts, so the
+symbols an oh-my-posh or Powerline prompt draws (private use glyphs, which only a Nerd Font has)
+showed as boxes for someone who had set one in Windows Terminal. The bridge now reads that font
+(`bridge/windows-terminal-font.ts`, `font-face.ts`) and the panel's Font menu offers it as
+"Same as Windows Terminal", with Default and a typed name beside it. The settings file is JSONC,
+so there is a small tolerant parser rather than a dependency; only a checked font name and the
+size leave the bridge. Of the three places Windows Terminal keeps it, the first file that is
+there and reads as settings is the one used, even when it names no font, because that is the
+file Windows Terminal reads; a missing, unreadable or invalid file is passed over.
+
+Windows Terminal's `face` can be a list ("Cascadia Code, Symbols Nerd Font Mono"), and the
+second font is often where the symbols come from, so the whole list (up to six names, in its
+order) goes to the panel and into the stack, and a name typed in the box can be a list too. A
+name may have a plus sign or an ampersand in it ("M+ 1m"); inside a quoted CSS string they are
+only text. A webview finds a private use glyph only in a font it was told to look in, so the
+stack names the common Nerd Fonts (Symbols Nerd Font among them). A browser goes along the list
+one glyph at a time, so they come last: the person's faces, then Cascadia Mono, Cascadia Code,
+Consolas, Liberation Mono, Menlo and Courier New, then the Nerd Fonts, then `monospace`. The
+text is drawn in an ordinary font and only the symbols those lack come from a Nerd Font.
+
+Windows Terminal's size is in points and the panel's is in pixels, so 12 points becomes 16
+pixels (held between 8 and 32). That is larger than the 13 pixels the Terminal used before, so
+the Terminal is bigger with "Same as Windows Terminal" than without it. Until the bridge has
+answered, which is a moment on the first open after each start, the default is drawn and
+nothing is said about Windows Terminal. Checked by hand in the built page, served by the real
+bridge, against a stand-in settings file (Consolas and Lucida Console at 12 points): the stack
+order, 16 pixels, Escape in the name box, a typed list with a `+` and an `&` in it, and the note
+for a stored "Same as Windows Terminal" once the bridge has answered with no font. Not checked
+against a real Nerd Font on a Windows Terminal setup, so glyphs have not been seen drawn.
+
 ### The desktop folder, and Mike's GPUI app (9 Nov 2026)
 
 Mike is rewriting the desktop app in Rust with GPUI, for Mac, Windows and Linux, and has

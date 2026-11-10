@@ -5,6 +5,12 @@
 .termHead { flex: none; display: flex; align-items: center; gap: 8px; padding: 3px 10px; background: var(--bg-side); border-bottom: 1px solid var(--line); font-size: 12px; min-width: 0; }
 .termHead button { font-size: 12px; padding: 1px 8px; }
 .termWhere { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* The font's menu says which font is in use, so a long name is cut short rather than pushing the other buttons out. */
+.termHead .tb-menu { min-width: 0; flex: 0 1 auto; }
+.termHead .termFontBtn { display: inline-flex; align-items: center; gap: 4px; max-width: 220px; }
+.termFontLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.termFontName { flex: 0 1 160px; min-width: 80px; padding: 1px 6px; font-size: 12px; }
+.termFontName.bad { border-color: var(--bad); }
 .termNote { flex: none; padding: 3px 10px; font-size: 12px; color: var(--dim); background: var(--bg-side); border-bottom: 1px solid var(--line); }
 .termBody { flex: 1; min-height: 0; position: relative; }
 .termSlot { position: absolute; inset: 6px 4px 4px 10px; }

@@ -7,7 +7,9 @@
 // terminal with Ctrl+J). Looking at a thread, or reloading the window, only finds the
 // shell that is already there. A thread's shell ends when the thread is archived or deleted.
 
+import { sanitiseFace, sanitiseFaces, sanitiseSize } from '../../bridge/font-face.ts';
 import { bridgeKey, bridgeTransport, type Transport } from './rpc.ts';
+import { fontChoice, setFontChoice, type FontChoice, type FoundFont } from './terminal-font.ts';
 import type { ThreadSummary } from './types.ts';
 
 export type ShellChoice = { id: string; label: string };
@@ -52,6 +54,15 @@ export type Snapshot = {
   shells?: ShellsInfo;
   /** The shell chosen to start by default: an id from the list, or "auto". */
   choice: string;
+  /** The font the person chose for the Terminal; undefined until they choose (terminal-font.ts). */
+  fontChoice?: FontChoice;
+  /** The font Windows Terminal is set to, as the bridge last said. Undefined until it has, and when there is none. */
+  wtFont?: FoundFont;
+  /**
+   * Whether the bridge has answered about Windows Terminal's font yet. It tells "not asked or not
+   * answered" from "answered: there is none", so a window that has not heard yet says nothing about it.
+   */
+  wtAnswered: boolean;
   version: number;
 };
 
@@ -118,7 +129,7 @@ export class TerminalSessions {
   constructor(connect: () => Transport, store?: KeyValue) {
     this.connect = connect;
     this.store = store;
-    this.snap = { sessions: new Map(), choice: shellChoice(store), version: 0 };
+    this.snap = { sessions: new Map(), choice: shellChoice(store), fontChoice: fontChoice(store), wtAnswered: false, version: 0 };
   }
 
   subscribe = (l: () => void): (() => void) => {
@@ -221,6 +232,19 @@ export class TerminalSessions {
         for (const w of this.shellsWaiting.splice(0)) w(info);
         break;
       }
+      case 'font': {
+        // Only names and a size are taken, and the names are checked again here: they end up in a style.
+        const faces = sanitiseFaces(m.faces);
+        const face = sanitiseFace(m.face) ?? faces[0];
+        const size = sanitiseSize(m.size);
+        const before = this.snap.wtFont;
+        const same = before?.face === face && before?.size === size && (before?.faces ?? []).join(',') === (faces.length > 1 ? faces : []).join(',');
+        // The first answer is news even when it says there is no font: it ends the "not heard yet".
+        if (!same || !this.snap.wtAnswered) {
+          this.publish({ wtAnswered: true, wtFont: face || size !== undefined ? { ...(face ? { face } : {}), ...(faces.length > 1 ? { faces } : {}), ...(size !== undefined ? { size } : {}) } : undefined });
+        }
+        break;
+      }
       case 'opened': {
         if (!key || !this.session(key)) break; // stopped meanwhile
         const before = this.session(key);
@@ -280,6 +304,26 @@ export class TerminalSessions {
       this.shellsWaiting.push(resolve);
       this.send({ t: 'shells', refresh });
     });
+  }
+
+  /**
+   * Asks the bridge which font Windows Terminal is set to (it reads the file when asked, so this
+   * is called when the Terminal opens and when the person picks that font). The answer arrives
+   * as wtFont, and wtAnswered says it has come. A bridge that doesn't know the question never
+   * answers, and the window then draws the default without a note about Windows Terminal.
+   */
+  loadFont(): void {
+    this.send({ t: 'font' });
+  }
+
+  /** Changes the Terminal's font. False when this window can't keep it (it still applies until it closes). */
+  setFont(choice: FontChoice): boolean {
+    const kept = setFontChoice(choice, this.store);
+    this.publish({ fontChoice: choice });
+    // The file is read again each time the person asks for this font, so a change made in
+    // Windows Terminal since the panel opened is picked up.
+    if (choice.kind === 'wt') this.loadFont();
+    return kept;
   }
 
   /** Finds the shell already running for this key, if any, without starting one. */

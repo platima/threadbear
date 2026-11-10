@@ -7,13 +7,14 @@
 //
 // What the page sends (JSON text):
 //   {t:'shells', refresh?}                       the shells this PC has, and the default
+//   {t:'font'}                                   the font Windows Terminal is set to (Windows only)
 //   {t:'open', key, shell?, cwd?, cols, rows, create?}
 //                                                 attach to key's shell, starting one when
 //                                                 create is true and there isn't one running
 //   {t:'in', key, d}  {t:'resize', key, cols, rows}  {t:'stop', key}
 //   {t:'prune', keep:[key...]}                   stop every shell whose key isn't listed
 // What it gets back:
-//   {t:'shells', ...}  {t:'opened', key, shell, cwd, replay?}  {t:'none', key}
+//   {t:'shells', ...}  {t:'font', face?, faces?, size?}  {t:'opened', key, shell, cwd, replay?}  {t:'none', key}
 //   {t:'out', key, d}  {t:'exit', key, code}  {t:'error', key?, message}
 //
 // A shell starts only when the page asks for one with create. It stops when the page
@@ -25,6 +26,8 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
 import { command, pick, shellsNow, type Shell, type ShellList } from './shells.ts';
+import { sanitiseFace, sanitiseFaces, sanitiseSize } from './font-face.ts';
+import { windowsTerminalFont, type TerminalFont } from './windows-terminal-font.ts';
 
 /** The part of node-pty's terminal this uses, so a test can stand one in. */
 export type Pty = {
@@ -96,6 +99,8 @@ export class Terminals {
   private readonly deps: {
     spawn?: () => Spawn;
     shells?: (refresh?: boolean) => Promise<ShellList>;
+    /** The font Windows Terminal is set to; the real one reads its settings file. */
+    font?: () => TerminalFont;
     env?: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
     home?: string;
@@ -145,6 +150,24 @@ export class Terminals {
 
   shells(refresh = false): Promise<ShellList> {
     return (this.deps.shells ?? shellsNow)(refresh);
+  }
+
+  /**
+   * The font face and size Windows Terminal is set to, read now (the person may have changed it
+   * since the last look). Empty anywhere but Windows, and when there is none to find.
+   */
+  font(): TerminalFont {
+    try {
+      const found = (this.deps.font ?? windowsTerminalFont)();
+      // Whatever is behind this, only names and a size leave the bridge. The names are the whole
+      // list Windows Terminal has, in its order, when it has more than one.
+      const faces = sanitiseFaces(found.faces);
+      const face = sanitiseFace(found.face) ?? faces[0];
+      const size = sanitiseSize(found.size);
+      return { ...(face ? { face } : {}), ...(faces.length > 1 ? { faces } : {}), ...(size !== undefined ? { size } : {}) };
+    } catch {
+      return {};
+    }
   }
 
   /** Which shells are running, for the page after a reload. */
@@ -312,6 +335,9 @@ export class Terminals {
               (list) => send({ t: 'shells', shells: list.shells.map((s) => ({ id: s.id, label: s.label })), auto: list.auto, notes: list.notes, unavailable: this.unavailable() }),
               (e: unknown) => send({ t: 'error', message: (e as Error).message }),
             );
+            break;
+          case 'font':
+            send({ t: 'font', ...this.font() });
             break;
           case 'open':
             if (!key) break;
