@@ -23,6 +23,10 @@ name: Installers
 #                  npm, no cargo. Used by tag releases, and by a manual run
 #                  that asks for sign.
 #
+# A last job, upgrade-over-running, installs the x64 setup exe from whichever
+# of those two ran and upgrades it with programs holding the install folder. It
+# reads the artifact and publishes nothing, and a tag run skips it.
+#
 # A pull request or a push to main that touches the packaging builds the x64
 # packages unsigned, so a broken installer is caught before a release does.
 #
@@ -517,3 +521,49 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
           retention-days: 14
+
+  # Installs the x64 setup exe, then runs it again over the install with programs
+  # holding the folder, as an upgrade finds a Threadbear that is still running
+  # (installer/test-upgrade-over-running.ps1; threadbear.iss PrepareToInstall and
+  # installer/release-folder.ps1 are what it checks). It needs a machine that can
+  # be spoilt, since the setup's AppId, registry keys and Task Scheduler task are
+  # the real ones: a hosted runner is thrown away, and the script refuses to run
+  # anywhere else. No secret and no token. It is skipped for a tag, so a release
+  # is never held up by it: the commit being released has already passed it on
+  # main, where this workflow runs for every change under installer/.
+  upgrade-over-running:
+    name: setup upgrade over a running copy (x64)
+    needs: [plan, package, package-signed]
+    if: ${{ !cancelled() && !startsWith(github.ref, 'refs/tags/') && (needs.package.result == 'success' || needs.package-signed.result == 'success') }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: threadbear-installers-x64
+          path: dist
+
+      - name: Upgrade over node.exe running from the install folder, and over a file held by something else
+        shell: pwsh
+        run: |
+          $setup = Join-Path $PWD "dist/threadbear-v$env:VERSION-setup-win-x64.exe"
+          pwsh -NoProfile -File installer/test-upgrade-over-running.ps1 -Setup $setup -WorkDir (Join-Path $env:RUNNER_TEMP 'tb-upgrade')
+          if ($LASTEXITCODE -ne 0) { throw "the upgrade check failed (exit code $LASTEXITCODE)" }
+
+      - name: Keep the setup logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          overwrite: true
+          name: threadbear-upgrade-logs
+          path: ${{ runner.temp }}/tb-upgrade/*.log
+          if-no-files-found: ignore
+          retention-days: 3
