@@ -210,10 +210,11 @@ either; following your threads from a phone or the web needs a Convex
 deployment of your own. `./threadbear setup` on a Mac makes one, and on Windows
 or Linux `node scripts/setup-sync.mjs` does, from a clone of the repository
 ([docs/pairing.md](docs/pairing.md): what it creates, what it costs, how to undo
-it). A runner on Windows or Linux can also join one that exists
-([INSTALL.md](INSTALL.md), sections 6 and 7). The Android app is paired with that
-deployment by the QR code under Settings > Phone & browser on a computer
-([docs/android.md](docs/android.md)).
+it). A second Windows or Linux computer can join the deployment the first one
+made, with `node scripts/setup-sync.mjs --join`
+([docs/pairing.md](docs/pairing.md), "Joining from a second computer"). The
+Android app is paired with that deployment by the QR code under Settings > Phone &
+browser on the first computer ([docs/android.md](docs/android.md)).
 Android asks to allow installs from your browser or file manager, once.
 
 [docs/guide.md](docs/guide.md) is the full guide to using it (written for the

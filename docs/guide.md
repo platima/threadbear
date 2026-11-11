@@ -885,6 +885,11 @@ its next restart. Set that Mac up with `./threadbear setup --existing`, which
 leaves out the Convex login and deploy key (either could do anything to your
 backend) and ends by telling you to run that command; `tb runner check` there
 says if an older setup left them behind.
+A Windows or Linux computer joins with `node scripts/setup-sync.mjs --join`
+instead, in two runs: the first tells you the `tb runner add <name> --out <file>
+--id <its id>` to run here, which writes its key to a file you carry over, and the
+second installs it (docs/pairing.md, "Joining from a second computer"; `--ssh`
+writes to a Mac's data folder, so it doesn't reach a Windows PC).
 That key only reaches its own Mac's threads, schedules and Pocket cards: it
 can't pair a phone or put a schedule on another Mac, and that Mac's app
 doesn't list the other Macs' threads. Only the first Mac's key can. A new
@@ -1228,7 +1233,10 @@ QR code: on the Mac, Settings (⌘,) > Phone & browser > Show the code, then
 scan it with the iPhone app. On Windows and Linux the same tab has a Show a code
 button, and it stays greyed, with a note saying "no sync.url in runner.json", until
 `node scripts/setup-sync.mjs` has made your Convex backend from a clone of the
-repository (docs/pairing.md says how, what it creates and how to undo it). Keep
+repository (docs/pairing.md says how, what it creates and how to undo it). A
+second Windows or Linux computer uses that backend with `node scripts/setup-sync.mjs
+--join` (docs/pairing.md, "Joining from a second computer"), and phones are paired
+on the first computer, as its key is the one that can make a code. Keep
 the code to yourself: anyone who scans it
 can run your agents. The same tab lists each paired phone and browser with
 when it was paired and until when (90 days), and Revoke signs one out and

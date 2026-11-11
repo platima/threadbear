@@ -18,7 +18,8 @@ File references are where to look.
   variable (`RUNNER_KEY`). It deploys `convex/` and the `web/` site there.
   A second Mac set up with `--existing` gets none of these: its runner's
   key comes from your first Mac (`tb runner add`), which also writes the
-  deployment's address into its `runner.json`.
+  deployment's address into its `runner.json`. A second Windows or Linux
+  computer gets none of them either (the `--join` bullet below).
   If that login goes missing or expires, the Convex panel's Sign in to
   Convex button runs `convex login` again from the runner, which writes
   the same file; you approve it in your browser on auth.convex.dev.
@@ -50,6 +51,29 @@ File references are where to look.
   says how (it goes by `THREADBEAR_THREAD_ID` in its environment). On a Mac it
   does nothing and says to use `./threadbear setup`. Self-hosted Convex stays
   Mac-only.
+- **A second Windows or Linux computer joining that backend**
+  (`scripts/setup-sync.mjs --join`, docs/pairing.md, "Joining from a second
+  computer"): run by hand in two runs, never by the app or the runner, with
+  `--dry-run` to see the plan first and a "Go ahead?" before it writes anything.
+  It makes no Convex login, deploy key, project or deployment, and runs no Convex
+  command line, `npm`, `git` or `tar`: it needs Node 24 or newer and the
+  repository's `scripts/` and `runner/src/` files. It reads the key file you name
+  (the one `tb runner add --out` wrote on your first computer; never printed or
+  sent anywhere but your deployment). It looks in the data folder's `secrets/` and
+  at `~/.convex/config.json` only to refuse: it stops, changing nothing, if this
+  computer has a deploy key, a self-hosted admin key, a team token, a Convex panel
+  key or a Convex login, or if `secrets/convex-key` holds anything but a runner
+  key. It writes `secrets/convex-key` (the runner key, through a temporary file
+  and a rename) and merges `sync.url`, `sync.runnerId` and `sync.name` into
+  `runner.json`, and with `--delete-key-file` deletes the key file once the key
+  reads back from `secrets/convex-key`. It talks to your deployment's own
+  address (`*.convex.cloud`) and nowhere else: a GET of `/version` to see that it
+  answers, and a POST to `/api/query` calling `sync:messageHeads`, which only
+  reads, to check that the key is live and is this runner's (the key is in the
+  body, never in the address). Both are made twice in a real run, once for the plan
+  and once for the run. At the end it can restart the runner as the bullet above
+  says, and never from inside a Threadbear thread. On a Mac it does nothing and
+  says to use `./threadbear setup --existing`.
 - **Or a self-hosted backend** (`setup --self-hosted`, docs/self-hosting.md;
   Convex cloud is the one we recommend): no Convex login or deploy key.
   Instead two Docker containers, `threadbear-convex` (Convex's open source
