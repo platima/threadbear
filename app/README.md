@@ -498,6 +498,10 @@ uses the picker's selection model; `{"cmd":"convex"}` reports the selection
 and browser URL. Calling `mock.convexPanel` again reports key requests so
 switching can be checked without a real Convex account.
 
+`{"cmd":"mock","method":"urlPanel","params":{"threadId":"demo_dark_mode","url":"http://127.0.0.1:8000/"}}`
+gives a thread a patch's url panel (`mock.page`) showing that page, so a
+page's links and what closing the panel does to its sound can be tried.
+
 `start` also takes `--appearance light|dark`, `--size WxH` and `--id NAME`;
 every other command takes `--id` (default: your newest), and `status` lists
 them, saying when an app's runner has stopped (`do`, `shot`, `dump` and
@@ -574,7 +578,7 @@ is an error. Commands marked "the open thread" act on `id` when it's given
 | `link` | `row`, `url` | follows a `work:` or `thread:` link as if it were clicked in that row (WorkLinks): opens the step's group, scrolls to it and lights it, or opens the thread |
 | `chip` | `row`, `word`, `show`, `click` | thread chips in a row's text: lists them (word=thread id); with `word`, `show` true shows its hover card and says its window number, false closes it, `click` true opens its thread |
 | `peek` | `row`, `words`, `show`, `menu`, `click` | links with a hover card in a row's text, an asks card's link buttons too: lists them (words=where they go); with `words` (part of a link's words) shows its card and says its window number; `show` false closes it; `menu` true lists the link's right-click menu instead, and `click` chooses an item from it; `press` true, with a picture chip's label as `words`, presses it through mouseDown and says what Quick Look would open, without opening it |
-| `composer-peek` | `number` | shows the hover card of the composer's chip with that number and says its window number; with no `number`, closes it |
+| `composer-peek` | `number`, `press`, `strip` | shows the hover card of the composer's chip with that number and says its window number; with no `number`, closes it. `press: true` clicks the chip instead and `strip: n` (0-based) opens the thumbnail above the box; both say what Quick Look would show (`ok quicklook <index> of [paths]`) without opening it |
 | `select-text` | `row`, `words`, `action` | selects the first match of `words` in a message row and shows the selection bar (says its window number); `action` (`explain`, `quote` or `copy`) clicks that instead. Explain opens the pane; `dump`'s panels line shows its answers |
 | `menu` | `row`, `click` | a transcript row's context menu, or chooses an item from it |
 | `debug-info`, `copy-thread-id`, `clipboard` | `row`, `id` | what "Copy debug info" and "Copy thread id" (the open thread) copy, copied to the instance's pasteboard as the menu items do; `clipboard` reads it back |

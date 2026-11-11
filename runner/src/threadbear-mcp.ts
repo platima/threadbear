@@ -779,6 +779,7 @@ export function buildThreadbearTools(
           .enum(PANEL_PLACES as [PanelPlace, ...PanelPlace[]])
           .optional()
           .describe('Where a closed panel opens: tab (beside the thread, closing when the user moves on), left, right, top or bottom (along that side of the window), or window (its own). Default: its usual place.'),
+        reload: z.boolean().optional().describe("Load a web panel's page afresh, after you've changed it."),
       },
       handle(async (input, extra) => {
         if (!control.showPanel) throw new Error("This runner can't show panels yet.");

@@ -989,14 +989,18 @@ public struct PanelRequest: Sendable, Hashable, Codable {
     /// `pin` with `show`: the highlight to open in the pane, over
     /// Highlights (`panel` is "highlights", `title` the pin's).
     public var highlight: String?
+    /// show_panel's `reload`: a web panel's page is loaded afresh as it's
+    /// shown, as the agent has changed it.
+    public var reload: Bool?
     public var at: String
 
-    public init(id: String, panel: String, title: String, where: String? = nil, highlight: String? = nil, at: String = "") {
+    public init(id: String, panel: String, title: String, where: String? = nil, highlight: String? = nil, reload: Bool? = nil, at: String = "") {
         self.id = id
         self.panel = panel
         self.title = title
         self.where = `where`
         self.highlight = highlight
+        self.reload = reload
         self.at = at
     }
 }

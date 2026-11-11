@@ -1532,7 +1532,15 @@ folder. A button can run a command, like your tests, send the agent a
 message you use a lot, or open a web page in your browser (App Store
 Connect, say), without adding anything to the thread. The web page
 buttons show on the iPhone too, over the message box, and open there. A panel can show a web page, such as your app
-running on localhost, or a list.
+running on localhost, or a list. A link in a panel's page to another site
+opens where your web links' Default says (the browser, or over the panel
+with a Back), so the patch's page stays put; if the page moves on to
+another of its own pages, a Back shows in the panel's bar, and Reload goes
+back to where it started. Closing a panel, or picking another thread,
+pauses anything it's playing. A panel's address can carry the thread
+it's beside, as `{threadId}` (docs/protocol.md, "Patches"), and an agent
+that has changed a panel's page can have it load afresh as it shows you
+(`show_panel` with `reload`).
 
 Buttons sit on shelves along the top edge of the message box, one shelf
 for each place they came from, starting with the same badge the panels

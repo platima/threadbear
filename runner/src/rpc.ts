@@ -755,7 +755,7 @@ export class RpcServer {
       case 'threads.panelShown':
         return r.panelShown(reqString(p, 'threadId'), reqString(p, 'requestId'));
       case 'threads.showPanel':
-        return r.showPanel(reqString(p, 'threadId'), { panel: reqString(p, 'panel') }).then(result => ({ available: true, ...result }));
+        return r.showPanel(reqString(p, 'threadId'), { panel: reqString(p, 'panel'), ...(p.reload === true ? { reload: true } : {}) }).then(result => ({ available: true, ...result }));
       case 'threads.share': {
         const access = reqString(p, 'access');
         if (access !== 'off' && access !== 'link') throw bad('access is "off" or "link"');

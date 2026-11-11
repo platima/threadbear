@@ -1124,7 +1124,7 @@ the summary and then the reply.
 | `threads.hibernateWhen` | `{ threadId, said: string }` (at most 300 characters) | `{ thread: ThreadSummary, until?: string, topic?: string, why: string }`. Hibernates the thread until when Mike said, in his own words (see Hibernate in words). It's away at once, with `wakeWhen.pending`, and the answer comes once the model has worked out when. `-32000` with the reason when it can't say, and the thread is back in the inbox |
 | `threads.removeHighlight` | `{ threadId, highlightId }` | `{ thread: ThreadSummary }` takes one off the list for good (a pin or a found one); a later mention doesn't bring it back. `-32602` for an id the thread doesn't have |
 | `threads.panelShown` | `{ threadId, requestId }` | `{ thread: ThreadSummary }`. The app has shown the thread's `panelRequest` (see Showing panels), which clears it. Another id (a newer request replaced it, or it's gone already) changes nothing |
-| `threads.showPanel` | `{ threadId, panel }` | `{ available, request?, shown? }`. Queues the same request as `show_panel` when the Mac app is connected. Otherwise returns `available: false` without queuing anything. Used by `tb show-panel` and BrowserBear handoff |
+| `threads.showPanel` | `{ threadId, panel, reload?: boolean }` | `{ available, request?, shown? }`. Queues the same request as `show_panel` when the Mac app is connected. Otherwise returns `available: false` without queuing anything. Used by `tb show-panel` and BrowserBear handoff |
 | `schedules.list` | `{ threadId?: string }` | `{ schedules: Schedule[] }`, soonest `nextRunAt` first, then the paused and finished ones. With `threadId`, only the ones that send to that thread or were made by it |
 | `schedules.create` | `{ text: string, title?: string, at?: string, cron?: string, timezone?: string, threadId?: string, cwd?, accountId?, poolId?, model?, effort?, permissionMode?, check?: string, checkTimeoutSecs?: number, paused?: boolean, createdBy?: string, runnerId?: string }` | `{ schedule: Schedule }`. Exactly one of `at` and `cron`. `check` (at most 2,000 characters) and `checkTimeoutSecs` (1 to 300; 60 without): see "Schedule checks" below. `accountId` and `poolId` together, or a `poolId` this runner doesn't have, is `-32602`. An `at` in the past runs straight away. With `threadId` it sends there, otherwise it starts a new thread each time (`cwd` defaults like `threads.create`'s, checked now). A bad cron or zone is `-32602` with a message saying what's wrong. `runnerId` (an id or a name from `runners.list`) puts a new-thread schedule on another runner: its folder and account are checked there when it runs, and an absent `cwd` means that runner's default. Absent, it's this runner. Needs schedules in the backend (see Schedules, "Runners"); otherwise `-32602` |
 | `schedules.update` | `{ scheduleId, title?, text?, at?: string, cron?: string, timezone?: string \| null, paused?: boolean, cwd?, accountId?, poolId?: string \| null, model?: string \| null, effort?: EffortLevel \| null, permissionMode?, check?: string \| null, checkTimeoutSecs?: number \| null }` | `{ schedule: Schedule }`. `check: null` or `""` takes the check off (its `checkTimeoutSecs` stays); `checkTimeoutSecs: null` puts it back to 60. Setting `at` drops `cron` and the other way round; setting `accountId` drops `poolId` and the other way round (`poolId: null` leaves neither). The folder, login and model are only for one that starts a new thread: on one that sends to a thread they're `-32602`. A new time works out `nextRunAt` again; so does unpausing. Setting `at` on a finished one-off makes it run again then. The target thread can't be changed (make a new schedule) |
@@ -3444,7 +3444,13 @@ nothing added to the transcript; exactly one of the three. Use `url`,
 not `run: "open https://..."`, for a link: that leaves an `action.run` in
 the transcript on every press. A panel needs a
 `url` with a scheme, or an `items` function, which makes it a `list`
-panel: rows drawn natively, with no page to serve.
+panel: rows drawn natively, with no page to serve. `{threadId}` in a
+panel's `url` is the id of the thread it's shown beside, filled in by
+the runner in each thread's summary (`http://127.0.0.1:6427/?thread={threadId}`),
+so the page can tell which thread it's in. A link in a `url` panel's page
+to another site (another scheme, host or port) opens as a link from a
+highlight does, not over the page, and the app pauses a web panel's sound
+and video while it's out of sight.
 
 ```ts
   panels: [{
@@ -4488,7 +4494,9 @@ or resizes a panel that's open: Mike's layout is his.
 `panel` is `highlights`, `browser` (`threadbear.browser`) or `patches` (the thread's own; Patches only when
 it has patches), one of the thread's `panels` by id or title (any case),
 or `usage`, `updates` or `connectors` (the app's Usage, Updates and
-Connectors panels). `where`
+Connectors panels). `reload: true` loads a
+web panel's page afresh as it's shown, for an agent that has just changed
+it (a patch's page served from its folder, say). `where`
 says where a closed one opens: `tab` (a tab beside the thread, which
 closes again when the main panel moves on, as a review's does), `left`,
 `right`, `top` or `bottom` (along that side of the window), or `window`
@@ -4504,6 +4512,8 @@ type PanelRequest = {
   title: string         // the panel's name: "Highlights", "Convex"
   where?: "tab" | "left" | "right" | "top" | "bottom" | "window"
   highlight?: string    // pin with show: the pin to open (panel is "highlights")
+  reload?: true         // show_panel's reload: a url panel's page is loaded
+                        // afresh (from its own address) as it's shown
   at: string            // when the agent asked
 }
 ```

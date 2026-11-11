@@ -337,6 +337,9 @@ export type PanelRequest = {
   // pin with show: the highlight to open in the pane, over Highlights. An
   // app that doesn't know this opens Highlights.
   highlight?: string;
+  // A web panel's page is loaded afresh as it's shown (show_panel's reload).
+  // An app that doesn't know this just shows it.
+  reload?: true;
   at: string;
 };
 

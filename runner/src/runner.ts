@@ -149,6 +149,7 @@ import { buttonsPart, MAX_BUTTONS, type ButtonsPart } from './runner/buttons.ts'
 import { clisPart, type ClisPart } from './runner/clis.ts';
 import { editingPart, type EditingPart } from './runner/editing.ts';
 import { patchesPart, type PatchesPart } from './runner/patches.ts';
+import { withThreadId } from './patches.ts';
 import { highlightsPart, type HighlightsPart } from './runner/highlights.ts';
 import { titlesPart, type TitlesPart } from './runner/titles.ts';
 import { commandsPart, type CommandsPart } from './runner/commands.ts';
@@ -3370,7 +3371,7 @@ export class Runner {
     const set = this.patchSet(st);
     const actions = this.actionsOf(st, set);
     const patches = this.worktreeAction(rec) ? [...set.patches, { id: 'worktree', source: 'builtin' as const }] : set.patches;
-    if (set.panels.length) s.panels = set.panels;
+    if (set.panels.length) s.panels = withThreadId(set.panels, rec.id);
     if (actions.length) s.actions = actions;
     if (set.hooks.length) s.hooks = set.hooks;
     if (patches.length) s.patches = patches;

@@ -1267,6 +1267,12 @@ enum Automation {
             return peek(c, app: app)
         case "composer-peek":
             guard let composer = findComposer(in: window?.contentView) else { return "error no composer" }
+            // `"press": true` clicks the chip; `"strip": n` (0-based) the
+            // thumbnail above the box. Either says what Quick Look shows.
+            if c["press"] as? Bool == true || c["strip"] != nil {
+                guard let opened = composer.debugOpenPicture(chip: c["number"] as? Int, strip: c["strip"] as? Int) else { return "error nothing opened" }
+                return "ok quicklook \(opened.index) of " + json(opened.paths)
+            }
             guard let number = c["number"] as? Int else {
                 composer.debugEndHover()
                 return "ok"

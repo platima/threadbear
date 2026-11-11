@@ -284,7 +284,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `patches.icons` | Patch icons | Image file or `.app` icon | Image files drawn as is; `.app` icons need macOS code, and Windows and Linux use a generic icon. | shim | S | `PatchImage` |
 | `panel.list` | List panel | Native rows refreshed by the runner | gpui-kit list. | kit | S | `PanelsView` (`ListPanel`) |
 | `panel.image` | Image panel | Refreshed picture, Open Simulator | Drawn image that refreshes. | build | S | `PanelsView` (`ImagePanel`) |
-| `panel.web` | Web panel | Web view kept loaded between visits | Web runtime page in a `CefElement`-style layout slot (Ghostex's approach), X11 only on Linux, and in-window menus can't draw over the page. | web | L | `PanelsView` (`WebPanel`, `WebPanelPool`) |
+| `panel.web` | Web panel | Web view kept loaded between visits, its sound paused while it's out of sight; a link to another site opens where Default says, not over the patch's page | Web runtime page in a `CefElement`-style layout slot (Ghostex's approach), X11 only on Linux, and in-window menus can't draw over the page. | web | L | `PanelsView` (`WebPanel`, `WebPanelPool`) |
 | `panel.bar` | Panel bar buttons | Reload, Open in browser, Back | Drawn in the panel's bar. | build | S | `PanelsView` (`DockPaneButtons`) |
 | `panel.convex` | Convex panel | Dashboard, Dev/Prod switch, sign-in states | Web runtime page with the deploy key injected, and the sign-in states drawn in GPUI. | web | L | `PanelsView` (`ConvexPanel`, `ConvexWebPage`) |
 | `panel.requests` | Panel requests | Agent opens a panel for you | Port the logic. | build | S | `PanelRequestModel`, `PanelRequests` |

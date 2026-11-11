@@ -1076,6 +1076,14 @@ async function dispatch(client, method, p) {
       broadcastSummary(t.summary.id);
       return { keyRequests: t.convexKeyRequests };
     }
+    case 'mock.urlPanel': {
+      // A patch's url panel showing any page (a local server playing media,
+      // say), for its links and its closing to be tried.
+      const t = need(p.threadId);
+      t.summary.panels = [{ id: 'mock.page', title: p.title ?? 'Page', kind: 'url', patch: 'mock', url: p.url }];
+      broadcastSummary(t.summary.id);
+      return { panels: t.summary.panels };
+    }
     case 'panels.convexDeployments': {
       need(p.threadId);
       return { deployments: [
