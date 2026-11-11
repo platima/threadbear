@@ -7061,6 +7061,7 @@ name = "threadbear-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dunce",
  "serde",
  "serde_json",
 ]
