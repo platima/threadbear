@@ -1,7 +1,7 @@
 // node --test web/src/view-logic.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lastWorkedOn, recapDue, recapParts, bytesWords, statsFresh, isOnline, matchesSchedule, runnersShown, runnerState, scheduleSections, sinceWords, tightest, untilWords } from './view-logic.ts';
+import { isAtEnd, lastWorkedOn, recapDue, recapParts, bytesWords, statsFresh, isOnline, matchesSchedule, runnersShown, runnerState, scheduleSections, sinceWords, tightest, untilWords } from './view-logic.ts';
 
 const NOW = Date.parse('2026-11-05T10:00:00Z');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
@@ -85,4 +85,15 @@ test('the recap box shows on a quiet idle thread, until put away for that quiet 
   assert.deepEqual(recapParts('- One'), { points: ['One'] });
   assert.equal(lastWorkedOn(ago(14 * 60 * MIN), NOW), 'Last worked on 14 hours ago');
   assert.equal(lastWorkedOn(ago(72 * 60 * MIN), NOW), 'Last worked on 3 days ago');
+});
+
+test('a scroll box is at its end when the last few pixels are all that is left', () => {
+  // scrollHeight, scrollTop, clientHeight
+  assert.ok(isAtEnd(1000, 952, 48));
+  assert.ok(isAtEnd(1000, 910, 48), 'within the slack');
+  assert.ok(!isAtEnd(1000, 900, 48), 'a screenful up');
+  assert.ok(isAtEnd(500, 0, 500), 'a thread too short to scroll is at its end');
+  assert.ok(isAtEnd(500, 0, 520), 'and so is one shorter than the box');
+  assert.ok(!isAtEnd(1000, 100, 48, 0), 'with no slack it has to be exact');
+  assert.ok(isAtEnd(1000, 952, 48, 0));
 });

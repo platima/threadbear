@@ -48,6 +48,13 @@ private val SYSTEM_PACKAGES = listOf(
 class PushPlugin(private val activity: Activity) : Plugin(activity) {
     override fun load(webView: WebView) {
         super.load(webView)
+        // The page above the keyboard (ImeInsets.kt). Nothing the person asked for rides on it, so
+        // whatever goes wrong is only logged and the plugin still loads.
+        try {
+            ImeInsets.install(activity)
+        } catch (e: Throwable) {
+            Log.w(TAG, "the page could not be fitted above the keyboard", e)
+        }
         // Only in the emulator check's build: say which token this copy has, so the
         // check knows where to send. The app people install never does.
         if (BuildConfig.LOG_PUSH_TOKEN && PushFirebase.ready(activity)) {

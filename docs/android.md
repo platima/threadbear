@@ -194,6 +194,63 @@ for every phone that has the app built for it. To set one up:
    the notification shade. It builds its own copy of the app for that, with a
    push key it knows and the token logged; the app people install has neither.
 
+### The keyboard
+
+The app draws edge to edge, so Android does not resize its window for the on-screen
+keyboard. Android System WebView 139 and newer also takes the keyboard off only the page's
+visual viewport, never its layout viewport. The page is as tall as its layout viewport, so
+with the keyboard up the reply box sat behind it, and once the box had the focus the WebView
+panned the page up until the header and the transcript were off the top of the screen. rc.5
+did that on a real phone.
+
+`ImeInsets.kt` in the push plugin fixes it from the native side, as the page cannot:
+
+- **The WebView's parent is padded by the keyboard's height** (the activity's content view,
+  as a WebView ignores its own padding), so the WebView ends where the keyboard starts and
+  the page lays itself out in what is left, as it did before Android 15.
+- **What goes on to the WebView has the keyboard zeroed**, or it would take it off its
+  viewport a second time, and **the navigation bar's bottom zeroed while the keyboard is
+  up**, as the keyboard covers that bar and the page's `env(safe-area-inset-bottom)` must
+  not pad for it again. Zeroed, not consumed, so the WebView still hears when they change
+  and keeps no padding from the last time. The status bar and cutout insets go through as
+  they were. This is the "Zeroing approach" of Android's guide, "Understand window insets
+  in WebView".
+- **It is done for each activity as it resumes**, not once when the plugin loads: the
+  plugin is loaded once per process, and the activity it was given is finished when the
+  app is backed out of and opened again. It uses an `ActivityLifecycleCallbacks` rather than
+  `Plugin.onResume`, because Tauri's `onResume` takes an `AppCompatActivity` and AppCompat is
+  not on the plugin's classpath.
+- **Android 11 and newer only**, where the keyboard is an inset an app can read. A phone
+  older than that has what it had.
+- It is not a page fix because the page's options do not reach the app's WebView:
+  `interactive-widget=resizes-content` in the viewport meta, and the VirtualKeyboard API
+  (`env(keyboard-inset-height)`), are Chrome's, and Android System WebView is not given the
+  keyboard through either. This is from reading Chromium's source and a Tauri issue
+  (tauri-apps/tauri 7868), not from a phone.
+
+On the page, `ThreadView` (`web/src/App.tsx`), in the app only, keeps the transcript at its
+end when its box gets shorter and its end was in view (`isAtEnd` in `web/src/view-logic.ts`),
+so the newest message is not left under the reply box when the keyboard comes up. The
+website, and the page on an iPhone, do nothing different.
+
+What it costs: the WebView is resized as the keyboard starts to slide up, so for a moment a
+band of the window's own background can show above the keyboard, and the reply box drops
+early when the keyboard goes. A `WindowInsetsAnimationCompat` callback could smooth that.
+
+How it is checked, as the Kotlin is compiled only by CI and the keyboard is seen only on a
+phone:
+
+- `android/scripts/ime-insets.test.mjs` (`node --test`, which the workflow runs with the
+  website's tests) reads the Kotlin for the choices above.
+- The emulator job's step "The keyboard leaves the page above it" taps the first screen's
+  box and reads the WebView's bounds with the keyboard down, up and down again. It is the
+  native half only: the emulator's WebView is 113, before the keyboard resized the visual
+  viewport, and an offline run reaches only the first screen, so it shows neither the page
+  panning on a phone nor a thread's reply box. It does not fail the job yet
+  (`continue-on-error`), until it has been seen to work.
+- On a phone, as before: open a thread, tap the reply box, and the reply box sits just
+  above the keyboard with the header and the newest message still in view.
+
 ### What is not done
 
 - **Going to the thread from a notification**, and grouping several.

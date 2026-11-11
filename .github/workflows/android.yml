@@ -87,6 +87,8 @@ jobs:
         run: |
           npm run web:typecheck
           npm run web:test
+          # What the shell's Kotlin does about the keyboard, read from its source (docs/android.md, "The keyboard")
+          node --test android/scripts/ime-insets.test.mjs
       - name: Rust targets for the phone
         run: rustup target add aarch64-linux-android armv7-linux-androideabi
       - name: Where Java and the NDK are
@@ -520,6 +522,78 @@ jobs:
             echo "::error::Google's scanner answered, but the page is still on Scanning... or has lost its button: the answer did not reach the page"
             failed=1
           fi
+          [ "$failed" = 0 ]
+      # The keyboard leaves the page above it (docs/android.md, "The keyboard"). The app draws
+      # edge to edge, so without android/plugins/push's ImeInsets.kt the keyboard is drawn over the
+      # bottom of the page; with it the WebView ends where the keyboard starts. The WebView's bounds
+      # are read from the screen's text with no keyboard, with it up and with it put away again.
+      # This is the native half only: this emulator's WebView is old (113, before WebView
+      # started taking the keyboard off the visual viewport) and the first screen is all an
+      # offline run reaches, so it cannot show the page panning off the top as on a phone, or a
+      # thread's reply box. It does not fail the job while it is new (continue-on-error):
+      # read its lines, and the pictures 4-keyboard-*.png, and then make it one that does.
+      - name: The keyboard leaves the page above it
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          set -u
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          pkg=com.tinkerware.threadbear
+          mkdir -p shots
+          # An emulator that has a hardware keyboard hides its on-screen one
+          adb shell settings put secure show_ime_with_hard_keyboard 1
+          # The bottom edge of the WebView in the screen's text; nothing when no dump has one
+          webview_bottom() {
+            for i in 1 2 3; do
+              adb exec-out uiautomator dump /dev/tty > shots/4-keyboard.xml || true
+              b=$(node -e 'const t = require("fs").readFileSync("shots/4-keyboard.xml", "utf8"); const m = /class="android\.webkit\.WebView"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/.exec(t); if (m) console.log(m[4]);')
+              if [ -n "$b" ]; then echo "$b"; return 0; fi
+              sleep 2
+            done
+            return 1
+          }
+          # From the launcher: the first screen, which has a box to type in
+          adb shell am force-stop "$pkg"
+          adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1
+          sleep 25
+          adb exec-out screencap -p > shots/4-keyboard-before.png
+          full=$(webview_bottom) || full=""
+          if [ -z "$full" ]; then
+            echo "::error::The screen's text has no WebView, so there is nothing to measure"
+            exit 1
+          fi
+          echo "With no keyboard the WebView ends at $full"
+          # Where the box is, from the screen's text when the page's content shows in it
+          ys=$(node -e 'const t = require("fs").readFileSync("shots/4-keyboard.xml", "utf8"); const m = /class="android\.widget\.EditText"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/.exec(t); if (m) console.log(Math.round((+m[2] + +m[4]) / 2));')
+          [ -n "$ys" ] && echo "The box is in the screen's text, at y=$ys" || echo "The box is not in the screen's text: tapping down the page until the keyboard comes up"
+          shrunk=""
+          for y in $ys 1250 1350 1450 1550 1650 1750 1150; do
+            adb shell input tap 540 "$y"
+            sleep 3
+            now=$(webview_bottom) || now=""
+            echo "Tapped y=$y: the WebView ends at ${now:-unknown}"
+            if [ -n "$now" ] && [ "$now" -lt $((full - 200)) ]; then shrunk=$now; break; fi
+          done
+          adb exec-out screencap -p > shots/4-keyboard-up.png
+          echo "--- what Android says about the keyboard:"
+          adb shell dumpsys input_method | grep -E 'mInputShown|isInputViewShown|mImeWindowVis|mShowRequested' | head -n 8 || true
+          echo "---"
+          failed=0
+          if [ -z "$shrunk" ]; then
+            echo "::error::The WebView still ends at $full with the keyboard up, or the keyboard never came up (see shots/4-keyboard-up.png): the keyboard is over the page"
+            failed=1
+          fi
+          # Back puts the keyboard away
+          adb shell input keyevent KEYCODE_BACK
+          sleep 3
+          adb exec-out screencap -p > shots/4-keyboard-down.png
+          after=$(webview_bottom) || after=""
+          echo "With the keyboard put away the WebView ends at ${after:-unknown} (it was $full)"
+          if [ -n "$shrunk" ] && [ "$after" != "$full" ]; then
+            echo "::error::The WebView did not grow back when the keyboard went"
+            failed=1
+          fi
+          adb shell am force-stop "$pkg"
           [ "$failed" = 0 ]
       # The notification a thread that needs the person becomes, end to end but
       # for the backend: sealed with the app's key as the backend seals it, sent
