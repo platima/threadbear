@@ -10,6 +10,7 @@ mod automation;
 mod composer;
 mod composer_card;
 mod composer_chips;
+mod drafts;
 mod files;
 mod folders;
 #[cfg(feature = "frame-stats")]
@@ -29,6 +30,7 @@ mod patches;
 mod prefs;
 mod rails;
 mod remote;
+mod reply_buttons;
 mod rows;
 mod schedule_editor;
 mod scheduled;

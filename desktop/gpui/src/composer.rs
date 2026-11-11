@@ -112,6 +112,10 @@ impl Composer {
             // what's in the box.
             InputEvent::Change => {
                 this.palette_text_changed(cx);
+                // Kept across a quit (drafts.rs).
+                if let Some(app) = this.app.upgrade() {
+                    app.update(cx, |app, cx| app.drafts_changed(cx));
+                }
                 cx.notify();
             }
             _ => {}
@@ -264,6 +268,11 @@ impl Composer {
     /// a mark for each chip whose picture is in, and those pictures in order.
     /// A chip still being copied in isn't part of it yet, nor is a stray
     /// U+FFFC pasted as text.
+    /// The words and pictures in the box, for drafts.rs to keep.
+    pub(crate) fn draft_for_saving(&self, cx: &App) -> (String, Vec<ImageRef>) {
+        self.draft(cx)
+    }
+
     fn draft(&self, cx: &App) -> (String, Vec<ImageRef>) {
         let content = self.input.read(cx).content();
         let text = content.text().to_string();

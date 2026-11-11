@@ -98,7 +98,7 @@ pub(crate) fn starts_with_heading(text: &str) -> bool {
 /// test)`. The arrow says the link goes up the thread, not out of it, and goes
 /// in the link's own words so it's coloured and selected with them.
 pub(crate) fn prepare(text: &str) -> String {
-    link_code_paths(&escape_work_links(text))
+    link_code_paths(&escape_work_links(&crate::reply_buttons::unknown_as_words(text)))
 }
 
 fn escape_work_links(text: &str) -> String {

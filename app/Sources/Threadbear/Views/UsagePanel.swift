@@ -16,6 +16,12 @@ import ThreadbearCore
 /// opens and once a minute while it's open.
 struct UsagePanel: View {
     @Environment(AppModel.self) private var app
+    @AppStorage(UsagePanel.showModelWeeksKey) private var showModelWeeks = true
+
+    /// Whether the logins show a model's own week ("Weekly Fable"). On by
+    /// default; Mike turned it off (11 Nov: "Opus is so good that I don't
+    /// need to see Fable really, but I know some people probably would").
+    static let showModelWeeksKey = "usage.showModelWeeks"
 
     var body: some View {
         let groups = UsageGroups.build(pools: app.poolsSupported ? app.pools : [], accounts: app.accounts)
@@ -32,7 +38,13 @@ struct UsagePanel: View {
                     SpendSection(stats: stats, accounts: app.accounts, colours: colours, now: app.now)
                 }
                 ForEach(groups) { group in
-                    PoolCard(group: group, allAccounts: app.accounts, notices: notices.own, stats: app.usageStats, colours: colours, now: app.now)
+                    PoolCard(group: group, allAccounts: app.accounts, notices: notices.own, stats: app.usageStats, colours: colours, now: app.now, showModelWeeks: showModelWeeks)
+                }
+                // Only when some login has a model's own week, or the
+                // switch would do nothing.
+                let modelWeeks = Self.modelWeekTitles(app.accounts)
+                if !modelWeeks.isEmpty {
+                    UsageSettings(modelWeeks: modelWeeks, showModelWeeks: $showModelWeeks)
                 }
                 // Where the numbers came from, and what Token Stats says
                 // about all of them, once.
@@ -55,6 +67,50 @@ struct UsagePanel: View {
                 try? await Task.sleep(for: .seconds(60))
             }
         }
+    }
+
+    /// "Weekly Fable": each model's own week any login has, once each.
+    static func modelWeekTitles(_ accounts: [Account]) -> [String] {
+        var seen: [String] = []
+        for account in accounts {
+            for window in AccountUsageText.modelWeeks(account.usage) where !seen.contains(window.title) {
+                seen.append(window.title)
+            }
+        }
+        return seen
+    }
+}
+
+/// The panel's own settings, at its foot: for now whether to show the
+/// models' own weeks, for someone who never runs that model.
+private struct UsageSettings: View {
+    let modelWeeks: [String]
+    @Binding var showModelWeeks: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: zoomed(8)) {
+            HStack(spacing: zoomed(7)) {
+                Image(systemName: "gearshape").foregroundStyle(.secondary)
+                Text("Settings")
+                    .font(.system(size: zoomed(13), weight: .semibold))
+                    .accessibilityAddTraits(.isHeader)
+            }
+            // The switch at the right edge, in line with the numbers above.
+            HStack {
+                Text("Show " + modelWeeks.joined(separator: ", "))
+                    .font(.system(size: zoomed(12)))
+                Spacer()
+                Toggle("Show " + modelWeeks.joined(separator: ", "), isOn: $showModelWeeks)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tip("A login's own limit on one model. Hide it if you don't use that model")
+            }
+        }
+        .padding(.horizontal, zoomed(12))
+        .padding(.vertical, zoomed(10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Card())
     }
 }
 
@@ -337,6 +393,7 @@ private struct PoolCard: View {
     let stats: UsageStats?
     let colours: LoginColours
     let now: Date
+    let showModelWeeks: Bool
 
     var body: some View {
         let today = stats.map { UsageStatsMath.today($0, accounts: group.accounts.map(\.id), now: now) }
@@ -369,7 +426,7 @@ private struct PoolCard: View {
                 }
                 ForEach(section.accounts) { account in
                     Divider().opacity(0.6)
-                    LoginRow(account: account, allAccounts: allAccounts, notice: notices[account.id], stats: stats, colours: colours, now: now)
+                    LoginRow(account: account, allAccounts: allAccounts, notice: notices[account.id], stats: stats, colours: colours, now: now, showModelWeeks: showModelWeeks)
                         .padding(.horizontal, zoomed(12))
                         .padding(.vertical, zoomed(10))
                 }
@@ -383,7 +440,8 @@ private struct PoolCard: View {
 /// windows side by side (one over the other in a narrow panel), then a
 /// model's own week ("Weekly Fable") with its own chart, as Claude Code's
 /// /usage has (Ayush, 6 Nov), then only the extras that decide something
-/// (`AccountUsageText.extraLines`).
+/// (`AccountUsageText.extraLines`). The model's week can be switched off in
+/// the panel's settings.
 private struct LoginRow: View {
     let account: Account
     let allAccounts: [Account]
@@ -391,11 +449,12 @@ private struct LoginRow: View {
     let stats: UsageStats?
     let colours: LoginColours
     let now: Date
+    let showModelWeeks: Bool
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let usage = account.usage
-        let windows = AccountUsageText.mainWindows(usage) + AccountUsageText.modelWeeks(usage)
+        let windows = AccountUsageText.mainWindows(usage) + (showModelWeeks ? AccountUsageText.modelWeeks(usage) : [])
         let today = stats.map { UsageStatsMath.today($0, accounts: [account.id], now: now) }
         let colour = colours.colour(account.id, dark: scheme == .dark)
         VStack(alignment: .leading, spacing: zoomed(8)) {

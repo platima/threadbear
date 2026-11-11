@@ -80,3 +80,7 @@ Feature: Getting around the app
   @menu.app
   Scenario: The app menu opens Settings
     Then the app menu has "Settings…" on "⌘,"
+
+  @menu.app
+  Scenario: The app menu quits on the key every Mac app has
+    Then the app menu has "Quit Threadbear" on "⌘Q"

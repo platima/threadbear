@@ -104,6 +104,7 @@ impl Threadbear {
         let app = cx.entity().downgrade();
         let composer = cx.new(|cx| Composer::new(None, client, app, window, cx));
         self.new_thread.composer = Some(composer.clone());
+        self.restore_saved_draft(crate::drafts::NEW_THREAD, &composer, cx);
         composer
     }
 

@@ -281,6 +281,25 @@ impl AskLink {
         let c = v.as_object()?;
         Some(AskLink { title: c.get("title")?.as_str()?.to_owned(), url: c.get("url")?.as_str()?.to_owned() })
     }
+
+    /// What clicking it opens (`AskLink.target`): a web page, a file with `~`
+    /// expanded against `home`, or a review; None for anything else, which
+    /// isn't drawn.
+    pub fn target(&self, home: &str) -> Option<String> {
+        let url = self.url.trim();
+        if let Some(rest) = url.strip_prefix("~/") {
+            return (!home.is_empty()).then(|| format!("{}/{rest}", home.trim_end_matches('/')));
+        }
+        if url.starts_with('/') {
+            return Some(url.to_owned());
+        }
+        let (scheme, rest) = url.split_once(':')?;
+        match scheme.to_ascii_lowercase().as_str() {
+            "http" | "https" | "file" => Some(url.to_owned()),
+            "review" if !rest.trim().is_empty() => Some(url.to_owned()),
+            _ => None,
+        }
+    }
 }
 
 /// One of the open card's asks a message answered (`AskAnswer`).

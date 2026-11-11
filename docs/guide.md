@@ -1102,7 +1102,8 @@ resets. Hover a window for its rate.
 A Claude login with a limit of its own on Fable shows that week too,
 "Weekly Fable", with its own chart beside the others, as Claude Code's
 `/usage` does. Running out of it only stops Fable: the login can still run
-other models, so it never makes a login look full.
+other models, so it never makes a login look full. If you don't use Fable,
+turn it off under Settings at the foot of the panel.
 
 ### Review by another lab
 

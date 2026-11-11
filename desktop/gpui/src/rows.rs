@@ -256,10 +256,13 @@ impl ThreadPane {
     pub(crate) fn linked_text(&self, doc: &Entity<gpui_kit::base::TextViewState>, row_id: &str, cx: &mut Context<Self>) -> TextView {
         let weak = cx.weak_entity();
         let row_id = row_id.to_owned();
-        crate::open_gate::text_view(doc, self.origin(), &self.summary.cwd).on_link_click(move |url: &SharedString, _event: &ClickEvent, window: &mut Window, cx: &mut App| {
-            let (url, row_id) = (url.to_string(), row_id.clone());
-            let _ = weak.update(cx, |this, cx| this.link_clicked(&url, &row_id, window, cx));
-        })
+        crate::open_gate::text_view(doc, self.origin(), &self.summary.cwd)
+            .on_link_click(move |url: &SharedString, _event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                let (url, row_id) = (url.to_string(), row_id.clone());
+                let _ = weak.update(cx, |this, cx| this.link_clicked(&url, &row_id, window, cx));
+            })
+            // `[title](button:<id>)` as a pill that presses it.
+            .plugin(crate::reply_buttons::Pills)
     }
 
     /// The reading column's text: markdown, selectable, links going where they

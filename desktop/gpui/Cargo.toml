@@ -14,6 +14,9 @@ threadbear-dock = { path = "../dock" }
 # `syntect` colours the code a file preview shows (a pure-Rust highlighter,
 # about the languages of the Swift app's Highlightr).
 gpui-kit = { version = "=0.9.0", features = ["syntect"] }
+# The markdown tree gpui-kit parses into, for the reply text's own pieces
+# (reply_buttons.rs's pills): the kit's own version, already in the build.
+markdown = "=1.0.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }

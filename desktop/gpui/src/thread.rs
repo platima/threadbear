@@ -128,6 +128,7 @@ impl ThreadPane {
             _subs: vec![scrolled],
         };
         pane.load(cx);
+        pane.load_buttons(cx);
         pane
     }
 
@@ -183,6 +184,7 @@ impl ThreadPane {
                 .update(cx, |this, cx| {
                     // Where the view was reading, if this is a reload.
                     let memory = this.loaded.then(|| this.capture_memory(cx));
+                    crate::reply_buttons::fold(&page.events, &this.summary.id);
                     let mut model = TranscriptModel::new(Some(root));
                     model.load(page.events, &page.in_progress);
                     model.known_start = page.at_start;
@@ -251,9 +253,26 @@ impl ThreadPane {
             return;
         }
         if let Some(event) = Event::decode(&params["event"]) {
+            if crate::reply_buttons::fold(std::slice::from_ref(&event), &self.summary.id) {
+                cx.notify();
+            }
             let action = self.feed.receive(event);
             self.handle(action, cx);
         }
+    }
+
+    /// Every button the thread has (`buttons.list`): replies older than the
+    /// loaded page link buttons whose events aren't loaded.
+    fn load_buttons(&self, cx: &mut Context<Self>) {
+        let (client, id) = (self.client.clone(), self.summary.id.clone());
+        cx.spawn(async move |this, cx| {
+            let Ok(v) = call(client, "buttons.list", json!({ "threadId": id })).await else { return };
+            let list: Vec<threadbear_core::reply_buttons::ReplyButton> = v["buttons"].as_array().into_iter().flatten().filter_map(threadbear_core::reply_buttons::ReplyButton::decode).collect();
+            if crate::reply_buttons::receive(list, &id) {
+                this.update(cx, |_, cx| cx.notify()).ok();
+            }
+        })
+        .detach();
     }
 
     fn handle(&mut self, action: FeedAction, cx: &mut Context<Self>) {
@@ -753,10 +772,25 @@ impl ThreadPane {
                 if matches!(row.content, RowContent::Group(_) | RowContent::Tool(_) | RowContent::Reasoning(_)) || row.kind() == threadbear_core::reducer::RowKind::Diff {
                     out["expanded"] = json!(self.row_open(row));
                 }
+                #[cfg(feature = "automation")]
+                if let RowContent::Assistant(item) = &row.content {
+                    if let Some(labels) = crate::reply_buttons::dump_labels(&item.text) {
+                        out["buttons"] = json!(labels);
+                    }
+                }
                 out
             })
             .collect();
         json!({ "threadId": self.summary.id, "state": if self.loaded { "loaded" } else { "loading" }, "atBottom": scroller.at_bottom(), "hasMoreAbove": self.has_more_above(), "rows": rows })
+    }
+
+    /// The reply buttons the thread's replies link, oldest first.
+    #[cfg(feature = "automation")]
+    pub(crate) fn linked_buttons(&self) -> Vec<String> {
+        self.feed.model().rows().iter().flat_map(|row| match &row.content {
+            RowContent::Assistant(item) => threadbear_core::reply_buttons::ids_in(&item.text),
+            _ => Vec::new(),
+        }).collect()
     }
 
     pub fn set_row_open(&mut self, row: &str, open: bool, cx: &mut Context<Self>) -> Result<(), String> {

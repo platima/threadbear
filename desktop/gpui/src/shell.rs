@@ -252,6 +252,11 @@ actions!(
         HibernateEvening,
         HibernateTomorrow,
         HibernateMonday,
+        QuitApp,
+        HideApp,
+        HideOtherApps,
+        ShowAllApps,
+        MinimizeWindow,
     ]
 );
 
@@ -322,7 +327,35 @@ commands!(
     (HibernateEvening, HibernateEvening, None),
     (HibernateTomorrow, HibernateTomorrow, None),
     (HibernateMonday, HibernateMonday, None),
+    (Quit, QuitApp, None),
+    (Hide, HideApp, None),
+    (HideOthers, HideOtherApps, None),
+    (ShowAll, ShowAllApps, None),
+    (Minimize, MinimizeWindow, None),
 );
+
+/// Every Mac app's own keys (the standard app and Window menus), whatever
+/// shortcuts.json says: ⌘Q quits, ⌘H hides, ⌥⌘H hides the rest, ⌘M
+/// minimizes. Elsewhere Control-Q quits, as apps there do.
+/// How the menu shows a standard key (`standard_keys`).
+fn standard_key_display(command: Command) -> Option<&'static str> {
+    let mac = cfg!(target_os = "macos");
+    match command {
+        Command::Quit => Some(if mac { "⌘Q" } else { "Ctrl+Q" }),
+        Command::Hide if mac => Some("⌘H"),
+        Command::HideOthers if mac => Some("⌥⌘H"),
+        Command::Minimize if mac => Some("⌘M"),
+        _ => None,
+    }
+}
+
+fn standard_keys() -> [(&'static str, Command); 4] {
+    if cfg!(target_os = "macos") {
+        [("cmd-q", Command::Quit), ("cmd-h", Command::Hide), ("alt-cmd-h", Command::HideOthers), ("cmd-m", Command::Minimize)]
+    } else {
+        [("ctrl-q", Command::Quit), ("", Command::Hide), ("", Command::HideOthers), ("", Command::Minimize)]
+    }
+}
 
 impl Threadbear {
     pub(crate) fn panel_title(&self, panel: &str) -> String {
@@ -587,6 +620,12 @@ impl Threadbear {
             Command::HibernateEvening => self.hibernate_open("evening", window, cx),
             Command::HibernateTomorrow => self.hibernate_open("tomorrow", window, cx),
             Command::HibernateMonday => self.hibernate_open("monday", window, cx),
+            // What's typed goes to disk on the way out (drafts.rs's on_app_quit).
+            Command::Quit => cx.quit(),
+            Command::Hide => cx.hide(),
+            Command::HideOthers => cx.hide_other_apps(),
+            Command::ShowAll => cx.unhide_other_apps(),
+            Command::Minimize => window.minimize_window(),
         }
         self.sync_menus(cx);
     }
@@ -855,6 +894,11 @@ impl Threadbear {
     pub(crate) fn apply_shortcuts(&mut self, cx: &mut App) {
         let macos = cfg!(target_os = "macos");
         let mut desired: HashMap<String, Command> = HashMap::new();
+        for (chord, command) in standard_keys() {
+            if !chord.is_empty() {
+                desired.insert(chord.to_owned(), command);
+            }
+        }
         for command in Command::ALL {
             if let Some(key) = command.shortcut().and_then(|c| self.shortcuts.key(c)) {
                 desired.insert(key.chord(macos), *command);
@@ -949,7 +993,20 @@ impl Threadbear {
         use MenuEntry::*;
         let item = |title: &str, command: Command| MenuEntry::item(title, command);
         vec![
-            TopMenu::new("Threadbear", vec![item("About Threadbear", Command::About), Separator, item("Settings…", Command::Settings)]),
+            TopMenu::new(
+                "Threadbear",
+                vec![
+                    item("About Threadbear", Command::About),
+                    Separator,
+                    item("Settings…", Command::Settings),
+                    Separator,
+                    item("Hide Threadbear", Command::Hide),
+                    item("Hide Others", Command::HideOthers),
+                    item("Show All", Command::ShowAll),
+                    Separator,
+                    item("Quit Threadbear", Command::Quit),
+                ],
+            ),
             TopMenu::new("File", vec![item("New Thread", Command::NewThread)]),
             TopMenu::new(
                 "View",
@@ -994,6 +1051,7 @@ impl Threadbear {
                     item("Show Archived", Command::ShowArchived),
                 ],
             ),
+            TopMenu::new("Window", vec![item("Minimize", Command::Minimize)]),
             TopMenu::new("Help", vec![item("Take the Tour", Command::TakeTheTour), item("Finish Setting Up", Command::FinishSettingUp)]),
         ]
     }
@@ -1252,7 +1310,7 @@ fn menus_json(menus: &[TopMenu], shortcuts: &ShortcutBindings) -> Value {
             .iter()
             .filter_map(|e| match e {
                 MenuEntry::Item { title, command, enabled } => {
-                    let key = command.shortcut().and_then(|c| shortcuts.key(c)).map(|k| k.display());
+                    let key = command.shortcut().and_then(|c| shortcuts.key(c)).map(|k| k.display()).or_else(|| standard_key_display(*command).map(str::to_owned));
                     let mut out = serde_json::json!({ "title": title, "enabled": enabled });
                     if let Some(key) = key {
                         out["key"] = Value::String(key);

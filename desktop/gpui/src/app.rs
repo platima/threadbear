@@ -43,6 +43,8 @@ pub struct Threadbear {
     /// Each thread's message box, kept so what's typed (with its undo and
     /// pictures) stays with the thread while others are open.
     pub(crate) composers: HashMap<String, Entity<Composer>>,
+    /// What every box has, kept across a quit (drafts.rs).
+    pub(crate) drafts: crate::drafts::Drafts,
     pub(crate) sidebar: crate::sidebar::SidebarState,
 
     // The window shell (shell.rs, rails.rs, header.rs).
@@ -209,6 +211,12 @@ impl Threadbear {
         // changes (a moment after the last change, as a divider drag is many).
         let layout = shell::make_layout(settings.saved.dock_layout.as_ref());
         let app = cx.entity().downgrade();
+        // A reply button's pill presses through here (reply_buttons.rs): the
+        // kit draws it inside the reply's text, where there's no app to hand.
+        let press_app = app.clone();
+        cx.set_global(crate::reply_buttons::PressHook(Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
+            press_app.update(cx, |this, cx| this.press_reply_button(id, window, cx)).ok();
+        })));
         let dock = cx.new(|_| {
             let mut model = DockModel::new(layout);
             let app = app.clone();
@@ -230,6 +238,11 @@ impl Threadbear {
             cx.new(|cx| DockView::new(model, content, options, cx))
         };
         let frame = cx.observe_window_bounds(window, |this, window, cx| this.window_frame_changed(window, cx));
+        // What's typed and not sent is written as the app quits (drafts.rs).
+        let quitting = cx.on_app_quit(|this, cx| {
+            this.save_drafts(cx);
+            async {}
+        });
         // A thread is read once Mike's looking at it (AppModel.isLooking,
         // which is the app being active, whichever of its windows is in
         // front): coming back reads the open one (appBecameActive). The
@@ -264,6 +277,7 @@ impl Threadbear {
             search,
             folded,
             composers: HashMap::new(),
+            drafts: crate::drafts::Drafts::load(&threadbear_client::config::RunnerConfig::from_env().home),
             logins: RunnerLogins::default(),
             sidebar,
             root_focus: cx.focus_handle(),
@@ -326,13 +340,67 @@ impl Threadbear {
             side,
             sidebar_view: None,
             _events: events,
-            _subs: vec![appearance, searching, frame, menus, looking],
+            _subs: vec![appearance, searching, frame, menus, looking, quitting],
         };
         // The window starts on the Inbox with nothing open (`noteNavigation`
         // on launch), so Back from the first thread comes back here.
         this.note_navigation();
         this.watch_shortcuts(cx);
         this
+    }
+
+    /// A reply button's pill was clicked (AppModel.pressReplyButton). Not
+    /// pressed yet: presses it, "…" until the runner answers, and a second
+    /// click meanwhile does nothing. Pressed: opens the thread it started or
+    /// messaged rather than pressing again.
+    pub(crate) fn press_reply_button(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((thread_id, button)) = crate::reply_buttons::known(&id) else { return };
+        // Only from the transcript of the thread that made it: ids are the
+        // runner's per thread, and a link copied into another thread's reply
+        // mustn't press this one.
+        if self.selected.as_deref() != Some(thread_id.as_str()) {
+            self.show_error("That button belongs to another thread, so it can't be pressed from here.".into(), cx);
+            return;
+        }
+        if let Some(pressed) = &button.pressed {
+            if self.threads.contains_key(&pressed.thread_id) {
+                self.open(pressed.thread_id.clone(), window, cx);
+            } else {
+                let what = if button.send.is_some() { "messaged" } else { "started" };
+                self.show_error(format!("The thread that button {what} isn't in your sidebar, so it can't open here. It was deleted, or it's archived on another machine."), cx);
+            }
+            return;
+        }
+        if !crate::reply_buttons::set_pressing(&id, true) {
+            return;
+        }
+        self.redraw_pane(cx);
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let res = call(client, "buttons.press", json!({ "threadId": thread_id, "buttonId": id })).await;
+            this.update(cx, |this, cx| {
+                match res {
+                    Ok(v) => {
+                        if let Some(button) = threadbear_core::reply_buttons::ReplyButton::decode(&v["button"]) {
+                            crate::reply_buttons::receive([button], &thread_id);
+                        }
+                    }
+                    Err(e) => this.show_error(e.message, cx),
+                }
+                crate::reply_buttons::set_pressing(&id, false);
+                this.redraw_pane(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The open thread draws again: its pills read the buttons as they draw.
+    fn redraw_pane(&self, cx: &mut Context<Self>) {
+        if let Some(pane) = &self.pane {
+            pane.update(cx, |_, cx| cx.notify());
+        }
+        cx.notify();
     }
 
     /// One of the app's windows came to the front or went (`active`, as the
@@ -577,11 +645,16 @@ impl Threadbear {
         }
         let client = self.client.clone();
         let app = cx.entity().downgrade();
+        let made = !self.composers.contains_key(&id);
         let composer = self
             .composers
             .entry(id.clone())
             .or_insert_with(|| cx.new(|cx| Composer::new(Some(id.clone()), client.clone(), app, window, cx)))
             .clone();
+        // Its words from before a quit, the first time its box is made.
+        if made {
+            self.restore_saved_draft(&id, &composer, cx);
+        }
         self.selected = Some(id);
         self.shows_home = false;
         let pane = cx.new(|cx| ThreadPane::new(client, summary, composer.clone(), cx));

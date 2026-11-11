@@ -503,14 +503,35 @@ impl Composer {
             block = block.child(div().pl(indent).mt(px(metrics::ASK_AFTER)).text_size(px(style::size::SMALL)).line_height(px(metrics::WHERE_LINE)).text_color(style::faint_text(cx)).child(place.to_owned()));
         }
         let this = cx.entity().downgrade();
+        let half = (metrics::BUTTON_LINE - metrics::BUTTON_HEIGHT) / 2.;
+        // Its links on a line of their own, over the answers: going to look
+        // comes before answering. The first is the thing to go and do.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let links: Vec<(usize, String, String)> = ask.links.iter().enumerate().filter_map(|(n, link)| link.target(&home).map(|target| (n, link.title.clone(), target))).collect();
+        let has_links = !links.is_empty();
+        if has_links {
+            let mut row = h_flex().w_full().pl(indent).mt(px(metrics::ASK_AFTER + metrics::BUTTONS_BEFORE)).py(px(half)).flex_wrap().gap_x(px(metrics::BUTTON_GAP)).gap_y(px(half * 2.));
+            for (n, title, target) in links {
+                let this = this.clone();
+                let look = if n == 0 { ButtonLook::Picked } else { ButtonLook::Plain };
+                let tip: &'static str = if target.starts_with("review:") { "Open the design options" } else { "Open this" };
+                row = row.child(card_button(("ask-link", index * 100 + n), &format!("{title} ↗"), look, tip, cx).on_click(move |_, window, cx| {
+                    if let Some(this) = this.upgrade() {
+                        let target = target.clone();
+                        this.update(cx, |this, cx| this.open_ask_link(&target, window, cx));
+                    }
+                }));
+            }
+            block = block.child(row);
+        }
         if ask.option_notes.is_empty() {
             // Buttons on 38 pt lines that wrap, 2 and then 6 under what's
             // above, four spaces apart, with Something else… after them.
-            let half = (metrics::BUTTON_LINE - metrics::BUTTON_HEIGHT) / 2.;
             let mut buttons = h_flex()
                 .w_full()
                 .pl(indent)
-                .mt(px(metrics::ASK_AFTER + metrics::BUTTONS_BEFORE))
+                // 6 under the links' line, or 2 and 6 under the words.
+                .mt(px(if has_links { metrics::BUTTONS_BEFORE } else { metrics::ASK_AFTER + metrics::BUTTONS_BEFORE }))
                 .py(px(half))
                 .flex_wrap()
                 .gap_x(px(metrics::BUTTON_GAP))
@@ -573,6 +594,16 @@ impl Composer {
             );
         }
         block.into_any_element()
+    }
+
+    /// One of an ask's links: through the thread's own link handling, as a
+    /// link in its transcript goes (a file into the pane, a page through the
+    /// open gate, a review to its window).
+    fn open_ask_link(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let url = if target.starts_with('/') { format!("file://{target}") } else { target.to_owned() };
+        if let Some(pane) = self.pane.upgrade() {
+            pane.update(cx, |p, cx| p.link_clicked(&url, "", window, cx));
+        }
     }
 
     /// The reading column's text style for the card's paragraphs, one per
@@ -721,6 +752,12 @@ impl Composer {
             ["page", n] => self.set_page(n.parse().map_err(|_| "bad page")?, cx),
             ["next", n] => self.toggle_follow_up(n.parse().map_err(|_| "bad index")?, window, cx),
             ["explain", n] => self.toggle_explain(n.parse().map_err(|_| "bad index")?, window, cx),
+            ["link", a, n] => {
+                let (a, n): (usize, usize) = (a.parse().map_err(|_| "bad ask")?, n.parse().map_err(|_| "bad link")?);
+                let home = std::env::var("HOME").unwrap_or_default();
+                let target = card.asks.get(a).and_then(|ask| ask.links.get(n)).and_then(|l| l.target(&home)).ok_or("no link like that")?;
+                self.open_ask_link(&target, window, cx);
+            }
             ["pick", a, n] => {
                 let (a, n): (usize, i64) = (a.parse().map_err(|_| "bad ask")?, n.parse().map_err(|_| "bad choice")?);
                 self.pick_answer(a, n, window, cx);

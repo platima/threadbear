@@ -407,6 +407,20 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             let result = app.update(cx, |t, cx| t.update_pane(cx, |p, cx| p.menu_command(&row, click.as_deref(), cx)))??;
             Ok(json!(result))
         }
+        // {"cmd":"press-button","id":"b7k2abcd"} (or "title":"Fill in the
+        // form") clicks a reply button in the open thread as its pill would.
+        "press-button" => {
+            let ids = app.read(cx).pane.as_ref().map(|p| p.read(cx).linked_buttons()).unwrap_or_default();
+            let id = cmd["id"].as_str().and_then(|want| ids.iter().rev().find(|id| *id == want).cloned()).or_else(|| {
+                cmd["title"].as_str().and_then(|want| ids.iter().rev().find(|id| crate::reply_buttons::known(id).is_some_and(|(_, b)| b.title == want)).cloned())
+            });
+            let Some(id) = id else { return Err("no reply button like that in the open thread".into()) };
+            if crate::reply_buttons::known(&id).is_none() {
+                return Err(format!("button {id} isn't known"));
+            }
+            app.update(cx, |t, cx| t.press_reply_button(id, window, cx));
+            Ok(json!("ok"))
+        }
         "clipboard" => {
             let words = cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default();
             Ok(json!(format!("ok {}", serde_json::to_string(&words).unwrap_or_default())))

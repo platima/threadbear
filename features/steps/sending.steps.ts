@@ -76,3 +76,9 @@ Then('hovering chip {int} shows its picture', async function (this: ThreadbearWo
   const result = await this.app.do({ cmd: 'composer-peek', number });
   assert.match(result, /ok/);
 });
+
+// Longer than the half second after the last keystroke that a draft is
+// written in (drafts.rs, DraftStore).
+When('I wait a moment', async function (this: ThreadbearWorld) {
+  await new Promise((done) => setTimeout(done, 1200));
+});
