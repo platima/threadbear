@@ -261,6 +261,17 @@ the person put somewhere else), so remove one before using the other. The
 arm64 packages are built by the same workflow but have not been seen running
 on an Arm PC yet.
 
+Upgrading over a copy that is still running: the setup exe asks Threadbear to
+quit and its runner to stop, waits up to 20 seconds for `node\node.exe` and
+`Threadbear.exe` to be free, and, if a program running from the install folder
+is still in the way, ends it (by its process number, and only one that belongs
+to the person installing; a silent run does not ask first). If something else
+is holding those files, it stops before it changes anything, with exit code 7
+when silent, and says which file and program. Give it `/LOG="<file>"` to read
+that afterwards, and `/SUPPRESSMSGBOXES` with `/VERYSILENT`, or the message
+shows in a box even though the install is silent. It needs Windows PowerShell
+for this and carries on as it used to without it. The MSI does none of this.
+
 **From a checkout,** to work on it or to build the packages:
 
 1. **Tools:** Node 24 (nvm-windows works), Git for Windows, and Claude Code

@@ -561,7 +561,24 @@ said otherwise.
   the app to quit (`Threadbear.exe --quit`) and ends the runner's task
   (`--runner --stop`), and starts the task again afterwards (`--runner
   --start`) if it is registered; uninstalling does the same quit and stop, then
-  runs `--runner --uninstall`. Each installer refuses while a copy from the
+  runs `--runner --uninstall`. The setup exe then waits up to 20 seconds for
+  `node\node.exe` and `Threadbear.exe` in the folder to be free, with a
+  PowerShell script it carries (`installer/release-folder.ps1`, unpacked to
+  Setup's own temporary folder and gone when Setup exits, run with Windows
+  PowerShell). The script opens those two files for writing without changing
+  them, and reads the list of programs running on the PC (through WMI) to find
+  any whose program file is inside the install folder. If one is still in the
+  way, Setup names it and asks, and a silent install does not ask, then ends it
+  by its process number: only one that belongs to the person installing, is
+  `Threadbear.exe` or sits in the `node`, `runner`, `desktop` or `docs` folder,
+  and is the same process that was listed (its start time is read again just
+  before). It does not end what that program started. Anything else it names
+  and stops, before a file is changed. The list, with each program's command
+  line, is written only to Setup's own log, which exists only when Setup is run
+  with `/LOG`; nothing is sent anywhere. Where PowerShell is missing or blocked
+  Setup carries on without the script. To find the folder of a copy that is
+  already installed it reads the `App Paths` entry and its own uninstall entry,
+  in `HKCU` and `HKLM`. Each installer refuses while a copy from the
   other kind is installed (it reads `HKLM` registry keys and looks for the setup
   exe's uninstaller in `%LOCALAPPDATA%\Programs\Threadbear`; the MSI also reads
   `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion` for the Windows build and

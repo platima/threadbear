@@ -15,6 +15,15 @@
 ; identities, so each refuses to install while the other's copy is there
 ; (see InitializeSetup). Setup also refuses to go back to an older version,
 ; as the MSI does.
+;
+; An upgrade over a copy that is still running first asks the app to quit and
+; ends the runner's task, then waits (up to 20 seconds) until node\node.exe and
+; Threadbear.exe can be written to. If something still holds them, the setup log
+; says what, the person is asked whether to end it (a silent install says yes),
+; and if anything still holds them after that, Setup stops in PrepareToInstall,
+; before [InstallDelete] has removed a file: exit code 7 when silent, the old
+; install untouched. release-folder.ps1 does the looking and the ending (see
+; PrepareToInstall below). With no PowerShell it carries on as it always did.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -50,6 +59,9 @@
 #define AppName "Threadbear"
 #define AppURL "https://github.com/platima/threadbear"
 #define AppExe "Threadbear.exe"
+; Setup's helper for freeing the install folder: carried inside the setup, used
+; from PrepareToInstall, never installed.
+#define HelperName "release-folder.ps1"
 ; AppId below is this GUID. The MSI checks for this setup's uninstall entry by it
 ; (InnoUninstallKey in threadbear.wxs), and this setup looks for the MSI by its
 ; UpgradeCode (MsiUpgradeCode here, UpgradeCode in the .wxs): keep each pair in
@@ -136,6 +148,9 @@ Type: filesandordirs; Name: "{app}\node"
 Type: filesandordirs; Name: "{app}\docs"
 
 [Files]
+; First, because Setup unpacks every file ahead of one it extracts with
+; ExtractTemporaryFile (solid compression). Not installed: dontcopy.
+Source: "{#HelperName}"; Flags: dontcopy noencryption
 Source: "{#Stage}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
@@ -173,35 +188,360 @@ Filename: "{app}\{#AppExe}"; Parameters: "--runner --uninstall"; Flags: runhidde
 // before files are replaced or removed: the app by a second launch with --quit
 // (it listens for that), the runner by ending its logon task (the task stays
 // registered; the [Run] entry above starts it again after an upgrade).
+//
+// Asking is not stopping. An upgrade has failed on a node.exe that was still
+// running afterwards, with nothing in the log to say which, so an install then
+// waits for the files to be free, says what holds them if they are not, and
+// stops before anything is deleted (FreeTheFolder).
 const
   InnoUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppGuid}_is1';
+  AppPathsKey = 'Software\Microsoft\Windows\CurrentVersion\App Paths\Threadbear.exe';
+  // How long to wait for the files to be let go of once the app and the runner
+  // have been asked to stop, and how long again after ending what was left.
+  WaitSeconds = 20;
+  AfterEndSeconds = 10;
 
 var
-  Previous: String;
+  HelperExtracted: Boolean;
 
-function PreviousInstall(): String;
-var
-  Dir: String;
+// Dir, when it holds Threadbear.exe, without a trailing backslash; else ''.
+function FolderWithApp(const Dir: String): String;
 begin
   Result := '';
-  if RegQueryStringValue(HKA, 'Software\Microsoft\Windows\CurrentVersion\App Paths\Threadbear.exe', '', Dir) then
-    if FileExists(Dir) then
-      Result := ExtractFileDir(Dir);
+  if Dir = '' then Exit;
+  if FileExists(RemoveBackslash(Dir) + '\{#AppExe}') then
+    Result := RemoveBackslash(Dir);
 end;
 
-// Asks the copy in Dir to quit and its runner to stop, then gives both a moment
-// to let go of their files. Does nothing when there is no copy to ask.
-procedure StopCopyIn(const Dir: String);
+// The folder of a copy that is already installed, from what Windows has on
+// record: the App Paths entry of this install mode first (all this ever looked
+// at), then the same entry in each place a per-user or a system-wide install
+// writes it, in either registry view, then the folder in this setup's own
+// uninstall entry. So a copy installed the other way round is found as well.
+// Not found: the zip, which records nothing (the folder being installed to,
+// {app}, covers it when that is the one chosen), and the MSI, which records
+// neither and which this setup will not install over.
+function PreviousInstall(): String;
+var
+  Value: String;
+begin
+  Result := '';
+  Value := '';
+  if RegQueryStringValue(HKA, AppPathsKey, '', Value) then
+    Result := FolderWithApp(ExtractFileDir(Value));
+  if Result <> '' then Exit;
+  if RegQueryStringValue(HKCU, AppPathsKey, '', Value) then
+    Result := FolderWithApp(ExtractFileDir(Value));
+  if Result <> '' then Exit;
+  if RegQueryStringValue(HKLM64, AppPathsKey, '', Value) then
+    Result := FolderWithApp(ExtractFileDir(Value));
+  if Result <> '' then Exit;
+  if RegQueryStringValue(HKLM32, AppPathsKey, '', Value) then
+    Result := FolderWithApp(ExtractFileDir(Value));
+  if Result <> '' then Exit;
+  if RegQueryStringValue(HKCU, InnoUninstallKey, 'Inno Setup: App Path', Value) then
+    Result := FolderWithApp(Value);
+  if Result <> '' then Exit;
+  if RegQueryStringValue(HKLM64, InnoUninstallKey, 'Inno Setup: App Path', Value) then
+    Result := FolderWithApp(Value);
+  if Result <> '' then Exit;
+  if RegQueryStringValue(HKLM32, InnoUninstallKey, 'Inno Setup: App Path', Value) then
+    Result := FolderWithApp(Value);
+end;
+
+// Runs a program and says in the log how it ended. What it was asked to do is
+// not checked here (neither of these says anything of use); the folder is.
+procedure RunAndLog(const Exe, Params, WorkDir: String);
 var
   Code: Integer;
+begin
+  if Exec(Exe, Params, WorkDir, SW_HIDE, ewWaitUntilTerminated, Code) then
+    Log(Exe + ' ' + Params + ' ended with exit code ' + IntToStr(Code))
+  else
+    Log(Exe + ' ' + Params + ' could not be run: ' + SysErrorMessage(Code) + ' (' + IntToStr(Code) + ')');
+end;
+
+// Asks the copy in Dir to quit and its runner to stop. With Settle, gives both a
+// moment to let go of their files (the uninstaller, which has no helper, does
+// that; an install waits on the files themselves instead). Does nothing when
+// there is no copy to ask.
+procedure StopCopyIn(const Dir: String; const Settle: Boolean);
+var
   Exe: String;
 begin
   if Dir = '' then Exit;
   Exe := Dir + '\{#AppExe}';
   if not FileExists(Exe) then Exit;
-  Exec(Exe, '--quit', Dir, SW_HIDE, ewWaitUntilTerminated, Code);
-  Exec(Exe, '--runner --stop', Dir, SW_HIDE, ewWaitUntilTerminated, Code);
-  Sleep(1500);
+  RunAndLog(Exe, '--quit', Dir);
+  RunAndLog(Exe, '--runner --stop', Dir);
+  if Settle then Sleep(1500);
+end;
+
+// ------------------------------------------------------------------ the helper
+// release-folder.ps1 finds out whether the files are free, lists what is running
+// from the folder, and ends what is left (it explains its own checks). It speaks
+// in a report file of lines whose fields are split by bars.
+
+// Windows PowerShell 5.1, which every Windows 10 and 11 has, or '' if it is not
+// where it should be.
+function PowerShellExe(): String;
+begin
+  Result := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  if not FileExists(Result) then Result := '';
+end;
+
+// Runs the helper with a verb (Wait, End) for Dir and loads its report. False
+// when it could not be run or left no report: PowerShell missing or stopped by
+// policy or AppLocker, the script not unpacked, anything at all. Setup carries
+// on without the helper then; it never fails an install.
+function RunHelper(const Verb, Dir, Extra: String; var Report: TArrayOfString): Boolean;
+var
+  PowerShell, Script, ReportFile: String;
+  Code: Integer;
+begin
+  Result := False;
+  SetArrayLength(Report, 0);
+  PowerShell := PowerShellExe();
+  if PowerShell = '' then
+  begin
+    Log('release-folder: Windows PowerShell was not found');
+    Exit;
+  end;
+  try
+    if not HelperExtracted then
+    begin
+      ExtractTemporaryFile('{#HelperName}');
+      HelperExtracted := True;
+    end;
+  except
+    Log('release-folder: the helper could not be unpacked: ' + GetExceptionMessage);
+    Exit;
+  end;
+  Script := ExpandConstant('{tmp}\{#HelperName}');
+  ReportFile := ExpandConstant('{tmp}\release-folder-report.txt');
+  DeleteFile(ReportFile);
+  if not Exec(PowerShell,
+       '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + Script + '" -Action ' + Verb +
+       ' -Folder "' + RemoveBackslashUnlessRoot(Dir) + '" -OutFile "' + ReportFile + '"' + Extra,
+       ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    Log('release-folder: PowerShell could not be run: ' + SysErrorMessage(Code) + ' (' + IntToStr(Code) + ')');
+    Exit;
+  end;
+  Log('release-folder: ' + Verb + ' ended with exit code ' + IntToStr(Code));
+  if not LoadStringsFromFile(ReportFile, Report) then
+  begin
+    Log('release-folder: it left no report (the script may have been blocked)');
+    Exit;
+  end;
+  Result := GetArrayLength(Report) > 0;
+end;
+
+// The first field of Line, which is cut off it along with the bar after it.
+function TakeField(var Line: String): String;
+var
+  P: Integer;
+begin
+  P := Pos('|', Line);
+  if P = 0 then
+  begin
+    Result := Line;
+    Line := '';
+  end
+  else
+  begin
+    Result := Copy(Line, 1, P - 1);
+    Line := Copy(Line, P + 1, Length(Line) - P);
+  end;
+end;
+
+// What follows Tag and a bar on the first line of the report that starts so.
+function ReportValue(var Report: TArrayOfString; const Tag: String): String;
+var
+  I: Integer;
+  Line: String;
+begin
+  Result := '';
+  for I := 0 to GetArrayLength(Report) - 1 do
+  begin
+    Line := Report[I];
+    if TakeField(Line) = Tag then
+    begin
+      Result := TakeField(Line);
+      Exit;
+    end;
+  end;
+end;
+
+// The report in the setup log (/LOG), which is where the command lines of what
+// holds the folder stay: nothing here is sent anywhere.
+procedure LogReport(var Report: TArrayOfString);
+var
+  I: Integer;
+begin
+  for I := 0 to GetArrayLength(Report) - 1 do
+    Log('release-folder: ' + Report[I]);
+end;
+
+function WhyNot(const Verdict: String): String;
+begin
+  if Verdict = 'keep:other-owner' then
+    Result := 'it is not running as you'
+  else if Verdict = 'keep:setup-itself' then
+    Result := 'it is what Setup was started from'
+  else if Verdict = 'keep:start-time-unreadable' then
+    Result := 'Windows would not say when it started'
+  else
+    Result := 'it is not clearly part of {#AppName}';
+end;
+
+// Reads the programs the report lists. Endable gets a line for each that Setup
+// may end and Other one for each that it may not (and why). Pairs is the
+// "number:start" of the first kind, as the helper wants them back.
+procedure DescribeHolders(var Report: TArrayOfString; var Endable, Other, Pairs: String);
+var
+  I: Integer;
+  Line, ProcId, ProcStart, ProcName, Verdict, ProcFile, Command, Shown: String;
+begin
+  Endable := '';
+  Other := '';
+  Pairs := '';
+  for I := 0 to GetArrayLength(Report) - 1 do
+  begin
+    Line := Report[I];
+    if TakeField(Line) = 'PROC' then
+    begin
+      ProcId := TakeField(Line);
+      TakeField(Line);
+      ProcStart := TakeField(Line);
+      ProcName := TakeField(Line);
+      Verdict := TakeField(Line);
+      ProcFile := TakeField(Line);
+      Command := Line;
+      if Command = '' then Command := ProcFile;
+      Shown := '  ' + ProcName + ' (process ' + ProcId + '): ' + Copy(Command, 1, 200) + #13#10;
+      if Verdict = 'end' then
+      begin
+        Endable := Endable + Shown;
+        if Pairs <> '' then Pairs := Pairs + ',';
+        Pairs := Pairs + ProcId + ':' + ProcStart;
+      end
+      else
+        Other := Other + Shown + '    Setup will not end this one: ' + WhyNot(Verdict) + '.' + #13#10;
+    end;
+  end;
+end;
+
+// What PrepareToInstall says when the files are still held: which, by what, and
+// that nothing has been changed (it is said before [InstallDelete] runs).
+function StuckMessage(const Dir: String; var Report: TArrayOfString): String;
+var
+  I: Integer;
+  Line, Held, Endable, Other, Pairs: String;
+begin
+  Held := '';
+  for I := 0 to GetArrayLength(Report) - 1 do
+  begin
+    Line := Report[I];
+    if TakeField(Line) = 'FILE' then
+      if TakeField(Line) = 'held' then
+        Held := Held + '  ' + Line + #13#10;
+  end;
+  DescribeHolders(Report, Endable, Other, Pairs);
+  Result := '{#AppName} is still running, so Setup cannot replace its files in ' + Dir + '.' + #13#10#13#10 +
+    'Windows says these are open:' + #13#10 + Held;
+  if (Endable <> '') or (Other <> '') then
+    Result := Result + #13#10 + 'Running from that folder:' + #13#10 + Endable + Other
+  else
+    Result := Result + #13#10 + 'Setup could not tell which program has them open.' + #13#10;
+  Result := Result + #13#10 + 'Close it, or end it in Task Manager, then run Setup again. Nothing in the folder has been changed.';
+end;
+
+// Whether Setup may end the programs listed. A silent install cannot be asked,
+// and says yes: the old copy is being replaced, and ending the runner's task
+// already ends it hard. /SUPPRESSMSGBOXES gives the same yes to a visible one.
+function AskToEnd(const Dir, Endable: String): Boolean;
+begin
+  if WizardSilent then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := SuppressibleMsgBox(
+    '{#AppName} is still running from ' + Dir + ', and Setup cannot replace its files while it is.' + #13#10#13#10 +
+    Endable + #13#10 +
+    'Setup can end these for you. Anything they are doing stops straight away.' + #13#10#13#10 +
+    'End them and carry on?',
+    mbConfirmation, MB_YESNO, IDYES) = IDYES;
+end;
+
+// Waits for the files this setup replaces to be free. Returns '' when they are
+// (or when that could not be found out: Setup then does what it always did,
+// which is to give the app a moment and go on). Returns a message when they are
+// still held after the wait and after ending what the helper may end, and
+// PrepareToInstall passes it on, so Setup stops before [InstallDelete] has
+// removed anything and the old install is left as it was.
+function FreeTheFolder(const Dir: String): String;
+var
+  Report, Ended, After: TArrayOfString;
+  Condition, Endable, Other, Pairs: String;
+begin
+  Result := '';
+
+  // A fresh install has nothing to hold. A drive root is left to Setup: the
+  // helper will not work on one, as every program on the drive is inside it.
+  if not (FileExists(Dir + '\node\node.exe') or FileExists(Dir + '\{#AppExe}')) then Exit;
+  if Length(Dir) <= 3 then
+  begin
+    Log('release-folder: ' + Dir + ' is a drive root, so Setup carries on without the helper');
+    Sleep(1500);
+    Exit;
+  end;
+
+  Condition := '';
+  if RunHelper('Wait', Dir, ' -Seconds ' + IntToStr(WaitSeconds), Report) then
+  begin
+    LogReport(Report);
+    Condition := ReportValue(Report, 'STATE');
+  end;
+  if Condition = 'free' then Exit;
+  if Condition <> 'held' then
+  begin
+    Log('release-folder: no answer, so Setup carries on without the helper');
+    Sleep(1500);
+    Exit;
+  end;
+
+  // Still held after the wait.
+  DescribeHolders(Report, Endable, Other, Pairs);
+  if Pairs <> '' then
+  begin
+    if AskToEnd(Dir, Endable) then
+    begin
+      Log('release-folder: ending ' + Pairs);
+      if RunHelper('End', Dir, ' -Expect "' + Pairs + '"', Ended) then LogReport(Ended);
+      if RunHelper('Wait', Dir, ' -Seconds ' + IntToStr(AfterEndSeconds), After) then
+      begin
+        LogReport(After);
+        Condition := ReportValue(After, 'STATE');
+        if Condition = 'free' then Exit;
+        if Condition = 'held' then
+        begin
+          Result := StuckMessage(Dir, After);
+          Log('Setup stopped before changing anything: ' + Result);
+          Exit;
+        end;
+        Log('release-folder: no answer, so Setup carries on without the helper');
+        Sleep(1500);
+        Exit;
+      end;
+    end
+    else
+      Log('release-folder: the person chose not to end them');
+  end;
+
+  Result := StuckMessage(Dir, Report);
+  Log('Setup stopped before changing anything: ' + Result);
 end;
 
 // Microsoft Edge WebView2 is what the window is drawn with. Windows 11 and an
@@ -319,17 +659,29 @@ begin
   end;
 end;
 
+// Before [InstallDelete] and the copy, so a message from here leaves the old
+// install exactly as it was. The copy that is on record is asked to quit and its
+// runner to stop, and so is whatever is in the folder being installed to (it may
+// not be on record: a zip, or the other registry hive), then the files that
+// copy would replace are waited for (FreeTheFolder).
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Dir, Previous: String;
 begin
+  Dir := ExpandConstant('{app}');
   Previous := PreviousInstall();
-  StopCopyIn(Previous);
-  Result := '';
+  Log('Installing to ' + Dir + '; an earlier copy is on record at "' + Previous + '"');
+  StopCopyIn(Previous, False);
+  if not SameText(Previous, Dir) then
+    StopCopyIn(Dir, False);
+  Result := FreeTheFolder(Dir);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   // Before any file is removed. The [UninstallRun] entry ends the task and
-  // removes `tb` whichever of the two comes first.
+  // removes `tb` whichever of the two comes first. The uninstaller cannot
+  // unpack the helper, so it only gives the files a moment.
   if CurUninstallStep = usUninstall then
-    StopCopyIn(ExpandConstant('{app}'));
+    StopCopyIn(ExpandConstant('{app}'), True);
 end;
