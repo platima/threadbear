@@ -619,7 +619,10 @@ said otherwise.
   `shell.log.old`), with no text from the window. The same file says which
   Node the bridge was started with and the process ids of the bridge and the
   shell, and, when the app quits, how the bridge ended and what was done about
-  an on-demand runner (the runner's stop is given 10 seconds).
+  an on-demand runner (its mode check and its stop are given 10 seconds
+  between them, counted beside the bridge's 3 and not after them, and a Node
+  of the set-up script still running when they are up is ended by the app, and
+  the line names its process id).
   Each time the app opens with the task registered it runs `--runner --start`,
   so the runner comes back after an update. `Threadbear.exe --runner
   [--installed | --start | --stop | --status | --uninstall | --dry-run |
