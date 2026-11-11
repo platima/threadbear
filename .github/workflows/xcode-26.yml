@@ -55,7 +55,7 @@ jobs:
           - app: iphone
             xcode: oldest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # SwiftPM's downloads, kept between runs: the packages it clones and
       # the prebuilt libraries (Sentry, whisper.cpp, Convex's) it fetches

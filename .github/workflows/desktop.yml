@@ -53,8 +53,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
@@ -79,7 +79,7 @@ jobs:
           cargo build --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation
           cd features
           TB_APP=gpui TB_RETRY=1 node_modules/.bin/cucumber-js
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: spec-reports-${{ matrix.name }}
@@ -87,7 +87,7 @@ jobs:
           if-no-files-found: ignore
       - name: Build the GPUI app
         run: cargo build --release --manifest-path desktop/Cargo.toml -p threadbear-gpui
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: threadbear-desktop-${{ matrix.name }}
           path: |
