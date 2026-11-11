@@ -702,6 +702,9 @@ export function NewThread({ token }: { token: string }) {
   const [text, setText] = useState('');
   const [runnerId, setRunnerId] = useState('');
   const [pending, setPending] = useState<Id<'commands'> | null>(null);
+  // The runner the queued command was addressed to. The Runner menu stays live
+  // while it waits, so the status reads this and not the menu.
+  const [sentTo, setSentTo] = useState<string | undefined>();
   const command = useLiveQuery(api.phone.command, pending ? { token, commandId: pending } : 'skip');
   // The runner makes the thread, so it has an id once it's taken the command.
   useEffect(() => {
@@ -712,7 +715,10 @@ export function NewThread({ token }: { token: string }) {
   const submit = async () => {
     const body = text.trim();
     if (!body || pending) return;
-    setPending(await create({ token, text: body, ...(runnerId ? { runnerId } : {}) }));
+    const to = runnerId || undefined;
+    const id = await create({ token, text: body, ...(to ? { runnerId: to } : {}) });
+    setSentTo(to);
+    setPending(id);
   };
   return (
     <div className="page">
@@ -726,7 +732,7 @@ export function NewThread({ token }: { token: string }) {
       </header>
       <div className="new-thread">
         {/* With no runner picked the backend chooses, so this says "your computer" then. */}
-        {pending ? <CommandState token={token} commandId={pending} onDone={() => setPending(null)} where={runnerWords(runners, runnerId || undefined, now)} /> : null}
+        {pending ? <CommandState token={token} commandId={pending} onDone={() => setPending(null)} where={runnerWords(runners, sentTo, now)} /> : null}
         <div className="box">
           <form
             className="composer"
