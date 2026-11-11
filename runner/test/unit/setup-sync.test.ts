@@ -1416,13 +1416,57 @@ test('join: what the backend says about the key decides, and a key it turns down
     for (const secret of [RK, RK.slice(4), 'SECRETDEPLOYKEYVALUE']) assert.ok(!w.text().includes(secret), `${what}: ${secret.slice(0, 8)} was printed`);
   }
 
-  // A backend from before runner keys has no such function: the key can't be checked, so it says so and goes on.
-  const old = joinWorld();
-  seedJson(old);
-  old.acct.queryReply = () => ({ ok: false, status: 560, json: async () => ({ status: 'error', errorMessage: "[Request ID: 3] Server Error\nCould not find public function for 'sync:messageHeads'. Did you forget to run `npx convex dev` or `npx convex deploy`?" }) });
-  assert.equal(await join(old, '--yes', '--no-restart', '--key-file', keyFile(old, RK + '\n')), 0, old.text());
-  assert.match(old.text(), /note {2}the backend is older than this script expects, so the key couldn't be checked\. The runner will say if it turns the key down\./);
-  assert.equal(fs.readFileSync(convexKey(old), 'utf8'), RK + '\n');
+});
+
+test('join: an address with no sync:messageHeads is not a Threadbear backend, and nothing is written for it', async () => {
+  // Every backend that can make a runner key has this function (it was there before runner keys), so a deployment
+  // without it is somebody else's: a typo in --url that is still a real *.convex.cloud name. The key is not
+  // installed on its word, an old key is not replaced, and runner.json is not pointed at it.
+  const noFunction = () => ({ ok: false, status: 560, json: async () => ({ status: 'error', errorMessage: "[Request ID: 3] Server Error\nCould not find public function for 'sync:messageHeads'. Did you forget to run `npx convex dev` or `npx convex deploy`?" }) });
+  const said = /https:\/\/calm-fox-123\.ap-southeast-2\.convex\.cloud answers, but it isn't a Threadbear backend: it has no sync:messageHeads, which every backend that makes runner keys has\. Check the address against the first computer's runner\.json\. Nothing has been changed\./;
+  for (const flags of [[], ['--delete-key-file'], ['--dry-run']]) {
+    // No key here yet: the file's key is not installed.
+    const fresh = joinWorld({ installed: true });
+    seedJson(fresh);
+    fresh.acct.queryReply = noFunction;
+    const file = keyFile(fresh, RK + '\n');
+    const jsonBefore = fs.readFileSync(runnerJsonOf(fresh), 'utf8');
+    assert.equal(await join(fresh, '--yes', '--key-file', file, ...flags), 1, `${flags}: ${fresh.text()}`);
+    assert.match(fresh.errs.join('\n'), said, `${flags}`);
+    assert.doesNotMatch(fresh.text(), /older than this script expects|runner will say if it turns the key down/);
+    assert.equal(fs.existsSync(path.join(fresh.home, 'secrets')), false, `${flags}: no key was written`);
+    assert.equal(fs.readFileSync(runnerJsonOf(fresh), 'utf8'), jsonBefore, `${flags}: runner.json was not touched`);
+    assert.equal(fs.existsSync(file), true, `${flags}: the file was not deleted`);
+    assert.deepEqual(installerCalls(fresh).filter((f) => f !== '--installed'), [], `${flags}: the runner was not touched`);
+    for (const secret of [RK, RK.slice(4)]) assert.ok(!fresh.text().includes(secret), `${flags}: ${secret.slice(0, 8)} was printed`);
+
+    // A key already here that works elsewhere: not replaced by the file's.
+    const kept = joinWorld({ installed: true });
+    seedJson(kept);
+    fs.mkdirSync(path.join(kept.home, 'secrets'), { recursive: true });
+    fs.writeFileSync(convexKey(kept), RK + '\n');
+    kept.acct.queryReply = noFunction;
+    const before = tree(kept.home);
+    assert.equal(await join(kept, '--yes', '--key-file', keyFile(kept, RK2 + '\n'), ...flags), 1, `${flags}: ${kept.text()}`);
+    assert.match(kept.errs.join('\n'), said, `${flags}`);
+    assert.equal(tree(kept.home), before, `${flags}: nothing was written`);
+    assert.equal(fs.readFileSync(convexKey(kept), 'utf8'), RK + '\n', `${flags}: the key already here was not replaced`);
+
+    // The key already here and no file: it is checked all the same.
+    const alone = joinWorld({ installed: true });
+    seedJson(alone);
+    fs.mkdirSync(path.join(alone.home, 'secrets'), { recursive: true });
+    fs.writeFileSync(convexKey(alone), RK + '\n');
+    alone.acct.queryReply = noFunction;
+    assert.equal(await join(alone, '--yes', ...(flags.includes('--delete-key-file') ? [] : flags)), 1, `${flags}: ${alone.text()}`);
+    assert.match(alone.errs.join('\n'), said, `${flags}`);
+  }
+  // Only that error is this: a reply that names a different problem is still "couldn't check the key".
+  const other = joinWorld();
+  seedJson(other);
+  other.acct.queryReply = () => ({ ok: false, status: 560, json: async () => ({ status: 'error', errorMessage: 'Server Error: Could not find the thing' }) });
+  assert.equal(await join(other, '--yes', '--key-file', keyFile(other, RK + '\n')), 1);
+  assert.match(other.errs.join('\n'), /The backend couldn't check the key \(HTTP 560: Server Error: Could not find the thing\)/);
 });
 
 test('join: a network that checks HTTPS traffic gets the hint for NODE_USE_SYSTEM_CA, and an ordinary failure does not', async () => {
@@ -1618,6 +1662,69 @@ test('join: --delete-key-file removes the file only once the key reads back, and
   // Part one has no file to delete, and the flag without a file is a usage error.
   const z = world();
   assert.equal(await z.run('--join', '--url', URL_, '--delete-key-file', '--home', z.home), 2);
+});
+
+test('join: a key file that is the installed key itself, spelt any way, is refused, and --delete-key-file never deletes the only copy', async () => {
+  // secrets/convex-key read back as the key file would equal the key, so the plan was "keep", the check passed and
+  // --delete-key-file removed the computer's only copy of its key. The backend keeps only a hash, so it could not
+  // be got back: the first computer would have to make a new one (tb runner add --replace).
+  const spellings: [string, (w: World) => string | undefined][] = [
+    ['the same path', (w) => convexKey(w)],
+    ['with a dot and a .. in it', (w) => [w.home, 'secrets', '.', 'elsewhere', '..', 'convex-key'].join(path.sep)],
+    ['in upper case, as Windows paths may be', (w) => convexKey(w).toUpperCase()],
+    ['in lower case', (w) => convexKey(w).toLowerCase()],
+    ['through a link to the secrets folder', (w) => {
+      const link = path.join(w.root, 'usb', 'secrets-link');
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      try {
+        fs.symlinkSync(path.dirname(convexKey(w)), link, 'junction');
+      } catch {
+        return undefined; // this system won't make one for this user
+      }
+      return path.join(link, 'convex-key');
+    }],
+    ['as a second name for the same file (a hard link)', (w) => {
+      const other = path.join(w.root, 'usb', 'work-pc.key');
+      fs.mkdirSync(path.dirname(other), { recursive: true });
+      try {
+        fs.linkSync(convexKey(w), other);
+      } catch {
+        return undefined;
+      }
+      return other;
+    }],
+  ];
+  const said = /is the runner key this computer already uses \(.*convex-key\), not a key file from the first computer\. --key-file wants the file that tb runner add --out wrote there\. Leave this one where it is \(deleting it would leave this computer with no key\)\. Nothing has been changed\./;
+  for (const [what, spell] of spellings) {
+    for (const flags of [['--delete-key-file'], [], ['--dry-run', '--delete-key-file']]) {
+      const w = joinWorld({ installed: true });
+      seedJson(w);
+      fs.mkdirSync(path.join(w.home, 'secrets'), { recursive: true });
+      fs.writeFileSync(convexKey(w), RK + '\n');
+      w.acct.runnerKeys.set(RK, { runnerId: RUNNER_ID, live: true });
+      const file = spell(w);
+      if (file === undefined) continue;
+      const before = tree(w.home);
+      assert.equal(await join(w, '--yes', '--key-file', file, ...flags), 1, `${what} ${flags}: ${w.text()}`);
+      assert.match(w.errs.join('\n'), said, `${what} ${flags}`);
+      assert.equal(fs.readFileSync(convexKey(w), 'utf8'), RK + '\n', `${what} ${flags}: the key is still where the runner reads it`);
+      assert.equal(tree(w.home), before, `${what} ${flags}: nothing was changed`);
+      assert.deepEqual(w.fetched, [], `${what} ${flags}: refused before the network was asked`);
+      assert.deepEqual(installerCalls(w).filter((f) => f !== '--installed'), [], `${what} ${flags}: the runner was not touched`);
+      assert.doesNotMatch(w.text(), /second copy of the key|ok {4}deleted/, `${what} ${flags}`);
+      for (const secret of [RK, RK.slice(4)]) assert.ok(!w.text().includes(secret), `${what} ${flags}: ${secret.slice(0, 8)} was printed`);
+    }
+  }
+  // Not too eager: a copy of the key somewhere else is a copy, and is deleted as before.
+  const w = joinWorld();
+  seedJson(w);
+  fs.mkdirSync(path.join(w.home, 'secrets'), { recursive: true });
+  fs.writeFileSync(convexKey(w), RK + '\n');
+  w.acct.runnerKeys.set(RK, { runnerId: RUNNER_ID, live: true });
+  const copy = keyFile(w, RK + '\n');
+  assert.equal(await join(w, '--yes', '--no-restart', '--key-file', copy, '--delete-key-file'), 0, w.text());
+  assert.equal(fs.existsSync(copy), false);
+  assert.equal(fs.readFileSync(convexKey(w), 'utf8'), RK + '\n');
 });
 
 test('join: the runner is restarted as for a first computer: the standard folder only, never inside a thread, and not with --no-restart', async () => {

@@ -233,6 +233,21 @@ const samePath = (a, b, platform) => {
   };
   return n(a) === n(b);
 };
+// Whether two paths are one file on disk, however they are spelt: the same name (without regard to case on
+// Windows), the same file once links and junctions are followed (and 8.3 short names expanded), or two names for
+// one file (a hard link). The last two need both to exist.
+const sameFile = (a, b, platform) => {
+  if (samePath(path.resolve(a), path.resolve(b), platform)) return true;
+  try {
+    if (samePath(fs.realpathSync.native(a), fs.realpathSync.native(b), platform)) return true;
+    const x = fs.statSync(a, { bigint: true });
+    const y = fs.statSync(b, { bigint: true });
+    // An ino of 0 is a file system that has none to give (some network shares), not a file number.
+    return x.ino !== 0n && x.dev === y.dev && x.ino === y.ino;
+  } catch {
+    return false;
+  }
+};
 const quote = (p) => (/[\s"]/.test(p) ? `"${p}"` : p);
 
 // The last few lines a command said, for a failure message.
@@ -1038,6 +1053,11 @@ class Setup {
     if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
       throw new Fail(`${file} is inside the repository clone, where git could pick it up. Move it somewhere outside the clone and run this again. Nothing has been changed.`);
     }
+    // The installed key itself, by any name. It would read as the same key, so the plan would be "keep" and
+    // --delete-key-file would delete the computer's only copy: the backend keeps just a hash of it.
+    if (sameFile(file, this.runnerKeyFile, this.d.platform)) {
+      throw new Fail(`${file} is the runner key this computer already uses (${this.runnerKeyFile}), not a key file from the first computer. --key-file wants the file that tb runner add --out wrote there. Leave this one where it is (deleting it would leave this computer with no key). Nothing has been changed.`);
+    }
     const unreadable = (what) => new Fail(`Couldn't read the key file ${file} (${what}). ${hint} Nothing has been changed.`);
     let stat;
     try {
@@ -1197,11 +1217,11 @@ class Setup {
       const remedy = this.jn.hadId ? `On the first computer, make a key for ${id}: ${command}` : `Use the id the key was made for with --id, or make a key for ${id} on the first computer: ${command}`;
       throw new Fail(`That key is for a different runner than ${id}. The backend said: ${told} ${remedy}. Nothing has been changed.`);
     }
-    // A backend from before runner keys has no such function: the key can't be checked, and the runner will say if
-    // it is turned down.
+    // No such function. Every backend that can make a runner key has this one (it came before runner keys), so this
+    // is a Convex deployment that isn't a Threadbear backend: most likely a slip in --url that is still a real name.
+    // Nothing is carried on with, or the key would be saved and runner.json pointed at somebody else's deployment.
     if (/could not find (public )?function/i.test(String(body?.errorMessage ?? ''))) {
-      this.note("the backend is older than this script expects, so the key couldn't be checked. The runner will say if it turns the key down.");
-      return;
+      throw new Fail(`${url} answers, but it isn't a Threadbear backend: it has no sync:messageHeads, which every backend that makes runner keys has. Check the address against the first computer's runner.json. Nothing has been changed.`);
     }
     if (!body || typeof body !== 'object' || typeof body.status !== 'string') {
       throw new Fail(`${url} answered the key check with something that isn't a Convex reply (HTTP ${res.status}). Check the address against the first computer's runner.json. Nothing has been changed.`);

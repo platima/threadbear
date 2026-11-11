@@ -267,6 +267,10 @@ to do next.
   64 digits and letters a to f. A main key or a deploy key in it is refused with a
   note to delete that copy. What is in the file is never printed. A byte order mark,
   and the UTF-16 that Windows PowerShell 5.1's `>` writes, are both understood.
+  The file can't be `secrets\convex-key` itself, however the path is spelt (another
+  case, a `..` in it, a link or junction to the folder, a hard link): with
+  `--delete-key-file` that would delete this computer's only copy of its key, which
+  the backend can't give back.
 - *An address that isn't a Convex cloud one*, like `https://calm-fox-123.convex.cloud`
   or `https://calm-fox-123.ap-southeast-2.convex.cloud`, with nothing after the
   name. A self-hosted backend can't be joined from here yet. An address that
@@ -284,9 +288,11 @@ or this isn't the backend that made it, and the message gives the `tb runner add
 line to run again on the first computer, with `--replace` on the end. If it says the
 key is for a different runner, the key was made for another id. Neither writes
 anything. A
-backend too old to have the function can't check the key: the script says so and
-carries on, and the runner says if it turns the key down later. A network failure
-or a reply that isn't Convex's stops it with nothing written.
+deployment that has no such function isn't a Threadbear backend (every backend that
+can make a runner key has it), most likely an address with a slip in it that is still
+a real name, so the script stops with nothing written and doesn't save the key or
+change runner.json. A network failure or a reply that isn't Convex's stops it with
+nothing written too.
 
 **A work network that inspects HTTPS traffic.** Node keeps its own list of
 certificate authorities and doesn't use Windows's unless asked. If one of the
@@ -528,6 +534,11 @@ And for `--join`, each of which changes nothing:
   If the message says the main key or a deploy key was in it, delete that copy.
 - *"is inside the repository clone"*: move the key file outside the folder with the
   repository's files, and run it again.
+- *"is the runner key this computer already uses"*: `--key-file` names
+  `secrets\convex-key`. Name the file `tb runner add --out` wrote on the first
+  computer instead, or leave `--key-file` out to check the key that is already here.
+- *"isn't a Threadbear backend"*: the address answers, but the deployment has no
+  `sync:messageHeads`. Check `--url` against the first computer's `sync.url`.
 - *"The backend turned the key down (bad runner key)"*: the key was replaced or
   revoked, or the address isn't the backend that made it. On the first computer run
   the `tb runner add` line it prints, with `--replace`, and use the new file.
