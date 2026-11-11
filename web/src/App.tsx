@@ -14,7 +14,7 @@ import { go, threadPath, useRoute } from './route';
 import { useToken } from './token';
 import { isApp } from './deployment';
 import { PairScreen } from './pair';
-import { isAtEnd, lastWorkedOn, recapDue, recapParts } from './view-logic';
+import { isAtEnd, lastWorkedOn, recapDue, recapParts, runnerWords } from './view-logic';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { ReplyButton } from './reply-button';
 import { CommandState } from './command-state';
@@ -80,7 +80,7 @@ class Catch extends Component<{ children: ReactNode }, { error: unknown }> {
     return (
       <main className="signin">
         <h1>{kind === 'notFound' ? 'No such thread' : 'Something went wrong'}</h1>
-        <p className="muted">{kind === 'notFound' ? 'It may have been deleted, or the Mac hasn’t mirrored it yet.' : String(error)}</p>
+        <p className="muted">{kind === 'notFound' ? 'It may have been deleted, or the computer it runs on hasn’t mirrored it yet.' : String(error)}</p>
         <p>
           <a
             href="/"
@@ -162,6 +162,8 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
   // For thread: links, as agents may give only the start of an id.
   const inbox = useInbox();
   const update = useMutation(api.phone.update);
+  // For "Sent to ..." above the message box: the rail already asks for these.
+  const runners = useLiveQuery(api.phone.runners, { token });
   const [pending, setPending] = useState<Id<'commands'> | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -215,6 +217,8 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
   const items = useMemo(() => fold(messages, t ? busy(t) : false), [messages, t?.status]);
   if (!shown || !t) return <div className="pad muted">Loading…</div>;
 
+  // Where this thread's commands go: its runner, which can be any kind of computer.
+  const where = runnerWords(runners, t.runnerId, Date.now());
   const pictures = shown.images ?? [];
   const inText = new Map(pictures.filter((p) => p.src).map((p) => [p.src!, p.url]));
   const after = picturesByRow(messages, pictures);
@@ -232,7 +236,7 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
   // keeps) is just its title.
   const buttonFor = (m: PageMessage) => (id: string, title: ReactNode) => {
     const b = m.buttons?.find((x) => x.id === id);
-    return b ? <ReplyButton key={id} token={token} threadId={threadId} button={b} title={title} threadPath={linkTo} /> : <>{title}</>;
+    return b ? <ReplyButton key={id} token={token} threadId={threadId} button={b} title={title} threadPath={linkTo} where={where} /> : <>{title}</>;
   };
 
   const renderItem = (item: Item<PageMessage>): ReactNode => {
@@ -273,7 +277,7 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
           <span className="sep">/</span>
           <h1>{t.title || 'Untitled'}</h1>
         </div>
-        <ShareControl token={token} threadId={threadId} share={t.share} preview={previewOf(t.title, messages, pictures.filter((p) => !p.src?.startsWith('picture:')))} />
+        <ShareControl token={token} threadId={threadId} share={t.share} where={where} preview={previewOf(t.title, messages, pictures.filter((p) => !p.src?.startsWith('picture:')))} />
         <MoreMenu
           items={[
             { label: 'Copy link', icon: <Icon.Link />, run: () => void navigator.clipboard.writeText(location.origin + location.pathname) },
@@ -311,7 +315,7 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
       </div>
 
       <div className="dock">
-        {pending ? <CommandState token={token} commandId={pending} onDone={() => setPending(null)} /> : null}
+        {pending ? <CommandState token={token} commandId={pending} onDone={() => setPending(null)} where={where} /> : null}
         <RecapBox thread={t} />
         <Dock token={token} thread={t} lastSeq={lastSeq} onSent={setPending} onArchive={() => void act({ archive: true })} />
       </div>
@@ -595,7 +599,7 @@ function ApprovalCard({ token, threadId, approval, onSent }: { token: string; th
       <section className="card">
         <h2>{approval.label}</h2>
         <p>{approval.reason}</p>
-        <p className="desc">Answer this in Threadbear on your Mac or iPhone.</p>
+        <p className="desc">Answer this in Threadbear on your computer or iPhone.</p>
         <div className="ask-links">
           <button className="btn" onClick={async () => onSent(await secret({ token, threadId, approvalId: approval.approvalId, decline: true }))}>
             Decline

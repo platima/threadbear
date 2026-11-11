@@ -240,7 +240,7 @@ export function MessageText({
                 );
               }
               return (
-                <span className="picture-chip" title="This picture is only on your Mac: it was pasted before pictures went up, is over 10 MB, or pictures are turned off on that runner">
+                <span className="picture-chip" title="This picture is only on the computer the thread runs on: it was pasted before pictures went up, is over 10 MB, or pictures are turned off on that runner">
                   <Icon.Photo />
                   Picture {picture}
                 </span>
@@ -248,11 +248,11 @@ export function MessageText({
             }
             const link = href ? readLink(href) : undefined;
             // A relative link (`[plan](shorts-plan/candidates.md)`) is a
-            // file in the thread's folder on the Mac; as an address here
+            // file in the thread's folder on its computer; as an address here
             // it's a page on this site that isn't there.
             // `/` and `//` ones are this site's own pages and web addresses.
             if (!link && href && !/^[#/]/.test(href) && !/^[a-z][a-z0-9+.-]*:/i.test(href)) {
-              return <span title="This file is on the Mac">{children}</span>;
+              return <span title="This file is on the computer the thread runs on">{children}</span>;
             }
             if (!link) {
               return (

@@ -56,6 +56,19 @@ call, with no tool output), and everything it does is a command the runner
 applies. It does not need the computer to be on the same network: it talks to
 the Convex deployment, as the iPhone does.
 
+The app is drawn edge to edge, behind the status bar and the gesture bar: Tauri's
+generated `MainActivity` calls `enableEdgeToEdge()` and the app targets API 37, which
+Android 15 and newer enforce anyway. So the page keeps clear of them itself. `#root` in
+`web/src/styles.css` pads by `env(safe-area-inset-top)` and the two sides, and the tab bar
+and the composer pad by the bottom one. Android System WebView hands the page those insets
+from version 140 (Tauri's issue 14240 has the history), and it updates through Google
+Play. An older one reports 0, and the status bar then sits over the top of the page; the
+version is under Settings, Apps, Android System WebView. `web/src/safe-area.test.ts` holds
+that the page asks for the insets, once. The emulator check cannot show whether they
+arrive, as its system image has WebView 113. The status bar's icons follow the phone's
+light or dark setting and not the page's, so they only disagree with the page after
+Always light or Always dark in the gear menu.
+
 ### Getting it
 
 GitHub builds it: the **android** workflow (`.github/workflows/android.yml`)

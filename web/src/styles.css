@@ -73,6 +73,14 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* The Android app is drawn edge to edge, behind the status bar and any display
+   cutout, and its WebView (version 140 or newer) tells the page how much they
+   cover as env(safe-area-inset-*), which index.html opts in to with
+   viewport-fit=cover. Every screen sits in #root, so it keeps clear of the top
+   and the sides here, once. The bottom is the tab bar's and the composer's own,
+   in the narrow-screen block below. Where nothing covers the page (a browser, an
+   older WebView) the insets are 0 and this changes nothing. */
+#root { padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px); }
 body { background: var(--bg); color: var(--text); font: 15px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -464,18 +472,23 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 @media (max-width: 760px) {
   .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   /* The rail lies down as a tab bar under the list, and goes while a thread
-     or a page has the screen. */
-  .rail { order: 2; grid-column: 1; flex-direction: row; justify-content: space-around; padding: 6px 0 max(8px, env(safe-area-inset-bottom)); border-right: 0; border-top: 1px solid var(--line); }
+     or a page has the screen. It is positioned so the More menu hangs off it. */
+  .rail { order: 2; grid-column: 1; flex-direction: row; justify-content: space-around; padding: 6px 0 max(8px, env(safe-area-inset-bottom)); border-right: 0; border-top: 1px solid var(--line); position: relative; }
   .shell.has-thread .rail { display: none; }
   .rail .brand-mark, .rail .tile, .rail .rail-sep, .rail .grow, .rail .desk-only { display: none; }
   .rail-btn { width: auto; height: auto; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; background: none !important; font-size: 10.5px; }
   .rail-btn .word { display: block; }
   .rail-btn b { right: calc(50% - 20px); top: -4px; }
-  .rail .pop { flex: 1; display: flex; }
+  .rail .pop { flex: 1; display: flex; position: static; }
   .rail .pop > summary { width: 100%; height: auto; display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; background: none !important; }
   .rail .pop > summary svg { width: 17px; height: 17px; }
   .rail .pop > summary::after { content: 'More'; }
-  .rail .pop-panel { left: auto; right: 8px; bottom: calc(100% + 6px); position: fixed; bottom: 62px; }
+  /* The More menu opens up from the bar's own top edge, so it clears the bar
+     however tall that is: the bar grows with the bottom inset (an iPhone's home
+     bar, the navigation bar under an app drawn edge to edge). The 7px is a gap
+     of 6px and the bar's 1px border, which the percentage leaves out. It scrolls
+     in the room above the bar, for a screen too short for it (a phone on its side). */
+  .rail .pop-panel { left: auto; right: 8px; bottom: calc(100% + 7px); max-height: calc(100vh - 100% - 16px); overflow-y: auto; overscroll-behavior: contain; }
   .menu .phone-only { display: flex; }
   .page-body { padding: 16px 14px 24px; }
   .state-line { display: none; }
@@ -485,6 +498,9 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
   .search input { font-size: 16px; }
   .shell.has-thread .sidebar { display: none; }
   .shell:not(.has-thread) .main { display: none; }
+  /* The strip #root leaves behind the status bar is the body's. Over the list,
+     which is --side and not --bg, take the list's colour so there is no band. */
+  body:has(.shell:not(.has-thread)) { background: var(--side); }
   .back { display: inline-grid; margin-left: -8px; }
   .thread-head { padding: 8px 10px 8px 14px; }
   .crumbs .folder, .crumbs .sep { display: none; }

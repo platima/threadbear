@@ -1,7 +1,7 @@
 // node --test web/src/view-logic.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isAtEnd, lastWorkedOn, recapDue, recapParts, bytesWords, statsFresh, isOnline, matchesSchedule, runnersShown, runnerState, scheduleSections, sinceWords, tightest, untilWords } from './view-logic.ts';
+import { isAtEnd, lastWorkedOn, recapDue, recapParts, bytesWords, statsFresh, isOnline, matchesSchedule, runnersShown, runnerState, runnerWords, scheduleSections, sentWords, sinceWords, tightest, untilWords } from './view-logic.ts';
 
 const NOW = Date.parse('2026-11-05T10:00:00Z');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
@@ -19,6 +19,32 @@ test('a runner says how it is and when it was last heard from', () => {
   assert.equal(runnerState(run('a', 12_000), NOW), 'Online, heard from 12s ago');
   assert.equal(runnerState(run('a', 12_000, true), NOW), 'Updating, heard from 12s ago');
   assert.equal(runnerState(run('a', 3 * 3600_000), NOW), 'Offline, last heard from 3h ago');
+});
+
+// A runner can be a Mac, a Windows PC or a Linux machine, and the page isn't
+// told which, so a command went to "your computer" unless there are several
+// runners and the name tells them apart (the iPhone app's rule).
+test('a command goes to your computer, or to the runner by name when there are several', () => {
+  const pc = { runnerId: 'r-pc', name: 'DESKTOP-3F9K2', lastSeenAt: ago(MIN), draining: false };
+  const cloud = { runnerId: 'r-cloud', name: 'cloud', lastSeenAt: ago(MIN), draining: false };
+  assert.equal(runnerWords([pc], 'r-pc', NOW), 'your computer');
+  assert.equal(runnerWords([pc, cloud], 'r-cloud', NOW), 'cloud');
+  assert.equal(runnerWords([pc, cloud], 'r-pc', NOW), 'DESKTOP-3F9K2');
+  // Not loaded yet, no runner known, one that isn't listed or has no name: never a raw id.
+  assert.equal(runnerWords(undefined, 'r-pc', NOW), 'your computer');
+  assert.equal(runnerWords([pc, cloud], undefined, NOW), 'your computer');
+  assert.equal(runnerWords([pc, cloud], 'any', NOW), 'your computer');
+  assert.equal(runnerWords([pc, { ...cloud, name: ' ' }], 'r-cloud', NOW), 'your computer');
+  // One gone for over a week isn't one of several: the Runners page doesn't list it.
+  assert.equal(runnerWords([pc, { ...cloud, lastSeenAt: ago(8 * 24 * 60 * MIN) }], 'r-pc', NOW), 'your computer');
+});
+
+test('the line above the message box says where the command is', () => {
+  assert.equal(sentWords('pending', 'your computer'), 'Waiting for your computer to pick this up');
+  assert.equal(sentWords('taken', 'your computer'), 'Sent to your computer');
+  assert.equal(sentWords('pending', 'cloud'), 'Waiting for cloud to pick this up');
+  assert.equal(sentWords('taken', 'cloud'), 'Sent to cloud');
+  assert.equal(sentWords('taken'), 'Sent to your computer');
 });
 
 test('times read short', () => {

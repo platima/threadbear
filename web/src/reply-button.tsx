@@ -8,14 +8,15 @@ import { go } from './route';
 import * as Icon from './icons';
 import { buttonLook, type MessageButton } from './reply-buttons';
 
-export function ReplyButton({ token, threadId, button, title, threadPath }: { token: string; threadId: string; button: MessageButton; title: ReactNode; threadPath: (id: string) => string }) {
+// where: the runner the thread is on, as runnerWords says it.
+export function ReplyButton({ token, threadId, button, title, threadPath, where }: { token: string; threadId: string; button: MessageButton; title: ReactNode; threadPath: (id: string) => string; where?: string }) {
   const press = useMutation(api.phone.press);
   const [commandId, setCommandId] = useState<Id<'commands'> | null>(null);
   // Between the click and phone:press answering, so a second click can't queue another.
   const [asking, setAsking] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
   const command = useQuery(api.phone.command, commandId ? { token, commandId } : 'skip');
-  const look = queueError && !commandId ? { kind: 'failed' as const, error: queueError, tip: `Didn't work: ${queueError}. Press to try again.` } : buttonLook(button, command, asking || (commandId !== null && command === undefined));
+  const look = queueError && !commandId ? { kind: 'failed' as const, error: queueError, tip: `Didn't work: ${queueError}. Press to try again.` } : buttonLook(button, command, asking || (commandId !== null && command === undefined), where);
   const onClick = async () => {
     if (look.kind === 'pressing') return;
     if (look.kind === 'pressed') {
