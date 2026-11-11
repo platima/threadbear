@@ -455,12 +455,54 @@ said otherwise.
   open programs, it sets and clears the user variable `THREADBEAR_PATH_CHANGED`
   for an instant. `--uninstall` removes the task, the file and the PATH entry;
   `--stop` ends the task but leaves it registered; `--start` runs it if it is
-  registered and not already running; `--installed` says whether it is.
+  registered and not already running; `--installed` says whether it is. `--stop`
+  (and `--uninstall`, before it removes the task) then waits up to 10 seconds
+  for Task Scheduler to say the task has stopped, and reads two small files:
+  `runner-supervisor.pid` beside the supervisor's log, which `windows-run.mjs`
+  writes with its own process id and start time, and `run\runner.pid` in the
+  data folder. For each, if the process it names is still running, started at
+  the time recorded there, and running from the same `node.exe` the script
+  itself is running on, it ends that process and the ones it started (`taskkill
+  /PID <pid> /T /F`) and prints one line saying so. The supervisor comes first,
+  as it would otherwise start the runner again a few seconds after the runner
+  was ended. A process from some other `node.exe`, or one that is the process
+  recorded but whose program can't be read, is left running and reported, and
+  the exit code is 1. A file left behind by a process that was ended hard,
+  whose number some other program has now, is not reported at all: its start
+  time is read for any process (from `Get-Process`, or from the system's
+  process table, WMI, which can be read for a service or an elevated program
+  too) and found not to be the one recorded. To read those it runs
+  `powershell.exe` for that one process id. The data folder it looks in for
+  `run\runner.pid` is the one the runner works out for itself from the same
+  variables (`THREADBEAR_HOME`, else `THREADBEAR_DATA_DIR`, each also under its
+  old `THREADBARE_` name, with a leading `~` expanded, else the default).
+  Nothing is ever ended by name. The
+  exit code is 1 as well if the task is still running after the 10 seconds, or
+  if the runner's files could not be loaded to look. The installers and the
+  desktop app's quit ignore the exit code; `scripts/setup-sync.mjs` reads it,
+  and when it is 1 does not restart the runner and says so. The runner is also
+  started with a pipe for its
+  standard input that `windows-run.mjs` holds open and a variable
+  (`THREADBEAR_RUNNER_WATCH_STDIN`) that makes it stop when the pipe closes,
+  which is what happens when the supervisor ends; the runner removes the
+  variable from its environment, so nothing it starts inherits it. The
+  supervisor's log also starts each run with a line giving its process id and
+  the `node.exe` it runs on. Only one supervisor keeps `runner-supervisor.pid`:
+  one that starts while the file names a supervisor that is running (the
+  process is there and started at the time recorded) stops at once with exit
+  code 0, starts no runner and leaves the file as it was, so `--stop` can still
+  find the first. To tell, it runs `powershell.exe` once for that one process
+  id, and only when the file names a process that is running; a file that names
+  nothing running (the supervisor was ended hard, or the PC restarted), or that
+  does not read, is replaced.
 - **Where things are:** the data folder is `%APPDATA%\Threadbear` (the Mac's
   layout inside it), the runner's log is
   `%LOCALAPPDATA%\Threadbear\Logs\threadbear-runner.log`, and the supervisor's
   is `runner-supervisor.log` beside it, with `runner-supervisor.log.1` once it
-  has passed 2 MB. `%APPDATA%` is the roaming folder: on a PC with a roaming
+  has passed 2 MB and `runner-supervisor.pid` (its process id and start time, a
+  line of JSON, removed when it stops itself because another runner has the
+  folder, and never removed or replaced by another supervisor while the one it
+  names is running). `%APPDATA%` is the roaming folder: on a PC with a roaming
   profile or folder redirection it may be copied to a server, and the runner's
   token and secrets are in it. NTFS gives these files the profile's own
   permissions, so the 0600 and 0700 modes are not set; when `THREADBEAR_HOME`
@@ -476,7 +518,7 @@ said otherwise.
   `conhost.exe` for the task, `cmd.exe` for `tb.cmd`, `taskkill /T /F` on a
   process it started and still has recorded (only when its recorded start time
   matches, or the child it started hasn't exited, so a reused number is not
-  stopped), `powershell.exe`
+  stopped; and `--stop` on a leftover runner, as described above), `powershell.exe`
   to read a process's start time and the PATH, and
   `rundll32.exe url.dll,FileProtocolHandler` to open a web page. Every child is
   started with its console window hidden.

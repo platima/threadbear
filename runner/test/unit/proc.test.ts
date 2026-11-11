@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { ProcessRegistry, approxStartTime, followUpKillDue, groupAlive, hasExited, groupSpawner, killGroup, ownStartTime, pidExists, processInfo, sameStartTime } from '../../src/proc.ts';
+import { ProcessRegistry, approxStartTime, followUpKillDue, groupAlive, hasExited, groupSpawner, killGroup, ownStartTime, pidExists, processImage, processInfo, sameStartTime } from '../../src/proc.ts';
 import { acquireLock } from '../../src/lock.ts';
 import { nullLogger } from '../../src/log.ts';
 import { tmpDir } from '../helpers/fakes.ts';
@@ -185,6 +185,54 @@ test('a start time worked out in-process is close to the one the system reports,
   assert.equal(sameStartTime('Mon Jan  1 00:00:00 2001', real), false);
   assert.equal(sameStartTime('', real), false);
   assert.equal(sameStartTime('~12abc', real), false);
+});
+
+test('processImage gives the start time and full program path of a process, with letters outside ASCII intact, and nothing for one that is gone', READS_START_TIMES, async () => {
+  // A copy of node in a folder with letters outside ASCII, started and ended by this test.
+  const exe = path.join(tmpDir(), 'Zoë José', 'node', 'node.exe');
+  fs.mkdirSync(path.dirname(exe), { recursive: true });
+  fs.copyFileSync(process.execPath, exe);
+  const child = spawn(exe, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
+  try {
+    const image = processImage(child.pid!);
+    assert.ok(image, 'PowerShell answered');
+    assert.equal(image.path, exe);
+    assert.equal(image.lstart, processInfo(child.pid!)!.lstart, 'the start time is the one the runner records for itself');
+    assert.equal(processImage(process.pid)?.path, process.execPath);
+  } finally {
+    child.kill();
+  }
+  await new Promise((r) => child.once('exit', r));
+  assert.equal(processImage(child.pid!), null, 'a process that has exited has no image');
+});
+
+test('processImage still gives a start time for a process Get-Process cannot read (System, pid 4), from the system\'s own process table, so a reused pid can be told from the runner', READS_START_TIMES, () => {
+  // Get-Process gives no StartTime for System, as for a service or an elevated program
+  // from a normal session, so this used to be null: "could not tell", with nothing of ours running.
+  const image = processImage(4);
+  assert.ok(image, 'a start time was found another way');
+  assert.match(image.lstart, /^\d+$/);
+  assert.equal(typeof image.path, 'string', 'the program may be unreadable, which is "" and no answer');
+  assert.ok(BigInt(image.lstart) < BigInt(ownStartTime().slice(1)), 'the system started before this test did');
+  // Whether Get-Process can read System's start time depends on the account: a normal session can't (so the process
+  // table's reading is used, and is to the microsecond only), an elevated one such as a CI runner's can (and it is
+  // exact). Either way there is an answer, and the slack says which it is.
+  assert.equal(typeof image.slack, 'bigint');
+  assert.ok(image.slack >= 0n, 'the slack is how far the reading can be out, never less than none');
+  // A process Get-Process reads in full is exact.
+  assert.equal(processImage(process.pid)?.slack ?? 0n, 0n);
+});
+
+test('a start time read to the microsecond matches the exact one it came from, and nothing that is further apart', () => {
+  const exact = '134388297558306157';
+  const coarse = '134388297558306150'; // what the process table gives for the same process: cut to the microsecond
+  assert.equal(sameStartTime(exact, coarse), false, 'exactly, they differ');
+  assert.equal(sameStartTime(exact, coarse, 10_000n), true, 'to the slack given, they are one process');
+  assert.equal(sameStartTime(coarse, exact, 10_000n), true);
+  assert.equal(sameStartTime(exact, String(BigInt(coarse) + 20_000n), 10_000n), false, 'a process a few milliseconds off is another');
+  assert.equal(sameStartTime(exact, String(BigInt(coarse) - 36_000_000_000n), 10_000n), false, 'an hour off certainly is');
+  assert.equal(sameStartTime('~12abc', coarse, 10_000n), false);
+  assert.equal(sameStartTime('', coarse, 10_000n), false);
 });
 
 test('pidExists says whether a process is there without touching it', () => {

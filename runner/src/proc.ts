@@ -251,8 +251,9 @@ export function groupAlive(pgid: number): boolean {
 
 // Windows ends a process and everything it started in one go. There's no
 // gentler signal for a console program: SIGTERM is a hard kill there too.
-// Only a pid the runner started and still has recorded reaches this.
-function killTreeWindows(pid: number): boolean {
+// Only a pid the runner started and still has recorded reaches this, and
+// scripts/install-windows.mjs uses it for a runner it has checked is one.
+export function killTreeWindows(pid: number): boolean {
   try {
     execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     return true;
@@ -311,6 +312,59 @@ function processInfoWindows(pid: number): { pgid: number; lstart: string; comman
   }
 }
 
+// How far a start time from the system's process table (WMI) can be from the
+// exact one Get-Process gives for the same process: it is cut to the
+// microsecond (10 units of 100 ns), here with a wide margin. A process that
+// is not the one recorded is seconds or more away, not a millisecond.
+const TABLE_START_SLACK = 10_000n;
+
+// Windows only. Which program a process is running and when it started, for
+// a caller about to end it that must be sure it has the right one: lstart is
+// the same count processInfo gives (so it compares with a runner's recorded
+// start time), path the full path of the program. null if PowerShell would
+// not say or the process is not there. A path of '' means the process would
+// not show its program (another user's, or elevated), which is no answer.
+//
+// Get-Process cannot read the start time of a service, an elevated program
+// or System, and a stale run/runner.pid can name one of those once its pid is
+// reused. Then the system's process table (CIM, which any process can be read
+// from) gives the time, to the microsecond only: `slack` is how far that can
+// be from the exact count, to hand on to sameStartTime. 0n is exact.
+//
+// The text comes back as Base64 of its UTF-8, as PowerShell writes a pipe in
+// the OEM code page, which would turn a folder called Zoë into Zo?.
+export function processImage(pid: number): { lstart: string; path: string; slack: bigint } | null {
+  if (!IS_WINDOWS) return null;
+  const id = Math.trunc(pid);
+  const script = [
+    `$p = Get-Process -Id ${id} -ErrorAction Stop`,
+    `$t = $null; try { $t = $p.StartTime.ToFileTimeUtc() } catch {}`,
+    `$f = ''; try { if ($p.Path) { $f = [string]$p.Path } } catch {}`,
+    `$coarse = 0`,
+    `if (-not $t -or -not $f) {`,
+    `  $c = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${id}' -ErrorAction SilentlyContinue`,
+    `  if ($c) {`,
+    `    if (-not $t -and $c.CreationDate) { $t = $c.CreationDate.ToFileTimeUtc(); $coarse = 1 }`,
+    `    if (-not $f -and $c.ExecutablePath) { $f = [string]$c.ExecutablePath }`,
+    `  }`,
+    `}`,
+    `if (-not $t) { throw 'no start time' }`,
+    `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$t $coarse $f"))`,
+  ].join('\n');
+  try {
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 10_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const m = /^(\d+) ([01]) (.*)$/s.exec(Buffer.from(out, 'base64').toString('utf8'));
+    return m ? { lstart: m[1], path: m[3], slack: m[2] === '1' ? TABLE_START_SLACK : 0n } : null;
+  } catch {
+    return null;
+  }
+}
+
 // Windows only. When PowerShell can't be run (policy, AppLocker, or the probe
 // timing out under load) a start time is worked out in this process instead:
 // the same 100 ns count since 1601, with a "~" in front to say it is an
@@ -331,9 +385,15 @@ export function ownStartTime(): string {
   return approxStartTime(Date.now() - process.uptime() * 1000);
 }
 
-// True if a start time recorded earlier is the one just read.
-export function sameStartTime(recorded: string, read: string): boolean {
+// True if a start time recorded earlier is the one just read. `slack` is how
+// far a reading can be off the exact count it stands for (processImage says,
+// for one from the process table); nothing is loose by default.
+export function sameStartTime(recorded: string, read: string, slack = 0n): boolean {
   if (recorded === read) return true;
+  if (slack > 0n && /^\d+$/.test(recorded) && /^\d+$/.test(read)) {
+    const apart = BigInt(recorded) - BigInt(read);
+    return (apart < 0n ? -apart : apart) <= slack;
+  }
   const est = /^~(\d+)$/.exec(recorded);
   if (!est || !/^\d+$/.test(read)) return false;
   const gap = BigInt(est[1]) - BigInt(read);

@@ -11,7 +11,7 @@ import { threadOfPort } from './peer.ts';
 import { threadKey as makeThreadKey } from './rpc-auth.ts';
 import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
-import { RELEASE, markConfigStop, markGoodLater, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, tellLaunchListening } from './release.ts';
+import { RELEASE, markConfigStop, markGoodLater, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, takeSupervisorPipe, tellLaunchListening } from './release.ts';
 import { PatchTrust } from './patch-trust.ts';
 import type { RunnerUpdates } from './runner.ts';
 import { Peers, PrimaryLink, ThreadRouter, drainChildrenName, peersElsewhere, phoneCommands, primaryElsewhere, primaryRemote, projectRouter, removeDrainInfo, scheduleRouter, writeDrainInfo, type CrossRunnerHooks, type Elsewhere } from './handover.ts';
@@ -87,6 +87,9 @@ import { EFFORT_LEVELS, ErrorCode, RpcError, isPermissionMode, type EffortLevel,
 export const REPORTS_LISTENING = true;
 
 async function main(): Promise<void> {
+  // Before anything can start a thread: the variable windows-run.mjs sets must
+  // not reach their environment (release.ts says why).
+  const watchSupervisorPipe = takeSupervisorPipe();
   const cfg = loadConfig();
   const homeWarning = ensureHome(cfg.home);
   const log = createLogger(cfg.logFile, { echo: process.env.THREADBEAR_LOG_STDERR === '1', debug: process.env.THREADBEAR_DEBUG === '1', onError: reportLoggedError, onWarn: reportLoggedWarning });
@@ -1186,6 +1189,9 @@ async function main(): Promise<void> {
   // The supervisor is gone: nothing would restart this runner, and its
   // children would be orphans.
   onSupervisorGone(() => void stop('supervisor gone'));
+  // The same on Windows, where windows-run.mjs is the supervisor: it ending
+  // closes our standard input, whatever ended it.
+  watchSupervisorPipe?.(() => void stop('supervisor gone'));
   process.on('SIGTERM', () => void stop('SIGTERM'));
   process.on('SIGINT', () => void stop('SIGINT'));
   process.on('SIGHUP', () => void stop('SIGHUP'));

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { extraUpdatesFrom, type ExtraUpdate } from './updates/extra.ts';
 import crypto from 'node:crypto';
 import { atomicWriteFileSync } from './fsutil.ts';
-import { chmodSafe, claudeBinaryFor, codexOnPath, dataDirFor, dataDirWarning, logFileFor, tokenStatsDirFor } from './platform.ts';
+import { adoptOldNames, chmodSafe, claudeBinaryFor, codexOnPath, dataDirFor, dataDirWarning, dataHomeFor, expandHome, logFileFor, tokenStatsDirFor } from './platform.ts';
 import { RELEASE } from './release.ts';
 import { gatewayBase, gatewayUrlFrom } from './connectors.ts';
 import { credentialUrlProblem } from './secure-url.ts';
@@ -222,11 +222,9 @@ export function defaultHome(): string {
   return dataDirFor();
 }
 
-export function expandHome(p: string): string {
-  if (p === '~') return os.homedir();
-  if (p.startsWith('~/') || (process.platform === 'win32' && p.startsWith('~\\'))) return path.join(os.homedir(), p.slice(2));
-  return p;
-}
+// (platform.ts has expandHome and adoptOldNames, which loadConfig and
+// scripts/install-windows.mjs share; the rest of src/ imports them from here.)
+export { adoptOldNames, expandHome };
 
 // A runner.json that's there but doesn't read as a JSON object: a hand edit
 // with a trailing comma, a stray character, an empty file. Every write to
@@ -343,17 +341,9 @@ export function recordListening(home: string, port: number, defaultCwd: string):
   writeRunnerJson(home, json);
 }
 
-// The app was called Threadbare until 27 Oct 2026, and its variables were
-// THREADBARE_*. Threads, skills and launchd jobs from before then may still
-// set the old names, so each one stands in for its new name when that
-// isn't set. On import, so every entry point (the runner, tb) gets it.
-export function adoptOldNames(env: NodeJS.ProcessEnv): void {
-  for (const [k, v] of Object.entries(env)) {
-    if (!k.startsWith('THREADBARE_') || v === undefined) continue;
-    const name = 'THREADBEAR_' + k.slice('THREADBARE_'.length);
-    if (env[name] === undefined) env[name] = v;
-  }
-}
+// The app was called Threadbare until 27 Oct 2026 (adoptOldNames, in platform.ts,
+// says what the old names do). On import, so every entry point (the runner, tb)
+// gets it.
 adoptOldNames(process.env);
 
 // `readOnly`: a broken runner.json reads as {} instead of throwing, for a
@@ -361,8 +351,7 @@ adoptOldNames(process.env);
 // Nothing loaded that way may write runner.json.
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnly?: boolean } = {}): Config {
   adoptOldNames(env);
-  // THREADBEAR_DATA_DIR is the name the Mac app uses for the same override.
-  const home = path.resolve(expandHome(env.THREADBEAR_HOME || env.THREADBEAR_DATA_DIR || defaultHome()));
+  const home = dataHomeFor(env);
   const json = opts.readOnly ? peekRunnerJson(home) : readRunnerJson(home);
   const port = Number(env.THREADBEAR_PORT || json.port || DEFAULT_PORT);
   const idleMs = env.THREADBEAR_IDLE_MS
