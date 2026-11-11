@@ -446,6 +446,10 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .recap-close { position: absolute; top: 7px; right: 7px; width: 26px; height: 26px; display: grid; place-items: center; border: 0; background: none; color: var(--muted); cursor: pointer; }
 .box.asking { border-color: var(--accent); }
 .card { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; overflow-wrap: anywhere; }
+/* The card scrolls when it is taller than its cap, so nothing in it may shrink to fit: a
+   box with overflow set (.choices, .approval-input) can shrink to nothing, and its options
+   were then out of reach of the card's scrollbar. */
+.card > * { flex-shrink: 0; }
 .card h2 { display: flex; align-items: center; gap: 7px; font-size: 14px; margin: 0; }
 .card h2 .of { margin-left: auto; font-weight: 400; color: var(--faint); font-size: 12.5px; }
 .ask-q { font-weight: 600; }

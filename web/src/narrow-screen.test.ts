@@ -182,3 +182,11 @@ test('the cards, the reply and the recap leave room for the transcript on a shor
   assert.match(rule(short, '.recap').get('max-height') ?? '', /vh$/);
   assert.equal(rule(short, '.recap').get('overflow-y'), 'auto');
 });
+
+test('nothing in a card shrinks, so a card taller than its cap scrolls to every option', () => {
+  // .choices has overflow: hidden, so as a flex child it could shrink to nothing (measured:
+  // 1px high in a 137px card with six options) and its options were out of reach of the
+  // card's own scrollbar.
+  assert.equal(rule(anywhere, '.card').get('overflow-y'), 'auto');
+  assert.equal(rule(anywhere, '.card > *').get('flex-shrink'), '0');
+});
