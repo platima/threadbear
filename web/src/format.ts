@@ -47,9 +47,10 @@ export function plain(md: string): string {
     .trim();
 }
 
-// The last part of a folder's path: "acme-web".
+// The last part of a folder's path: "acme-web". A Windows runner's folders come as
+// D:\Repos\acme-web, so a backslash divides them as a slash does.
 export function folderName(path: string): string {
-  return path.replace(/\/+$/, '').split('/').pop() || path;
+  return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;
 }
 
 // Markdown as one line of plain text for a link preview, as convex/share.ts

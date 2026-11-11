@@ -30,8 +30,8 @@ test('#root keeps clear of the status bar and the sides, for every screen', () =
 });
 
 test('the bottom inset is left to the tab bar and the composer', () => {
-  // They pad it themselves (max(8px, env(...)) in the narrow-screen block), so
-  // #root taking it as well would leave the bottom of the page with double.
+  // They pad it themselves (the tab bar, and the composer: narrow-screen.test.ts holds
+  // how), so #root taking it as well would leave the bottom of the page with double.
   assert.ok(root, 'a top-level #root rule');
   assert.ok(!root.includes('safe-area-inset-bottom'), '#root does not pad the bottom');
   assert.ok(css.includes('safe-area-inset-bottom'), 'the tab bar and the composer still pad the bottom');

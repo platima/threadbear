@@ -63,8 +63,9 @@ the Convex deployment, as the iPhone does.
 The app is drawn edge to edge, behind the status bar and the gesture bar: Tauri's
 generated `MainActivity` calls `enableEdgeToEdge()` and the app targets API 37, which
 Android 15 and newer enforce anyway. So the page keeps clear of them itself. `#root` in
-`web/src/styles.css` pads by `env(safe-area-inset-top)` and the two sides, and the tab bar
-and the composer pad by the bottom one. Android System WebView hands the page those insets
+`web/src/styles.css` pads by `env(safe-area-inset-top)` and the two sides, and the tab bar,
+the composer, the pages, the pairing screen, and the wide layout's rail and list pad by the
+bottom one. Android System WebView hands the page those insets
 from version 140 (Tauri's issue 14240 has the history), and it updates through Google
 Play. An older one reports 0, and the status bar then sits over the top of the page; the
 version is under Settings, Apps, Android System WebView. `web/src/safe-area.test.ts` holds
@@ -244,6 +245,21 @@ did that on a real phone.
   (`env(keyboard-inset-height)`), are Chrome's, and Android System WebView is not given the
   keyboard through either. This is from reading Chromium's source and a Tauri issue
   (tauri-apps/tauri 7868), not from a phone.
+
+The reply box keeps 10px plus `env(safe-area-inset-bottom)` clear below it (18px on the
+wide layout). With the keyboard down that is 10px above the navigation bar, and with it up
+the inset is zeroed (above), so it is 10px above the keyboard: the same gap in both. It is
+that only because the inset is zeroed, so a change to `ImeInsets.kt` that stopped doing
+that would leave the bar's height added above the keyboard as well. A WebView older than 140
+reports 0, and on Android 15 and newer the box then sits under a three-button bar, as the
+status bar sits under the clock (a native fallback inset is not done).
+
+Panels that hang off a button (the share panel, the `...` menu, sort, filter, the More menu)
+are kept on the screen by `usePopover` (`web/src/menu.tsx`): each is no wider than the screen
+less 8px and the side insets, and if it still runs past an edge it is slid back in by
+`popoverShift` (`web/src/popover.ts`) when it opens, and again when the screen turns. The
+share panel was 24px off the left edge of a 360px phone before this, as its button sits 48px
+in from the right.
 
 On the page, `ThreadView` (`web/src/App.tsx`), in the app only, keeps the transcript at its
 end when its box gets shorter and its end was in view (`isAtEnd` in `web/src/view-logic.ts`),

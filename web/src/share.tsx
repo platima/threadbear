@@ -12,6 +12,7 @@ import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage, type Picture } from './messages';
 import { CommandState } from './command-state';
+import { usePopover } from './menu';
 import { empty, hasMore, nextBefore, pictures, rows, takeLive, takeOlder, type History } from './share-history';
 import { fold, splitTurns, duration, roughly, type Item, type Turn } from './turns';
 import { day, modelLabel, plain, sender, sentences } from './format';
@@ -368,11 +369,13 @@ export function previewOf(title: string, messages: PageMessage[], images: Pictur
 export function ShareControl({ token, threadId, share, onSharePage, preview, where }: { token: string; threadId: string; share?: { access: string; slug: string }; onSharePage?: boolean; preview?: Unfurl; where?: string }) {
   const send = useMutation(api.phone.share);
   const [pending, setPending] = useState<Id<'commands'> | null>(null);
+  // Closes on a click outside or Escape and stays on the screen, as the other menus do.
+  const { ref } = usePopover();
   const shared = share?.access === 'link';
   const link = share ? `${location.origin}/s/${share.slug}` : undefined;
   const run = async (access: 'off' | 'link', newLink?: boolean) => setPending(await send({ token, threadId, access, ...(newLink ? { newLink: true } : {}) }));
   return (
-    <details className="pop">
+    <details className="pop" ref={ref}>
       <summary className={`share-btn ${shared ? 'on' : ''}`} title={shared ? 'Anyone with the link can read this thread' : 'Share this thread'}>
         {shared ? (
           <>
