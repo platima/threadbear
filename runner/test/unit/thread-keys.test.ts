@@ -332,7 +332,7 @@ test('reading the runner token file: Claude tools are denied it outside Full acc
     // From higher up, a Grep reads every file under it whatever its pattern
     // says (cross-lab review of #54, 11 Nov 2026); one beside it is fine.
     assert.ok(deny('Grep', { path: path.dirname(home), pattern: 'hello' }), 'from higher up, whatever the pattern');
-    const beside = fs.realpathSync(fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'tb-beside-')));
+    const beside = fs.realpathSync(fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), 'tb-beside-')));
     try {
       assert.equal(deny('Grep', { path: beside, pattern: 'hello' }), undefined, 'a folder beside it');
     } finally {

@@ -257,7 +257,7 @@ test('codex: the first start installs the latest into its own copy and activates
   assert.equal(resolve(t.u.codexBinary()).native, true);
 });
 
-test('codex: npm installs from public npm whatever ~/.npmrc says (a stale company token gave E401)', async () => {
+test('codex: npm installs from public npm whatever ~/.npmrc says (a stale company token gave E401)', NO_CODEX_COPIES_ON_WINDOWS, async () => {
   const npmArgs: string[][] = [];
   const t = setup({ exec: (cmd, args, opts) => { if (cmd.endsWith('/npm')) npmArgs.push(args); return cmd === '/bin/ps' ? Promise.resolve({ code: 0, stdout: '', stderr: '' }) : defaultExec(cmd, args, opts); } });
   t.u.start();

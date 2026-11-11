@@ -412,7 +412,7 @@ test("a worktree's patch swapped for a fifo doesn't hold the runner up: the tear
 // Daybreak, 10 Nov (finding 79): the patch committed as a link to /dev/zero
 // is a source with no end; reading it whole to look for "teardown" would
 // fill memory and hold the runner. It's skipped as not a plain file, at once.
-test("a worktree's patch swapped for a link to /dev/zero is skipped at once, without reading it", async () => {
+test("a worktree's patch swapped for a link to /dev/zero is skipped at once, without reading it", skipOnWindows('Windows has no /dev/zero, so the link points at nothing'), async () => {
   const dir = fs.realpathSync(tmpDir('tb-td-'));
   const log = path.join(dir, 'log');
   const { main, h } = trustedTeardownRepo(log);

@@ -160,15 +160,17 @@ export async function setupChangedByMove(w: WorktreeRecord, patchFile: string): 
     const rel = path.relative(root, real);
     // Outside the worktree: the move didn't bring it.
     if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
-    const there = await untrustedGit(w.path, ['cat-file', '-e', `${w.base}:${rel.split(path.sep).join('/')}`]);
+    // Git's form (forward slashes), which is also how the message names it.
+    const name = rel.split(path.sep).join('/');
+    const there = await untrustedGit(w.path, ['cat-file', '-e', `${w.base}:${name}`]);
     const exists = fs.existsSync(real);
     if (!there.ok) {
-      if (exists) return `the moved work adds ${rel}, which it runs`;
+      if (exists) return `the moved work adds ${name}, which it runs`;
       continue;
     }
-    if (!exists) return `the moved work removes ${rel}, which it runs`;
-    const same = await untrustedGit(w.path, ['diff', '--quiet', '--no-ext-diff', '--no-textconv', w.base, '--', rel.split(path.sep).join('/')]);
-    if (!same.ok) return `the moved work changes ${rel}, which it runs`;
+    if (!exists) return `the moved work removes ${name}, which it runs`;
+    const same = await untrustedGit(w.path, ['diff', '--quiet', '--no-ext-diff', '--no-textconv', w.base, '--', name]);
+    if (!same.ok) return `the moved work changes ${name}, which it runs`;
   }
   return undefined;
 }

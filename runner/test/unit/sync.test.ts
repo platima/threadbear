@@ -3450,6 +3450,12 @@ test("a card's Run the scrub would change goes up without its button, and a pres
   push([{ commandId: 'r2', kind: 'press', threadId: t.id, args: { buttonId: asks[1]!.run!.buttonId }, createdAt: 2 }]);
   await tick(10);
   assert.deepEqual(applied.filter((a) => a.startsWith('press')), [`press ${t.id} ${asks[1]!.run!.buttonId}`]);
+  // The press answers at once and the command goes on in a real shell in the
+  // thread's folder. Wait it out: a shell still going has that folder as its
+  // working directory, and on Windows that stops the temp folder being removed
+  // when the test process exits (EPERM).
+  for (let i = 0; i < 1200 && !h.runner.listButtons(t.id).buttons.find((b) => b.id === asks[1]!.run!.buttonId)?.pressed; i++) await new Promise((r) => setTimeout(r, 25));
+  assert.ok(h.runner.listButtons(t.id).buttons.find((b) => b.id === asks[1]!.run!.buttonId)?.ran, 'the command finished before the test did');
   await sync.stop();
 });
 

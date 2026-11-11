@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeHarness, tmpDir } from '../helpers/fakes.ts';
-import { sh, shPath } from '../helpers/platform.ts';
+import { IS_WINDOWS, sh, shPath } from '../helpers/platform.ts';
+import { linkDir, slashes } from '../../src/platform.ts';
 import { checkSummary } from '../helpers/protocol-check.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
 import { agentLooseEnds, anyOpen, childLooseEnds, editedLooseEnds, githubRepo, scheduleLooseEnds, worktreeLooseEnds, type Pr, type PrLookup } from '../../src/loose-ends.ts';
@@ -171,7 +172,7 @@ test('looseEnds: not checked when off, when the turn needs Mike, or when it arch
 // PRs waiting on a decision, an export being redone).
 test('looseEnds: files a thread changed in a shared checkout count, not the rest of its status; unpushed commits too', async () => {
   const root = fs.realpathSync(tmpDir('tb-loose-shared-'));
-  const remote = path.join(root, 'remote.git');
+  const remote = shPath(path.join(root, 'remote.git'));
   sh(root, `git init -q --bare -b main ${remote}`);
   const repo = path.join(root, 'tandem');
   fs.mkdirSync(repo);
@@ -199,11 +200,38 @@ test('looseEnds: files a thread changed in a shared checkout count, not the rest
   assert.deepEqual(await editedLooseEnds([path.join(local, 'x.txt')], [sh(local, 'git rev-parse HEAD')]), []);
 });
 
+// The thread's own worktree is worktreeLooseEnds' to say, however the paths of
+// the files it changed are spelled. Git hands back C:/x/y on Windows, an agent's
+// path can be either kind of slash and in any case, and the folder can be
+// reached through a link.
+test("looseEnds: files changed in the thread's own worktree are skipped whichever way their paths are spelled", async () => {
+  const w = repoWithWorktree();
+  const remote = path.join(path.dirname(w.path), 'remote.git');
+  sh(path.dirname(w.path), `git init -q --bare -b main ${shPath(remote)}`);
+  sh(w.mainCheckout, `git remote add origin ${shPath(remote)} && git push -q -u origin main`);
+  sh(w.path, 'echo changed > a.txt');
+  const file = path.join(w.path, 'a.txt');
+  // Without a skip it is found, so the skips below are doing something.
+  assert.deepEqual(await editedLooseEnds([file], []), [{ kind: 'uncommitted', text: "1 file it changed in slot-1 isn't committed" }]);
+  const link = path.join(path.dirname(w.path), 'slot-link');
+  linkDir(w.path, link);
+  const spellings = [file, slashes(file), path.join(link, 'a.txt'), ...(IS_WINDOWS ? [file.toLowerCase(), file.replace(/^./, (c) => c.toLowerCase())] : [])];
+  for (const spelled of spellings) assert.deepEqual(await editedLooseEnds([spelled], [], w.path), [], spelled);
+  // Its folder, searched for commits it made there, is skipped the same way.
+  sh(w.path, 'git commit -qam mine');
+  const sha = sh(w.path, 'git rev-parse HEAD');
+  assert.deepEqual(await editedLooseEnds([], [sha], undefined, { dirs: [w.path] }), [{ kind: 'unpushed', text: "1 commit it made in slot-1 isn't pushed" }]);
+  for (const spelled of spellings) assert.deepEqual(await editedLooseEnds([], [sha], w.path, { dirs: [path.dirname(spelled)] }), [], spelled);
+  // The main checkout beside it is not its own, so a file changed there counts.
+  sh(w.mainCheckout, 'echo other > a.txt');
+  assert.deepEqual(await editedLooseEnds([path.join(w.mainCheckout, 'a.txt')], [], w.path), [{ kind: 'uncommitted', text: "1 file it changed in proj isn't committed" }]);
+});
+
 // 11 Nov 2026: thread 0222c475 said Done with its work pushed to draft PRs
 // that weren't merged, and the card showed a plain Done.
 test('looseEnds: work pushed to a branch that main lacks is open until its PR is merged or closed', async () => {
   const root = fs.realpathSync(tmpDir('tb-loose-pr-'));
-  const remote = path.join(root, 'remote.git');
+  const remote = shPath(path.join(root, 'remote.git'));
   sh(root, `git init -q --bare -b main ${remote}`);
   const repo = path.join(root, 'website');
   fs.mkdirSync(repo);

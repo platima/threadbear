@@ -252,11 +252,14 @@ test('folders.commands lists a new thread\'s commands before it exists, sharing 
     asked.push({ account: a.id, cwd });
     return [{ name: 'alert-duty', source: 'skill', description: 'Weekly alert duty' }];
   };
-  const before = await h.runner.folderCommands({ accountId: 'claude-main', cwd: '/tmp' });
+  // Any folder that exists will do. Windows has no /tmp, so it uses its temp
+  // folder; the runner resolves the path, which on Mac and Linux changes nothing.
+  const folder = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+  const before = await h.runner.folderCommands({ accountId: 'claude-main', cwd: folder });
   assert.deepEqual(before.commands.map((c) => c.name), ['model', 'effort', 'alert-duty']);
-  assert.deepEqual(asked, [{ account: 'claude-main', cwd: '/tmp' }]);
+  assert.deepEqual(asked, [{ account: 'claude-main', cwd: path.resolve(folder) }]);
   // The thread it becomes has the list already.
-  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-main', cwd: '/tmp' });
+  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-main', cwd: folder });
   const after = await h.runner.threadCommands(thread.id);
   assert.deepEqual(after.commands.map((c) => c.name), ['model', 'effort', 'alert-duty']);
   assert.equal(asked.length, 1);

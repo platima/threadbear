@@ -12,22 +12,27 @@ import os from 'node:os';
 import path from 'node:path';
 import { changedFiles, cloneableUrl, originUrl, packGit, repoTop, unpackGit } from '../../src/move-git.ts';
 import { parseConfigList, repoProofConfig, untrustedGit } from '../../src/safe-git.ts';
+import { realPath, slashes } from '../../src/platform.ts';
+import { shPath } from '../helpers/platform.ts';
 
 const tmp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tb-move-planted-')));
-const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'init.defaultBranch=main', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+// core.autocrlf off: a Windows machine often has it on, and then a checkout reads back with CRLF endings
+const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'init.defaultBranch=main', '-c', 'core.autocrlf=false', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const write = (dir: string, file: string, text: string) => {
   fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
   fs.writeFileSync(path.join(dir, file), text);
 };
 
 // Programs that note they ran in `marker`, by name, and pass input through.
+// Git runs a configured program through sh, which eats the backslashes of a
+// Windows path, so a program is named by its path with forward slashes (shPath).
 function programs(root: string) {
   const marker = path.join(root, 'ran.log');
   const prog = (name: string, body = 'cat') => {
     const f = path.join(root, 'bin', name);
     fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, `#!/bin/sh\necho ${name} >> '${marker}'\n${body}\n`, { mode: 0o755 });
-    return f;
+    fs.writeFileSync(f, `#!/bin/sh\necho ${name} >> '${shPath(marker)}'\n${body}\n`, { mode: 0o755 });
+    return shPath(f);
   };
   const ran = () => (fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8').split('\n').filter(Boolean) : []);
   return { prog, ran, marker };
@@ -79,8 +84,8 @@ function repos() {
   execFileSync('git', ['clone', '-q', '--bare', seed, origin]);
   const s = path.join(root, 's');
   const t = path.join(root, 't');
-  execFileSync('git', ['clone', '-q', origin, s]);
-  execFileSync('git', ['clone', '-q', origin, t]);
+  execFileSync('git', ['clone', '-q', '-c', 'core.autocrlf=false', origin, s]);
+  execFileSync('git', ['clone', '-q', '-c', 'core.autocrlf=false', origin, t]);
   return { root, origin, s, t, prog, ran };
 }
 
@@ -108,13 +113,14 @@ test("an archive's planted clean filter doesn't run when a move's preview looks 
   plant(s, prog);
   // The whole repo, .git and all, through a tarball, as Daybreak's proof
   // did: the extracted index's stat data is stale, so git rehashes.
-  const tarball = path.join(root, 'repo.tgz');
-  execFileSync('tar', ['-czf', tarball, '-C', root, 's']);
+  // Paths relative to `root`: GNU tar on Windows reads "C:" as a host.
+  execFileSync('tar', ['-czf', 'repo.tgz', 's'], { cwd: root });
   const out = path.join(root, 'extracted');
   fs.mkdirSync(out);
-  execFileSync('tar', ['-xzf', tarball, '-C', out]);
+  execFileSync('tar', ['-xzf', 'repo.tgz', '-C', 'extracted'], { cwd: root });
   const repo = path.join(out, 's');
-  assert.equal(await repoTop(repo), repo);
+  // Git's own form of the folder: forward slashes, and the long name, on Windows.
+  assert.equal(await repoTop(repo), slashes(realPath(repo)));
   assert.ok((await originUrl(repo))?.endsWith('origin.git'));
   write(repo, 'untracked.txt', 'new\n');
   assert.deepEqual(await changedFiles(repo), ['untracked.txt']);

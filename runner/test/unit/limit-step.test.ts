@@ -84,7 +84,9 @@ test('a process that ignores SIGTERM goes too, even when the step itself stops a
   await assertGone(pid, 'it got the SIGKILL');
 });
 
-test('a late stop check still sends SIGKILL before its final deadline', async (t) => {
+// Also needs a POSIX ps: the script lists its tree with `ps -axo pid=,ppid=`,
+// and this test counts calls to a /bin/sh stand-in for it.
+test('a late stop check still sends SIGKILL before its final deadline', MSYS_PIDS, async (t) => {
   const dir = tmpDir('limit-step-');
   const pidFile = path.join(dir, 'pid');
   const count = path.join(dir, 'count');

@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { LooseEnd, Schedule } from './protocol.ts';
+import { realPath } from './platform.ts';
 import { git, MAIN, type WorktreeRecord } from './worktrees.ts';
 import { untrustedGit } from './safe-git.ts';
 
@@ -64,11 +65,19 @@ export async function editedLooseEnds(edited: string[], commits: string[], skip?
     }
     return tops.get(dir);
   };
-  const inside = (file: string, dir: string) => file === dir || file.startsWith(dir + path.sep);
+  // Whether `file` is `dir` or under it, as the platform reads paths: on
+  // Windows git's C:/x/y, an agent's C:\x\y and c:\X\y are one place.
+  const inside = (file: string, dir: string) => {
+    const rel = path.relative(dir, file);
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+  };
+  // Git names a repo's top by its real path, so that is how the skip is
+  // compared with it (a link, or an 8.3 short name on Windows).
+  const skipReal = skip ? realPath(skip) : undefined;
   for (const file of edited) {
     if (!path.isAbsolute(file) || (skip && inside(file, skip))) continue;
     const top = await topOf(file);
-    if (!top || (skip && inside(top, skip))) continue;
+    if (!top || (skipReal && inside(top, skipReal))) continue;
     repos.set(top, [...(repos.get(top) ?? []), path.relative(top, file)]);
   }
   // Its own folder, for the commits only: no files of it count as changed.
@@ -76,7 +85,7 @@ export async function editedLooseEnds(edited: string[], commits: string[], skip?
     for (const dir of dirs) {
       if (!path.isAbsolute(dir) || (skip && inside(dir, skip))) continue;
       const top = await topOf(dir, true);
-      if (top && !(skip && inside(top, skip)) && !repos.has(top)) repos.set(top, []);
+      if (top && !(skipReal && inside(top, skipReal)) && !repos.has(top)) repos.set(top, []);
     }
   }
   const out: LooseEnd[] = [];
