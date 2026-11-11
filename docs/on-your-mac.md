@@ -70,8 +70,9 @@ File references are where to look.
   address (`*.convex.cloud`) and nowhere else: a GET of `/version` to see that it
   answers, and a POST to `/api/query` calling `sync:messageHeads`, which only
   reads, to check that the key is live and is this runner's (the key is in the
-  body, never in the address). Both are made twice in a real run, once for the plan
-  and once for the run. At the end it can restart the runner as the bullet above
+  body, never in the address). The GET is made twice in a real run, once for the
+  plan and once for the run. The POST is made only when there is a key to check, so
+  not in part one, and it too is made for the plan and again for the run. At the end it can restart the runner as the bullet above
   says, and never from inside a Threadbear thread. On a Mac it does nothing and
   says to use `./threadbear setup --existing`.
 - **Or a self-hosted backend** (`setup --self-hosted`, docs/self-hosting.md;

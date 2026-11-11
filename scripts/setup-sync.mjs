@@ -435,7 +435,7 @@ class Setup {
     // still waiting for its key (part one), so there is nothing to restart yet.
     this.jn = undefined;
     this.waiting = false;
-    const given =v.home ?? d.env.THREADBEAR_HOME ?? d.env.THREADBEAR_DATA_DIR ?? d.env.THREADBARE_HOME;
+    const given = v.home ?? d.env.THREADBEAR_HOME ?? d.env.THREADBEAR_DATA_DIR ?? d.env.THREADBARE_HOME;
     this.home = given ? path.resolve(expand(given, d.homedir)) : dataDirFor({ platform: d.platform, env: d.env, home: d.homedir });
     this.secrets = path.join(this.home, 'secrets');
     this.runnerJsonPath = path.join(this.home, 'runner.json');
@@ -631,7 +631,7 @@ class Setup {
     if (json.sync?.enabled === false) {
       throw new Fail(`${this.runnerJsonPath} has "sync": { "enabled": false }, so the runner won't use a backend whatever this sets up. Remove that line (or set it to true) and run this again. Nothing has been changed.`);
     }
-    if (v.team &&!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(v.team)) throw new Fail(`--team wants a team slug like my-team, not ${JSON.stringify(v.team)}.`);
+    if (v.team && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(v.team)) throw new Fail(`--team wants a team slug like my-team, not ${JSON.stringify(v.team)}.`);
     if (v.region && !/^[a-z0-9-]+$/.test(v.region)) throw new Fail(`--region wants a Convex region like aws-ap-southeast-2, not ${JSON.stringify(v.region)}.`);
     if (v.project !== undefined && !/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/.test(v.project)) throw new Fail(`--project wants a name of letters, numbers, spaces, dots, dashes and underscores, not ${JSON.stringify(v.project)}.`);
     this.checkName();
@@ -1294,7 +1294,8 @@ class Setup {
     try {
       writeRunnerJson(this.home, next);
     } catch (e) {
-      if (e instanceof RunnerJsonError) throw new Fail(`${e.message} Nothing has been changed.`);
+      // In part two the key is already in place by now, so "nothing changed" would not be true.
+      if (e instanceof RunnerJsonError) throw new Fail(`${e.message} ${this.waiting ? 'Nothing has been changed.' : 'The runner key is already in place, so run this again once that is fixed.'}`);
       throw e;
     }
     this.ok(`mirrors to ${url} as ${name} (runner ${id})`);
