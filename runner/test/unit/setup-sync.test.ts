@@ -1149,6 +1149,21 @@ test('join, part one with --dry-run: no id it would make is named, and nothing i
   assert.doesNotMatch(x.text(), /shown when run for real|a new runner id/);
 });
 
+test('join, part one: a runner.json with the address and name but no runner id still has a write to plan, ask about and make', async () => {
+  // The plan pass used to see nothing to change (the id is made only by the real run), say so, and skip the question.
+  const w = joinWorld();
+  seedJson(w, { url: URL_, name: 'Work PC' });
+  assert.equal(await join(w, '--dry-run'), 0, w.text());
+  assert.match(w.text(), new RegExp(`todo {2}write .*runner\\.json: sync\\.url ${asRegExp(URL_)}, sync\\.runnerId \\(a new one, chosen when this is run for real\\) and sync\\.name Work PC`));
+  assert.doesNotMatch(w.text(), /as it was/);
+  assert.equal(readJson(runnerJsonOf(w)).sync.runnerId, undefined, 'a dry run writes nothing');
+  // The real run asks (the question is in the plan) and writes the id.
+  const x = joinWorld();
+  seedJson(x, { url: URL_, name: 'Work PC' });
+  assert.equal(await join(x, '--yes'), 0, x.text());
+  assert.match(String(readJson(runnerJsonOf(x)).sync.runnerId), /^[0-9a-f]{12}$/);
+});
+
 test('join, part two: the backend checks the key, then it is installed, runner.json and the runner follow, and the key is shown nowhere', async () => {
   const w = joinWorld({ installed: true, clone: false });
   const id = await partOne(w, '--name', 'Work PC');
@@ -1329,6 +1344,19 @@ const BAD_KEY_FILES: [string, (w: World) => string, RegExp][] = [
   ['too short', (w) => keyFile(w, RK.slice(0, 40)), /work-pc\.key doesn't hold a runner key/],
   ['two lines', (w) => keyFile(w, `${RK}\n${RK}\n`), /work-pc\.key doesn't hold a runner key/],
   ['inside the clone', (w) => keyFile(w, RK + '\n', 'repo', 'secrets-here', 'work.key'), /work\.key is inside the repository clone, where git could pick it up\. Move it somewhere outside the clone and run this again\./],
+  // A folder whose name merely starts with two dots is still inside the clone ("..keys" is not "..").
+  ['in a folder inside the clone whose name starts with two dots', (w) => keyFile(w, RK + '\n', 'repo', '..keys', 'work.key'), /work\.key is inside the repository clone/],
+  // A link or junction from outside the clone to a folder in it: the name given is outside, the file is not.
+  [
+    'reached through a link from outside the clone to a folder inside it',
+    (w) => {
+      const real = path.dirname(keyFile(w, RK + '\n', 'repo', 'secrets-here', 'work.key'));
+      const link = path.join(w.root, 'usb-link');
+      fs.symlinkSync(real, link, process.platform === 'win32' ? 'junction' : 'dir');
+      return path.join(link, 'work.key');
+    },
+    /work\.key is inside the repository clone/,
+  ],
 ];
 
 for (const [what, make, said] of BAD_KEY_FILES) {

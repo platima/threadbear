@@ -248,6 +248,27 @@ const sameFile = (a, b, platform) => {
     return false;
   }
 };
+// Whether a path is inside a folder: by its name, and by where it really is once links and junctions are
+// followed (a name outside the folder can lead into it). ".." has to be a whole path component, so a folder
+// called "..keys" is inside. A file that isn't there yet is placed by its folder.
+const within = (file, folder) => {
+  const rel = path.relative(folder, file);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+};
+const insideFolder = (file, folder) => {
+  if (within(path.resolve(file), path.resolve(folder))) return true;
+  try {
+    let real;
+    try {
+      real = fs.realpathSync.native(file);
+    } catch {
+      real = path.join(fs.realpathSync.native(path.dirname(file)), path.basename(file));
+    }
+    return within(real, fs.realpathSync.native(folder));
+  } catch {
+    return false;
+  }
+};
 const quote = (p) => (/[\s"]/.test(p) ? `"${p}"` : p);
 
 // The last few lines a command said, for a failure message.
@@ -1049,8 +1070,7 @@ class Setup {
   // The key file's text, or undefined when it isn't there but a runner key already is (the same command line
   // works again after --delete-key-file). Anything else wrong with it is a refusal that says nothing about its contents.
   readKeyFile(file, local, hint) {
-    const rel = path.relative(this.d.repo, file);
-    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+    if (insideFolder(file, this.d.repo)) {
       throw new Fail(`${file} is inside the repository clone, where git could pick it up. Move it somewhere outside the clone and run this again. Nothing has been changed.`);
     }
     // The installed key itself, by any name. It would read as the same key, so the plan would be "keep" and
@@ -1288,7 +1308,8 @@ class Setup {
     if (!this.jn.id && !this.dry) this.jn.id = crypto.randomBytes(6).toString('hex');
     const { id } = this.jn;
     const next = { ...json, sync: { ...json.sync, url, ...(id ? { runnerId: id } : {}), name } };
-    if (JSON.stringify(next) === JSON.stringify(json)) return this.ok(`${this.runnerJsonPath} as it was (mirrors to ${url} as ${name}, runner ${id})`);
+    // No id yet in a dry run is a write that the real run will make, even when the address and name are already there.
+    if (id && JSON.stringify(next) === JSON.stringify(json)) return this.ok(`${this.runnerJsonPath} as it was (mirrors to ${url} as ${name}, runner ${id})`);
     this.changed.runnerJson = true;
     if (this.dry) return this.todo(`write ${this.runnerJsonPath}: sync.url ${url}, sync.runnerId ${id ?? '(a new one, chosen when this is run for real)'} and sync.name ${name}; everything else in it stays`);
     try {
