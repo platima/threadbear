@@ -77,8 +77,8 @@ html, body, #root { height: 100%; margin: 0; }
    cutout, and its WebView (version 140 or newer) tells the page how much they
    cover as env(safe-area-inset-*), which index.html opts in to with
    viewport-fit=cover. Every screen sits in #root, so it keeps clear of the top
-   and the sides here, once. The bottom is the tab bar's and the composer's own,
-   in the narrow-screen block below. Where nothing covers the page (a browser, an
+   and the sides here, once. The bottom is the tab bar's, the composer's and each
+   page's own, where they are below. Where nothing covers the page (a browser, an
    older WebView) the insets are 0 and this changes nothing. */
 #root { padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px); }
 body { background: var(--bg); color: var(--text); font: 15px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
@@ -108,7 +108,7 @@ code, pre { font-family: var(--mono); font-size: 13px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- sign-in and error pages */
-.signin { max-width: 440px; margin: 12vh auto; padding: 0 24px; text-align: center; }
+.signin { max-width: 440px; margin: 12vh auto; padding: 0 24px calc(24px + env(safe-area-inset-bottom, 0px)); text-align: center; overflow-wrap: anywhere; }
 .signin h1 { margin: 12px 0 8px; font-size: 22px; }
 .signin code { background: var(--code); border-radius: 5px; padding: 1px 5px; }
 .pair textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; resize: vertical; }
@@ -193,7 +193,7 @@ code, pre { font-family: var(--mono); font-size: 13px; }
 .outline .made { margin: 22px 0 0 12px; font-size: 12.5px; color: var(--faint); }
 .outline .made a { color: var(--muted); }
 
-.doc { grid-column: 2; min-width: 0; }
+.doc { grid-column: 2; min-width: 0; overflow-wrap: anywhere; }
 .doc h1 { font-family: var(--display); font-size: 40px; line-height: 1.12; letter-spacing: -0.02em; margin: 24px 0 10px; text-wrap: balance; }
 .byline { color: var(--muted); font-size: 14.5px; margin: 0; }
 .byline strong { color: var(--text); font-weight: 500; }
@@ -211,7 +211,7 @@ code, pre { font-family: var(--mono); font-size: 13px; }
 .doc-end { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13px; display: none; }
 .doc-end a { color: var(--muted); }
 .turns-menu { position: relative; display: none; }
-.turns-list { position: absolute; left: 0; top: calc(100% + 6px); width: min(340px, calc(100vw - 32px)); max-height: 60vh; overflow-y: auto; background: var(--raised); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; z-index: 20; }
+.turns-list { position: absolute; left: 0; top: calc(100% + 6px); width: min(340px, calc(100vw - 32px)); max-height: 60vh; overflow-y: auto; overflow-wrap: anywhere; background: var(--raised); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; z-index: 20; }
 .turns-list a { display: grid; grid-template-columns: 20px 1fr; padding: 8px 10px; border-radius: 8px; color: var(--text); font-size: 14px; line-height: 1.4; }
 .turns-list a:hover, .turns-list a.on { background: var(--hover); text-decoration: none; }
 .turns-list .n { color: var(--faint); }
@@ -238,7 +238,7 @@ code, pre { font-family: var(--mono); font-size: 13px; }
 .shell { display: grid; grid-template-columns: 44px clamp(220px, var(--sidebar-width, 300px), max(220px, calc(100vw - 464px))) minmax(0, 1fr); height: 100%; }
 .sidebar { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); }
 /* The column of views down the window's edge, as on the Mac. */
-.rail { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; background: var(--side); border-right: 1px solid var(--line); min-height: 0; }
+.rail { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px)); background: var(--side); border-right: 1px solid var(--line); min-height: 0; }
 .rail .brand-mark { display: block; margin-bottom: 8px; }
 .rail .grow { flex: 1; min-height: 8px; }
 .rail-btn { position: relative; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: none; color: var(--muted); }
@@ -254,7 +254,7 @@ code, pre { font-family: var(--mono); font-size: 13px; }
 .tile.ok::after { background: #34c759; }
 .tile.warn::after { background: var(--orange); }
 .rail-sep { width: 20px; height: 1px; background: var(--line); margin: 4px 0; }
-.rail .pop-panel { top: auto; bottom: 0; right: auto; left: calc(100% + 8px); }
+.rail .pop-panel { top: auto; bottom: 0; right: auto; left: calc(100% + 8px); max-height: calc(100vh - 70px - env(safe-area-inset-bottom, 0px)); overflow-y: auto; overscroll-behavior: contain; }
 .rail .menu { width: 230px; }
 .menu .phone-only { display: none; }
 .menu .note-line { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12.5px; color: var(--muted); }
@@ -335,11 +335,11 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .thread { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100%; }
 .thread-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 20px; border-bottom: 1px solid var(--line); min-height: 44px; }
 .crumbs { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; white-space: nowrap; }
-.crumbs .folder { color: var(--muted); font-size: 14px; flex: none; }
+.crumbs .folder { color: var(--muted); font-size: 14px; flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
 .crumbs .sep { color: var(--faint); }
 .crumbs h1 { font-size: 14.5px; font-weight: 600; margin: 0; overflow: hidden; text-overflow: ellipsis; }
 .back { display: none; }
-.messages { flex: 1; overflow-y: auto; padding: 22px 24px 8px; display: flex; flex-direction: column; gap: 16px; }
+.messages { flex: 1; overflow-y: auto; overflow-wrap: anywhere; padding: 22px 24px 8px; display: flex; flex-direction: column; gap: 16px; }
 .messages > * { width: 100%; max-width: 760px; margin-left: auto; margin-right: auto; }
 .earlier { align-self: center; width: auto !important; }
 .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
@@ -351,7 +351,7 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 /* The rail's views: a list in the sidebar, a page in the main column. */
 .view-head { padding: 12px 8px 2px; }
 .page { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; }
-.page-body { flex: 1; overflow-y: auto; padding: 22px 24px 32px; }
+.page-body { flex: 1; overflow-y: auto; padding: 22px 24px calc(32px + env(safe-area-inset-bottom, 0px)); }
 .page-col { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
 .page-note { color: var(--muted); font-size: 14px; }
 .state-line { flex: none; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--faint); white-space: nowrap; }
@@ -378,11 +378,14 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .new-thread select { font: inherit; font-size: 12.5px; color: var(--muted); background: none; border: 0; outline: none; max-width: 200px; }
 .empty .hint { display: none; }
 
-/* The menus under the header's buttons. */
+/* The menus under the header's buttons. A panel hangs from its button's right edge,
+   which on a phone can be well in from the screen's, so it is never wider than the
+   screen (less a margin and what a cutout or a side bar takes), and menu.tsx slides
+   it back in by --pop-shift if it still runs past an edge. */
 .pop { position: relative; }
 .pop > summary { list-style: none; }
 .pop > summary::-webkit-details-marker { display: none; }
-.pop-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 10; background: var(--raised); border-radius: 12px; box-shadow: var(--shadow); }
+.pop-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 10; max-width: calc(100vw - 16px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)); transform: translateX(var(--pop-shift, 0px)); background: var(--raised); border-radius: 12px; box-shadow: var(--shadow); }
 .menu { min-width: 190px; padding: 5px; display: flex; flex-direction: column; }
 .menu button { border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: 7px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
 .menu button svg { width: 14px; height: 14px; flex: none; color: var(--muted, currentColor); }
@@ -402,12 +405,13 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .picture-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px 0 5px; border-radius: 6px; background: var(--hover); border: 1px solid var(--line-strong); font-size: 0.87em; line-height: 1.5; color: var(--muted); white-space: nowrap; vertical-align: 1px; }
 .picture-chip svg { width: 12px; height: 12px; flex: none; }
 .share-btn { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--fill); font-size: 13.5px; cursor: pointer; }
-.share-btn > svg { width: 15px; height: 15px; flex: none; }
+.share-btn svg { width: 15px; height: 15px; flex: none; }
 .share-btn:hover { border-color: var(--faint); }
 .share-btn.on { border-color: var(--accent); }
 .share-btn .live { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .share-btn .narrow-only { display: none; color: var(--accent); }
-.share-panel { width: 370px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+/* Under the header (about 120px with the status bar) and the bar below the page, and it scrolls inside itself on a short screen: a shared thread's panel is taller than a phone on its side. */
+.share-panel { width: 370px; max-height: calc(100vh - 120px - env(safe-area-inset-bottom, 0px)); max-height: calc(100dvh - 120px - env(safe-area-inset-bottom, 0px)); overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .share-panel .row-line { display: flex; align-items: center; gap: 10px; }
 .share-panel h3 { margin: 0; font-size: 14px; flex: 1; }
 .share-panel p { margin: 0; font-size: 13px; color: var(--muted); }
@@ -427,21 +431,21 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .switch.on { background: var(--accent); }
 .switch.on::after { transform: translateX(16px); }
 
-.command { font-size: 13px; color: var(--muted); display: flex; gap: 10px; padding: 0 2px 6px; }
+.command { font-size: 13px; color: var(--muted); display: flex; gap: 10px; padding: 0 2px 6px; overflow-wrap: anywhere; }
 .command.failed { color: var(--red); }
 
 /* The card of asks, the done card or an approval, joined to the composer
    as on the Mac: one rounded box, outlined in blue while it waits on you. */
-.dock { padding: 6px 24px 18px; }
+.dock { padding: 6px 24px calc(18px + env(safe-area-inset-bottom, 0px)); }
 .dock > * { max-width: 760px; margin-left: auto; margin-right: auto; }
 .box { background: var(--raised); border: 1px solid var(--line-strong); border-radius: 16px; overflow: hidden; }
-.recap { position: relative; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 14px; padding: 11px 38px 11px 14px; margin-bottom: 10px; font-size: 14px; line-height: 1.5; }
+.recap { position: relative; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 14px; padding: 11px 38px 11px 14px; margin-bottom: 10px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .recap p { margin: 0; }
 .recap ul { margin: 5px 0; padding-left: 18px; }
 .recap .recap-when { color: var(--muted); font-size: 12.5px; }
 .recap-close { position: absolute; top: 7px; right: 7px; width: 26px; height: 26px; display: grid; place-items: center; border: 0; background: none; color: var(--muted); cursor: pointer; }
 .box.asking { border-color: var(--accent); }
-.card { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; }
+.card { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; overflow-wrap: anywhere; }
 .card h2 { display: flex; align-items: center; gap: 7px; font-size: 14px; margin: 0; }
 .card h2 .of { margin-left: auto; font-weight: 400; color: var(--faint); font-size: 12.5px; }
 .ask-q { font-weight: 600; }
@@ -458,6 +462,7 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .choice .pick { color: var(--link); font-size: 12px; margin-left: 6px; }
 .choice .desc { display: block; color: var(--muted); font-size: 12.5px; }
 .ask-links { display: flex; gap: 8px; flex-wrap: wrap; }
+.ask-links .btn { white-space: normal; text-align: left; }
 .approval-input { margin: 0; background: var(--code); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; max-height: 200px; overflow: auto; }
 .composer { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 10px 16px; }
 .composer textarea { border: 0; background: none; resize: none; font: inherit; color: inherit; padding: 2px 0; outline: none; min-height: 24px; max-height: 40vh; }
@@ -490,7 +495,7 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
      in the room above the bar, for a screen too short for it (a phone on its side). */
   .rail .pop-panel { left: auto; right: 8px; bottom: calc(100% + 7px); max-height: calc(100vh - 100% - 16px); overflow-y: auto; overscroll-behavior: contain; }
   .menu .phone-only { display: flex; }
-  .page-body { padding: 16px 14px 24px; }
+  .page-body { padding: 16px 14px calc(24px + env(safe-area-inset-bottom, 0px)); }
   .state-line { display: none; }
   .resize-handle { display: none; }
   .sidebar .pop-panel { max-width: calc(100vw - 16px); }
@@ -508,8 +513,22 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
   .share-btn .narrow-only { display: inline-flex; }
   .share-btn { padding: 0 8px; }
   .messages { padding: 16px 14px 8px; }
-  .dock { padding: 6px 10px max(10px, env(safe-area-inset-bottom)); }
-  .share-panel { width: min(370px, calc(100vw - 24px)); }
+  /* The reply box keeps 10px clear of whatever is under it: the bar below the page, or
+     the keyboard, with which the app zeroes the bar's inset (docs/android.md, "The
+     keyboard"). max(10px, inset) made it flush on the bar whenever the inset was 10px
+     or more, and 10px clear only above the keyboard. */
+  .dock { padding: 6px 10px calc(10px + env(safe-area-inset-bottom, 0px)); }
+}
+/* Above that there is no tab bar to take the inset, so the list does. */
+@media (min-width: 761px) {
+  .lists { padding: 0 8px calc(12px + env(safe-area-inset-bottom, 0px)); }
+}
+/* A short screen: a phone on its side, or with the keyboard up. */
+@media (max-height: 520px) {
+  .menu-scroll { max-height: min(280px, calc(30vh - env(safe-area-inset-bottom, 0px))); }
+  .card { max-height: 38vh; }
+  .composer textarea { max-height: 28vh; }
+  .recap { max-height: 30vh; overflow-y: auto; }
 }
 
 /* Reply buttons (reply-button.tsx): blue starts a thread, purple sends a
