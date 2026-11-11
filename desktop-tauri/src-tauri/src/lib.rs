@@ -13,13 +13,13 @@
 // it is served from. Only when something else is using the port does the bridge
 // pick another, and that run starts without the saved state.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -28,8 +28,15 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 // The running bridge. Its standard input stays open for as long as this program
 // lives: the bridge ends itself when that pipe closes, which Windows does for
-// us if this program is killed or crashes (bridge.ts, THREADBEAR_BRIDGE_WATCH_STDIN).
+// us if this program is killed or crashes (bridge.ts, THREADBEAR_BRIDGE_WATCH_STDIN),
+// and which quitting does on purpose (end_in_order).
 struct Bridge(Mutex<Option<Child>>);
+
+// Set when this copy is ended by a second launch with `--quit`, which is how the installer
+// asks for the files to be let go. That quit cannot wait for the bridge to wind itself up:
+// the installer is about to replace the files its node.exe has open, so the bridge is killed
+// at once, as it was before the quit gave it time.
+struct QuitForSetup(AtomicBool);
 
 // Whether closing the window may leave the app running in the tray: on Windows
 // once the tray icon is made. Not on Linux, where making an indicator does not mean
@@ -44,6 +51,25 @@ struct UiStarted(AtomicBool);
 
 // How long to wait for the bridge to say it is ready.
 const BRIDGE_READY: Duration = Duration::from_secs(20);
+
+// How long quitting gives the bridge to end itself once its input is closed, counted from
+// the moment it is closed, before it is killed. A bridge that is stuck must not hold the
+// quit up for long.
+const BRIDGE_STOP_WAIT: Duration = Duration::from_secs(3);
+
+// How long quitting gives the runner step (when the runner is one that runs only while the
+// app is open), counted from when the step begins, which is beside the bridge's wait and not
+// after it. The step is two runs of the set-up script, each its own Node, and 10 seconds is for
+// both together: a Node still running when it is up is ended (run_until).
+const RUNNER_STOP_WAIT: Duration = Duration::from_secs(10);
+
+// How much longer than its own time the quit waits for the runner step's thread to say it is
+// done: ending a Node and reaping it takes a moment. Only a step that did not keep to its time
+// (it should always) is given up on, once this has passed as well.
+const RUNNER_STEP_GRACE: Duration = Duration::from_secs(2);
+
+// How often the waits in quitting look at what they wait for. std has no wait with a limit.
+const POLL: Duration = Duration::from_millis(25);
 
 // What the program is called where a person types it (in messages), and the
 // name of the Node it brings, the script that sets the runner up, and the
@@ -72,23 +98,28 @@ fn runner_script_name() -> &'static str {
     }
 }
 
-// The Node to run things with: THREADBEAR_NODE, else the one the installer put
-// beside this program (node/node.exe, or node/bin/node on Linux), else
-// whatever `node` is on the PATH.
-fn find_node() -> PathBuf {
+// The Node to run things with, and where the choice came from (shell.log says both, so
+// a node.exe on the PC can be told from the one this program started): THREADBEAR_NODE,
+// else the one the installer put beside this program (node/node.exe, or node/bin/node on
+// Linux), else whatever `node` is on the PATH.
+fn node_choice() -> (PathBuf, &'static str) {
     if let Ok(n) = std::env::var("THREADBEAR_NODE") {
         let p = PathBuf::from(n);
         if p.exists() {
-            return p;
+            return (p, "THREADBEAR_NODE");
         }
     }
     if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
         let bundled = bundled_node(&dir);
         if bundled.exists() {
-            return bundled;
+            return (bundled, "the one beside the app");
         }
     }
-    PathBuf::from("node")
+    (PathBuf::from("node"), "the PATH")
+}
+
+fn find_node() -> PathBuf {
+    node_choice().0
 }
 
 fn hide_window(cmd: &mut Command) {
@@ -108,6 +139,14 @@ fn hide_window(cmd: &mut Command) {
 // desktop folder, in the repo and in the installed layout alike. The task's
 // name is the script's business: this never spells it out.
 fn runner_script(args: &[String]) -> Result<(i32, String), String> {
+    let mut cmd = script_command(args)?;
+    let out = cmd.output().map_err(|e| format!("Couldn't start Node ({e})."))?;
+    Ok((out.status.code().unwrap_or(1), joined_text(&out.stdout, &out.stderr)))
+}
+
+// Node with the set-up script and these arguments, ready to start, for runner_script (which
+// waits for it as long as it takes) and runner_script_until (which does not).
+fn script_command(args: &[String]) -> Result<Command, String> {
     let desktop = find_desktop_dir().ok_or("Couldn't find the desktop folder.")?;
     let script = desktop
         .parent()
@@ -121,10 +160,97 @@ fn runner_script(args: &[String]) -> Result<(i32, String), String> {
     let mut cmd = Command::new(find_node());
     cmd.arg(&script).args(args).stdin(Stdio::null());
     hide_window(&mut cmd);
-    let out = cmd.output().map_err(|e| format!("Couldn't start Node ({e})."))?;
-    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
-    Ok((out.status.code().unwrap_or(1), text.trim().to_string()))
+    Ok(cmd)
+}
+
+// What a program printed, then what it printed on its error output, as one trimmed text.
+fn joined_text(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut text = String::from_utf8_lossy(stdout).to_string();
+    text.push_str(&String::from_utf8_lossy(stderr));
+    text.trim().to_string()
+}
+
+// What running a program until a deadline came to.
+#[derive(Debug, PartialEq, Eq)]
+enum Ran {
+    // It finished by itself in time: its exit code, and what it printed.
+    Finished(i32, String),
+    // It was still running at the deadline, and was ended; this is its process id.
+    EndedAtDeadline(u32),
+}
+
+// Everything that comes out of one of a program's pipes, on a thread of its own so the program
+// never stalls on a full one. It arrives once the pipe closes, which is when the program has
+// gone (and anything it started that holds the pipe too).
+fn read_all(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        let _ = tx.send(bytes);
+    });
+    rx
+}
+
+// How long what a program printed is waited for once it has gone, at least, when its time is up.
+const OUTPUT_GRACE: Duration = Duration::from_millis(200);
+
+// Starts `cmd` with no input and its output piped, for finish_by.
+fn start(cmd: &mut Command) -> std::io::Result<Child> {
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.spawn()
+}
+
+// Runs `cmd` and waits for it until `deadline` (the time starting it takes counts), keeping
+// the process it started: see finish_by.
+fn run_until(cmd: &mut Command, deadline: Instant) -> std::io::Result<Ran> {
+    finish_by(start(cmd)?, deadline)
+}
+
+// Waits for a program this started (with piped output, `start`) until `deadline`. One still
+// running when the time is up is killed by its own handle and waited for (so the file it runs
+// from is let go), and the answer is its process id. What it started itself is not reached.
+// Its output is read as it goes, and once it has gone, no later than the deadline (a helper of
+// its that kept the pipe would otherwise hold this up), so a program that finished in time and
+// left such a helper gives its code and whatever it had printed by then.
+fn finish_by(mut child: Child, deadline: Instant) -> std::io::Result<Ran> {
+    let pid = child.id();
+    let stdout = read_all(child.stdout.take());
+    let stderr = read_all(child.stderr.take());
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let read_until = deadline.max(Instant::now() + OUTPUT_GRACE);
+                let said = stdout.recv_timeout(read_until.saturating_duration_since(Instant::now())).unwrap_or_default();
+                let complained = stderr.recv_timeout(read_until.saturating_duration_since(Instant::now())).unwrap_or_default();
+                return Ok(Ran::Finished(status.code().unwrap_or(1), joined_text(&said, &complained)));
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(Ran::EndedAtDeadline(pid));
+            }
+            Err(e) => {
+                // It cannot be asked about, so it is ended rather than left.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        }
+    }
+}
+
+// runner_script for the steps of quitting: the same script and the same words, but run until
+// `deadline`, when the Node it started is ended (run_until).
+fn runner_script_until(args: &[String], deadline: Instant) -> Result<Ran, String> {
+    if Instant::now() >= deadline {
+        return Err("the step's time was already up".to_string());
+    }
+    let mut cmd = script_command(args)?;
+    run_until(&mut cmd, deadline).map_err(|e| format!("Couldn't run Node ({e})."))
 }
 
 // What `--runner` may be followed by. Anything else is refused: the script
@@ -347,21 +473,63 @@ fn parse_runner_mode(text: &str) -> RunnerMode {
     }
 }
 
-// If the script can't say, it is taken as no runner of ours: nothing is stopped
-// on quit that this can't vouch for.
-fn runner_mode() -> RunnerMode {
-    match runner_script(&["--mode".to_string()]) {
-        Ok((0, text)) => parse_runner_mode(&text),
-        _ => RunnerMode::None,
+// The mode as the page and shell.log say it.
+fn mode_word(mode: RunnerMode) -> &'static str {
+    match mode {
+        RunnerMode::SignIn => "sign-in",
+        RunnerMode::OnDemand => "on-demand",
+        RunnerMode::None => "none",
     }
 }
 
-// A runner that was set up to run only while this app is open ends with it. A
-// runner that starts at sign-in is left running, as it always was.
-fn stop_runner_if_on_demand() {
-    if runner_mode() == RunnerMode::OnDemand {
-        let _ = runner_script(&["--stop".to_string()]);
+// What a run of the script with --mode says the mode is, or why it could not say.
+fn mode_from(ran: Result<Ran, String>) -> Result<RunnerMode, String> {
+    match ran {
+        Ok(Ran::Finished(0, text)) => Ok(parse_runner_mode(&text)),
+        Ok(Ran::Finished(code, text)) => Err(format!("the script said {code}: {}", first_line(&text))),
+        Ok(Ran::EndedAtDeadline(pid)) => Err(ended_at_deadline("mode check", pid)),
+        Err(why) => Err(why),
     }
+}
+
+// What shell.log says of a Node that quitting ended because the runner step's time was up.
+fn ended_at_deadline(what: &str, pid: u32) -> String {
+    format!("the {what}'s Node (pid {pid}) was still running when the step's time was up, so it was ended")
+}
+
+// What the script says the mode is, or why it could not say.
+fn read_runner_mode() -> Result<RunnerMode, String> {
+    mode_from(runner_script(&["--mode".to_string()]).map(|(code, text)| Ran::Finished(code, text)))
+}
+
+// If the script can't say, it is taken as no runner of ours: nothing is stopped
+// on quit that this can't vouch for.
+fn runner_mode() -> RunnerMode {
+    read_runner_mode().unwrap_or(RunnerMode::None)
+}
+
+// How a run of the script is asked for in the steps of quitting: its arguments and the time
+// by which it must be done (runner_script_until).
+type AskScript<'a> = &'a dyn Fn(&[String], Instant) -> Result<Ran, String>;
+
+// A runner that was set up to run only while this app is open ends with it. A
+// runner that starts at sign-in is left running, as it always was. What it did,
+// in a line for shell.log. Both runs of the script, the mode and the stop, are held to the
+// one `deadline`, and a Node still running at it is ended, so quitting leaves none behind.
+fn stop_on_demand(ask: AskScript, deadline: Instant) -> String {
+    match mode_from(ask(&["--mode".to_string()], deadline)) {
+        Ok(RunnerMode::OnDemand) => match ask(&["--stop".to_string()], deadline) {
+            Ok(Ran::Finished(code, text)) => format!("runner mode on-demand: stop script said {code}: {}", first_line(&text)),
+            Ok(Ran::EndedAtDeadline(pid)) => format!("runner mode on-demand: {} (the runner may still be running)", ended_at_deadline("stop script", pid)),
+            Err(why) => format!("runner mode on-demand: the stop script could not be run: {}", first_line(&why)),
+        },
+        Ok(mode) => format!("runner mode {}: left running", mode_word(mode)),
+        Err(why) => format!("runner mode unknown ({why}): left running"),
+    }
+}
+
+fn stop_runner_if_on_demand(deadline: Instant) -> String {
+    stop_on_demand(&runner_script_until, deadline)
 }
 
 // What the app tells the person when it offers to set the runner up.
@@ -544,11 +712,12 @@ fn offer_runner_while_open(app: &AppHandle) {
 }
 
 // One line in shell.log, in the folder this program keeps its notes in, so what it did
-// about the runner can be read afterwards. The program has no console, and when the
-// page's Start the runner button once did nothing there was nothing to look at. The
-// time is seconds since 1970. The file starts over past 200 KB (the old one is kept
-// as shell.log.old), and only the runner's start and set-up are written to it: no
-// text from the page and no thread.
+// about the runner and the bridge can be read afterwards. The program has no console, and
+// when the page's Start the runner button once did nothing there was nothing to look at.
+// The time is seconds since 1970. The file starts over past 200 KB (the old one is kept
+// as shell.log.old), and what is written to it is the runner's start and set-up, the
+// Node and process id the bridge was started with, and the steps of quitting (how the
+// bridge ended, what was done about the runner): no text from the page and no thread.
 fn log_shell(line: &str) {
     let Some(dir) = state_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
@@ -575,12 +744,7 @@ async fn runner_setup() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let mode = runner_mode();
         log_shell(&format!("runner setup asked: {mode:?}"));
-        let word = match mode {
-            RunnerMode::SignIn => "sign-in",
-            RunnerMode::OnDemand => "on-demand",
-            RunnerMode::None => "none",
-        };
-        word.to_string()
+        mode_word(mode).to_string()
     })
     .await
     .map_err(|e| format!("The shell could not look at the runner ({e})."))
@@ -711,7 +875,8 @@ fn bridge_port() -> u16 {
 // be started, stops before it says so, or is silent for too long, the error
 // says what Node printed, so the person is not left with a window that never comes.
 fn start_bridge(desktop: &Path) -> Result<(Child, String), String> {
-    let mut cmd = Command::new(find_node());
+    let (node, node_from) = node_choice();
+    let mut cmd = Command::new(&node);
     cmd.arg(desktop.join("bridge").join("bridge.ts"))
         .env("THREADBEAR_BRIDGE_PORT", bridge_port().to_string())
         .env("THREADBEAR_BRIDGE_FALLBACK", "random")
@@ -728,6 +893,9 @@ fn start_bridge(desktop: &Path) -> Result<(Child, String), String> {
             if cfg!(windows) { "node.exe" } else { "node" }
         )
     })?;
+    // Which node.exe is the bridge's, for when one is found holding a file during an
+    // upgrade. (The address it prints has the launch's key in it, so that is never written down.)
+    log_shell(&format!("bridge started: pid {}, node {} ({node_from}), shell pid {}", child.id(), node.display(), std::process::id()));
     let stdout = child.stdout.take().ok_or("The bridge gave no output.")?;
     let stderr = child.stderr.take().ok_or("The bridge gave no error output.")?;
 
@@ -793,6 +961,181 @@ fn start_bridge(desktop: &Path) -> Result<(Child, String), String> {
     }
 }
 
+// How the bridge came to be gone when it was stopped.
+#[derive(Debug, PartialEq, Eq)]
+enum BridgeEnd {
+    // It had ended before it was asked to.
+    Already(ExitStatus),
+    // It ended itself, as it does when its input is closed.
+    Closed(ExitStatus),
+    // It was still there when the wait was over, and was killed.
+    Killed,
+    // It was killed without being given any time, as the quit came from a second launch
+    // with --quit.
+    KilledAtOnce,
+}
+
+impl BridgeEnd {
+    // For shell.log.
+    fn describe(&self, wait: Duration) -> String {
+        match self {
+            BridgeEnd::Already(status) => format!("had ended before quit asked it to ({status})"),
+            BridgeEnd::Closed(status) => format!("ended itself once its input was closed ({status})"),
+            BridgeEnd::Killed => format!("was still running {} after its input was closed, so it was killed", seconds(wait)),
+            BridgeEnd::KilledAtOnce => "was killed at once, as the quit came from a second launch with --quit (the installer is about to replace its files)".to_string(),
+        }
+    }
+}
+
+// A length of time as shell.log says it: "3 seconds", "1 second", "0.7 seconds".
+fn seconds(time: Duration) -> String {
+    if time.subsec_millis() == 0 {
+        let whole = time.as_secs();
+        format!("{whole} second{}", if whole == 1 { "" } else { "s" })
+    } else {
+        format!("{:.1} seconds", time.as_secs_f64())
+    }
+}
+
+// How quitting stops the bridge.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum BridgeStop {
+    // Close its input, which it takes as the app being gone, and give it this long, counted
+    // from then, to end by itself.
+    Gracefully(Duration),
+    // Kill it now.
+    AtOnce,
+}
+
+// A quit that the installer asked for kills the bridge at once; any other gives it time.
+fn bridge_stop(for_setup: bool) -> BridgeStop {
+    if for_setup {
+        BridgeStop::AtOnce
+    } else {
+        BridgeStop::Gracefully(BRIDGE_STOP_WAIT)
+    }
+}
+
+// The first step of ending the bridge the way it is built to end: its standard input is
+// closed, which it takes as the app being gone, and it runs its own exit handler (which
+// ends the Terminal's shells) and goes. Gives how it ended when it had already, otherwise
+// None, and poll_bridge, called until it answers, is the second step.
+fn close_bridge_input(child: &mut Child) -> Option<BridgeEnd> {
+    if let Ok(Some(status)) = child.try_wait() {
+        return Some(BridgeEnd::Already(status));
+    }
+    // Dropping the handle closes the pipe, and the bridge sees the end of its input.
+    drop(child.stdin.take());
+    None
+}
+
+// The second step, one look at a time: has the bridge ended? If so, how. If it is still there
+// once `deadline` has passed, it is killed (and waited for), so a stuck bridge cannot hold the
+// quit up. None means it is still within its time. The child has been waited for whenever this
+// answers. A look at a time, because the runner step goes on beside it (end_in_order).
+fn poll_bridge(child: &mut Child, deadline: Instant) -> Option<BridgeEnd> {
+    match child.try_wait() {
+        Ok(Some(status)) => Some(BridgeEnd::Closed(status)),
+        Ok(None) if Instant::now() < deadline => None,
+        // Out of time, or it cannot be asked: either way, end it.
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Some(BridgeEnd::Killed)
+        }
+    }
+}
+
+// Kills the bridge now, and waits for it to be gone.
+fn kill_bridge(child: &mut Child) -> BridgeEnd {
+    if let Ok(Some(status)) = child.try_wait() {
+        return BridgeEnd::Already(status);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    BridgeEnd::KilledAtOnce
+}
+
+// The steps of the app's end, with the waits overlapping instead of adding up: the bridge is
+// stopped first (killed now, or its input closed and its time started), and the runner step is
+// started at once, on a thread of its own, within `runner_wait` counted from its start. Then
+// both are watched together, each against its own clock: the bridge is killed once its time is
+// up, counted from when its input was closed, whatever the runner step is still doing, and the
+// step is given its deadline, so that it ends what it started when that comes (run_until). So the
+// app is gone within the longer of the two, not both, and the runner's own processes start while
+// the bridge winds up. A step that did not keep to its deadline is given up on a little later
+// (RUNNER_STEP_GRACE) and quit goes on without it. `runner` is None when this copy never got as
+// far as a window (`--quit` with nothing running), which has nothing to stop. Each step is a
+// line said to `say`, which is shell.log, in the order the steps came to an end.
+fn end_in_order<R>(bridge: Option<&mut Child>, how: BridgeStop, runner: Option<R>, runner_wait: Duration, say: &dyn Fn(&str))
+where
+    R: FnOnce(Instant) -> String + Send + 'static,
+{
+    let mut waiting: Option<(&mut Child, u32, Instant, Duration)> = None;
+    if let Some(child) = bridge {
+        let pid = child.id();
+        match how {
+            BridgeStop::AtOnce => {
+                let end = kill_bridge(child);
+                say(&format!("quit: bridge pid {pid} {}", end.describe(Duration::ZERO)));
+            }
+            BridgeStop::Gracefully(wait) => match close_bridge_input(child) {
+                Some(end) => say(&format!("quit: bridge pid {pid} {}", end.describe(wait))),
+                None => waiting = Some((child, pid, Instant::now() + wait, wait)),
+            },
+        }
+    } else if runner.is_some() {
+        // Its end was seen by watch_bridge, which took the child and said so in the log.
+        say("quit: no bridge to stop");
+    }
+    // A runner set up to run only while the app is open ends with it, whichever way the
+    // app ends (a failed bridge has taken its child already, which is why this goes by
+    // the window having started). A runner that starts at sign-in is left alone.
+    let mut step = runner.map(|run| {
+        let deadline = Instant::now() + runner_wait;
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            // Nobody is listening once the step has been given up on, which is fine.
+            let _ = tx.send(run(deadline));
+        });
+        (rx, deadline + RUNNER_STEP_GRACE)
+    });
+    while step.is_some() || waiting.is_some() {
+        if let Some((rx, give_up_at)) = &step {
+            // Waiting for the step's answer is also what lets the bridge be looked at in turn.
+            let line = match rx.recv_timeout(POLL) {
+                Ok(what) => Some(format!("quit: {what}")),
+                Err(mpsc::RecvTimeoutError::Disconnected) => Some("quit: the runner step failed".to_string()),
+                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() >= *give_up_at => Some(format!(
+                    "quit: the runner step was still going {} after it began, so quit went on without it (an on-demand runner may still be running)",
+                    seconds(runner_wait + RUNNER_STEP_GRACE)
+                )),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+            };
+            if let Some(line) = line {
+                say(&line);
+                step = None;
+            }
+        } else {
+            std::thread::sleep(POLL);
+        }
+        if let Some((child, pid, deadline, wait)) = &mut waiting {
+            if let Some(end) = poll_bridge(child, *deadline) {
+                say(&format!("quit: bridge pid {pid} {}", end.describe(*wait)));
+                waiting = None;
+            }
+        }
+    }
+}
+
+// What the app does as it ends, whichever way it ends (end_in_order), in shell.log.
+fn end_everything(app: &AppHandle) {
+    let started = app.state::<UiStarted>().0.load(Ordering::Relaxed);
+    let for_setup = app.state::<QuitForSetup>().0.load(Ordering::Relaxed);
+    let mut bridge = app.state::<Bridge>().0.lock().unwrap().take();
+    end_in_order(bridge.as_mut(), bridge_stop(for_setup), started.then_some(stop_runner_if_on_demand), RUNNER_STOP_WAIT, &log_shell);
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -821,8 +1164,10 @@ fn watch_bridge(app: AppHandle) {
         let mut guard = state.0.lock().unwrap();
         let Some(child) = guard.as_mut() else { return }; // taken when the app quit
         if let Ok(Some(status)) = child.try_wait() {
+            let pid = child.id();
             guard.take();
             drop(guard);
+            log_shell(&format!("the bridge (pid {pid}) ended by itself: {status}"));
             fail_and_exit(&app, &format!("The part of Threadbear that talks to the runner stopped ({status}). Start Threadbear again."));
             return;
         }
@@ -927,8 +1272,12 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // A second launch with --quit is an installer asking this copy to
             // end (it has no window to close); any other second launch just
-            // brings the window forward.
+            // brings the window forward. The installer is about to replace the
+            // files, so the end it gets does not wait for anything (QuitForSetup).
             if args.iter().any(|a| a == "--quit") {
+                if let Some(flag) = app.try_state::<QuitForSetup>() {
+                    flag.0.store(true, Ordering::Relaxed);
+                }
                 app.exit(0);
             } else {
                 show_main(app);
@@ -941,6 +1290,7 @@ pub fn run() {
         .manage(Bridge(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(false)))
         .manage(UiStarted(AtomicBool::new(false)))
+        .manage(QuitForSetup(AtomicBool::new(false)))
         // What the page may ask of the shell besides the plugins' own commands
         // (capabilities/default.json): the "Exit on close" box and "Start the runner".
         .invoke_handler(tauri::generate_handler![get_exit_on_close, set_exit_on_close, runner_setup, start_runner, open_claude_login])
@@ -980,17 +1330,7 @@ pub fn run() {
 
     app.run(|app, event| {
         if let RunEvent::Exit = event {
-            let bridge = app.state::<Bridge>().0.lock().unwrap().take();
-            if let Some(mut child) = bridge {
-                let _ = child.kill();
-            }
-            // A runner set up to run only while the app is open ends with it, whichever way
-            // the app ends (a failed bridge has taken its child already, which is why this
-            // goes by UiStarted). A copy that never got as far as a window, `--quit` with
-            // nothing running, leaves the runner alone.
-            if app.state::<UiStarted>().0.load(Ordering::Relaxed) {
-                stop_runner_if_on_demand();
-            }
+            end_everything(app);
         }
     });
 }
@@ -998,6 +1338,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn the_port_is_the_same_for_a_user_and_in_range() {
@@ -1063,5 +1404,532 @@ mod tests {
         assert!(unknown_runner_flag(&args(&["--mode"])).is_none());
         assert_eq!(unknown_runner_flag(&args(&["--staus"])).map(String::as_str), Some("--staus"));
         assert_eq!(unknown_runner_flag(&args(&["--status", "now"])).map(String::as_str), Some("now"));
+    }
+
+    #[test]
+    fn the_modes_word_reads_back_as_the_same_mode() {
+        for mode in [RunnerMode::SignIn, RunnerMode::OnDemand, RunnerMode::None] {
+            assert_eq!(parse_runner_mode(mode_word(mode)), mode);
+        }
+    }
+
+    // The bridge stand-ins: copies of Node in a folder of the test's own, standing in for
+    // the bridge with the input start_bridge gives it (a pipe this side holds). They are
+    // ended by the handle the test holds, in drop, however the test went, and by nothing
+    // else: never a search for a process, and each stand-in also ends itself after two minutes.
+
+    // The bridge's way of ending (bridge.ts): it exits when its input does, and its exit
+    // handler, which is where the real one ends the Terminal's shells, leaves a note in the file
+    // it is given.
+    const ENDS_WITH_ITS_INPUT: &str = "const fs=require('node:fs');process.on('exit',()=>fs.writeFileSync(process.argv[1],'bye'));process.stdin.on('end',()=>process.exit(0));process.stdin.resume();setTimeout(()=>process.exit(3),120000)";
+    // A bridge that never looks at its input.
+    const IGNORES_ITS_INPUT: &str = "setTimeout(()=>process.exit(3),120000)";
+    // A bridge that has gone before it is asked.
+    const IS_ALREADY_GONE: &str = "process.exit(7)";
+
+    // The runner step's Node (install-windows.mjs --mode and --stop), as stand-ins. One that keeps
+    // on running: it leaves a beat in the marker file every 50 ms, so a test can tell if it is still
+    // alive, and it ends itself after 20 seconds.
+    const BEATS_UNTIL_ENDED: &str = "const fs=require('node:fs');const beat=()=>fs.writeFileSync(process.argv[1],String(Date.now()));beat();setInterval(beat,50);setTimeout(()=>process.exit(3),20000)";
+    // One that says something on each output and is done.
+    const SAYS_AND_EXITS_WITH_5: &str = "process.stdout.write('said');process.stderr.write(' and complained');process.exitCode=5";
+    // One that says more than a pipe holds, which it can only do if the output is being read as it goes.
+    const SAYS_A_LOT: &str = "process.stdout.write('x'.repeat(3000000))";
+    // One that is done at once but leaves a helper holding its output for 4 seconds (the helper
+    // ends itself).
+    const LEAVES_A_HELPER_HOLDING_ITS_OUTPUT: &str = "const h=require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},4000)'],{stdio:['ignore','inherit','inherit']});h.unref()";
+
+    // Where Node is: THREADBEAR_NODE, or the first one on the PATH.
+    fn real_node() -> PathBuf {
+        let found = find_node();
+        if found.is_file() {
+            return found;
+        }
+        let name = format!("node{}", std::env::consts::EXE_SUFFIX);
+        let path = std::env::var_os("PATH").expect("these tests need Node: put it on the PATH or set THREADBEAR_NODE");
+        let on_path = std::env::split_paths(&path).map(|dir| dir.join(&name)).find(|p| p.is_file());
+        on_path.expect("these tests need Node: put it on the PATH or set THREADBEAR_NODE")
+    }
+
+    // A folder of the test's own with a copy of Node in it, so the process that is started and
+    // ended is never anyone else's node.exe. It is removed when the test is over.
+    struct Folder {
+        dir: PathBuf,
+    }
+
+    impl Folder {
+        fn new(name: &str) -> Folder {
+            let dir = std::env::temp_dir().join(format!("threadbear-stop-bridge-test-{}-{name}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            // Dropped, and so removed, if the copy fails.
+            let folder = Folder { dir };
+            std::fs::copy(real_node(), folder.exe()).unwrap();
+            // Started once, and left to end by itself, before any test's clock starts: Windows
+            // looks over a new executable the first time it runs, which can take seconds.
+            let mut warm_up = Command::new(folder.exe());
+            warm_up.arg("-e").arg("0").stdout(Stdio::null()).stderr(Stdio::null());
+            hide_window(&mut warm_up);
+            let _ = warm_up.status();
+            folder
+        }
+
+        fn exe(&self) -> PathBuf {
+            self.dir.join(format!("standin-node{}", std::env::consts::EXE_SUFFIX))
+        }
+
+        // The note a stand-in leaves (or the beat it keeps up).
+        fn marker(&self) -> PathBuf {
+            self.dir.join("marker")
+        }
+
+        // The copy of Node running `script`, which is given the marker's path to write to.
+        fn command(&self, script: &str) -> Command {
+            let mut cmd = Command::new(self.exe());
+            cmd.arg("-e").arg(script).arg(self.marker());
+            hide_window(&mut cmd);
+            cmd
+        }
+    }
+
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            // Windows lets go of the exe a moment after the process is gone (and a stand-in's own
+            // helper, which one test leaves behind to end by itself, holds it a little longer).
+            for _ in 0..50 {
+                if !self.dir.exists() || std::fs::remove_dir_all(&self.dir).is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
+    struct Standin {
+        child: Child,
+        folder: Folder,
+    }
+
+    impl Standin {
+        fn start(name: &str, script: &str) -> Standin {
+            let folder = Folder::new(name);
+            let mut cmd = folder.command(script);
+            cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+            let child = cmd.spawn().unwrap_or_else(|e| panic!("couldn't start the stand-in: {e}"));
+            Standin { child, folder }
+        }
+
+        // The note the stand-in's exit handler leaves.
+        fn marker(&self) -> PathBuf {
+            self.folder.marker()
+        }
+    }
+
+    impl Drop for Standin {
+        // Ended by the handle that started it, however the test went. (The folder goes after.)
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    // Both steps of stopping the bridge gracefully, as end_in_order does them when there is
+    // nothing else to do beside.
+    fn stop_bridge(child: &mut Child, wait: Duration) -> BridgeEnd {
+        let deadline = Instant::now() + wait;
+        close_bridge_input(child).unwrap_or_else(|| loop {
+            if let Some(end) = poll_bridge(child, deadline) {
+                break end;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        })
+    }
+
+    #[test]
+    fn a_bridge_is_stopped_by_closing_its_input_and_gets_to_run_its_exit_handler() {
+        let mut bridge = Standin::start("closes", ENDS_WITH_ITS_INPUT);
+        // Far longer than it needs, since this proves the way it went and not how fast. A bridge
+        // killed outright (as quit once did) would end as Killed and leave no note.
+        let end = stop_bridge(&mut bridge.child, Duration::from_secs(60));
+        assert!(matches!(end, BridgeEnd::Closed(_)), "{end:?}");
+        assert!(bridge.marker().exists(), "it was gone, but its exit handler did not run");
+        assert!(matches!(bridge.child.try_wait(), Ok(Some(_))), "it is still running");
+    }
+
+    #[test]
+    fn a_bridge_that_ignores_its_input_is_killed_when_the_wait_is_over() {
+        let mut bridge = Standin::start("ignores", IGNORES_ITS_INPUT);
+        let wait = Duration::from_millis(700);
+        let started = Instant::now();
+        let end = stop_bridge(&mut bridge.child, wait);
+        let took = started.elapsed();
+        assert_eq!(end, BridgeEnd::Killed);
+        assert!(took >= wait, "it was killed before the wait was over, after {took:?}");
+        assert!(took < wait + Duration::from_secs(20), "it was not bounded, {took:?}");
+        assert!(matches!(bridge.child.try_wait(), Ok(Some(_))), "it is still running");
+        assert!(!bridge.marker().exists());
+    }
+
+    #[test]
+    fn a_bridge_that_had_already_ended_is_said_to_have() {
+        let mut bridge = Standin::start("gone", IS_ALREADY_GONE);
+        let status = bridge.child.wait().unwrap();
+        assert_eq!(stop_bridge(&mut bridge.child, Duration::from_secs(5)), BridgeEnd::Already(status));
+    }
+
+    // The whole end, in order (end_in_order), with the lines it says to shell.log.
+
+    #[test]
+    fn only_the_installers_quit_kills_the_bridge_at_once() {
+        assert_eq!(bridge_stop(true), BridgeStop::AtOnce);
+        assert_eq!(bridge_stop(false), BridgeStop::Gracefully(BRIDGE_STOP_WAIT));
+    }
+
+    #[test]
+    fn a_quit_for_the_installer_kills_the_bridge_without_waiting_for_it() {
+        let mut bridge = Standin::start("at-once", ENDS_WITH_ITS_INPUT);
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        let started = Instant::now();
+        end_in_order(Some(&mut bridge.child), BridgeStop::AtOnce, None::<fn(Instant) -> String>, RUNNER_STOP_WAIT, &say);
+        let took = started.elapsed();
+        assert!(matches!(bridge.child.try_wait(), Ok(Some(_))), "it is still running");
+        // Given no time, it never got to its exit handler, as when quit killed it outright.
+        assert!(!bridge.marker().exists(), "its exit handler ran, so it was given time");
+        assert!(took < Duration::from_secs(2), "it waited, {took:?}");
+        let lines = lines.into_inner();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("killed at once"), "{lines:?}");
+    }
+
+    #[test]
+    fn the_runner_step_starts_while_the_bridge_is_still_winding_up_and_the_waits_overlap() {
+        let mut bridge = Standin::start("overlap", IGNORES_ITS_INPUT);
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        let origin = Instant::now();
+        let runner_began = Arc::new(Mutex::new(None::<Duration>));
+        let began = runner_began.clone();
+        let runner = move |_deadline: Instant| {
+            *began.lock().unwrap() = Some(origin.elapsed());
+            std::thread::sleep(Duration::from_millis(300));
+            "runner stopped".to_string()
+        };
+        let wait = Duration::from_secs(2);
+        end_in_order(Some(&mut bridge.child), BridgeStop::Gracefully(wait), Some(runner), Duration::from_secs(30), &say);
+        let total = origin.elapsed();
+        let began = runner_began.lock().unwrap().expect("the runner step never ran");
+        // One after the other it would start only once the bridge's two seconds were up.
+        assert!(began < Duration::from_secs(1), "the runner step waited for the bridge, starting after {began:?}");
+        // The bridge's time is counted from when its input was closed, not from after the runner step.
+        assert!(total >= wait, "the bridge was killed early, after {total:?}");
+        assert!(total < wait + Duration::from_secs(1), "the waits added up, {total:?}");
+        assert!(matches!(bridge.child.try_wait(), Ok(Some(_))), "it is still running");
+        let lines = lines.into_inner();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0], "quit: runner stopped");
+        assert!(lines[1].contains("was still running 2 seconds after its input was closed, so it was killed"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_bridge_that_ends_during_the_runner_step_is_said_to_have_ended_itself_when_it_did() {
+        let mut bridge = Standin::start("during", ENDS_WITH_ITS_INPUT);
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        let runner = |_deadline: Instant| {
+            std::thread::sleep(Duration::from_millis(1500));
+            "runner stopped".to_string()
+        };
+        end_in_order(Some(&mut bridge.child), BridgeStop::Gracefully(Duration::from_secs(60)), Some(runner), Duration::from_secs(30), &say);
+        assert!(bridge.marker().exists(), "it was gone, but its exit handler did not run");
+        let lines = lines.into_inner();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        // Said as it happened: the bridge went in a moment, well before the runner step was done.
+        assert!(lines[0].contains("ended itself once its input was closed"), "{lines:?}");
+        assert_eq!(lines[1], "quit: runner stopped");
+    }
+
+    #[test]
+    fn with_no_bridge_the_runner_is_still_stopped_and_with_nothing_started_nothing_is_said() {
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        end_in_order(None, bridge_stop(false), Some(|_deadline: Instant| "runner stopped".to_string()), Duration::from_secs(30), &say);
+        assert_eq!(lines.borrow().as_slice(), ["quit: no bridge to stop", "quit: runner stopped"]);
+        lines.borrow_mut().clear();
+        // A copy that never got as far as a window (`--quit` with nothing running).
+        end_in_order(None, bridge_stop(false), None::<fn(Instant) -> String>, Duration::from_secs(30), &say);
+        assert!(lines.borrow().is_empty(), "{:?}", lines.borrow());
+    }
+
+    // The runner step's own programs: ended by the handle that started them at the deadline.
+    // Each test starts the program first and only then takes its deadline from the clock: how long
+    // Windows takes to start a copy of Node varies by seconds when many are started at once (as
+    // the tests do), and that is not what these are about.
+
+    fn started(folder: &Folder, script: &str) -> Child {
+        start(&mut folder.command(script)).expect("couldn't start the stand-in")
+    }
+
+    #[test]
+    fn a_program_still_running_at_the_deadline_is_ended_by_the_handle_that_started_it() {
+        let folder = Folder::new("late");
+        let child = started(&folder, BEATS_UNTIL_ENDED);
+        let wait = Duration::from_secs(2);
+        let began = Instant::now();
+        let ran = finish_by(child, began + wait).unwrap();
+        let took = began.elapsed();
+        let Ran::EndedAtDeadline(pid) = ran else { panic!("it was not ended at the deadline: {ran:?}") };
+        assert_ne!(pid, 0);
+        assert!(took >= wait, "it was ended early, after {took:?}");
+        assert!(took < wait + Duration::from_secs(1), "it was not ended at the deadline, but after {took:?}");
+        // Gone, and not just given up on: its beat has stopped.
+        let beat = std::fs::read_to_string(folder.marker()).expect("it never ran");
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(std::fs::read_to_string(folder.marker()).unwrap(), beat, "it is still running");
+    }
+
+    #[test]
+    fn a_program_that_finishes_in_time_is_not_ended_and_gives_its_code_and_what_it_said() {
+        let folder = Folder::new("quick");
+        let mut cmd = folder.command(SAYS_AND_EXITS_WITH_5);
+        let ran = run_until(&mut cmd, Instant::now() + Duration::from_secs(60)).unwrap();
+        // What it printed, then what it complained of, as the script's output is read everywhere else.
+        assert_eq!(ran, Ran::Finished(5, "said and complained".to_string()));
+    }
+
+    #[test]
+    fn a_program_that_says_more_than_a_pipe_holds_is_not_held_up_by_it() {
+        let folder = Folder::new("a-lot");
+        let mut cmd = folder.command(SAYS_A_LOT);
+        match run_until(&mut cmd, Instant::now() + Duration::from_secs(60)).unwrap() {
+            Ran::Finished(0, text) => assert_eq!(text.len(), 3_000_000),
+            other => panic!("it did not finish by itself: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_helper_left_holding_the_output_does_not_hold_the_step_past_its_time() {
+        let folder = Folder::new("helper");
+        let child = started(&folder, LEAVES_A_HELPER_HOLDING_ITS_OUTPUT);
+        let wait = Duration::from_millis(1500);
+        let began = Instant::now();
+        let ran = finish_by(child, began + wait).unwrap();
+        let took = began.elapsed();
+        // The program itself was done, so it is not said to have been ended.
+        assert!(matches!(ran, Ran::Finished(0, _)), "{ran:?}");
+        // The helper holds the pipe for 4 seconds; the step gave up on its output at its time.
+        assert!(took < Duration::from_secs(3), "it waited for the helper, {took:?}");
+    }
+
+    #[test]
+    fn a_program_whose_time_was_up_by_the_time_it_started_is_ended_too() {
+        // The time starting it took counts: with the deadline already past, it is started and ended.
+        let folder = Folder::new("past");
+        let mut cmd = folder.command(BEATS_UNTIL_ENDED);
+        let ran = run_until(&mut cmd, Instant::now()).unwrap();
+        assert!(matches!(ran, Ran::EndedAtDeadline(pid) if pid != 0), "{ran:?}");
+    }
+
+    #[test]
+    fn the_runner_step_that_runs_past_its_time_has_its_program_ended_and_quit_goes_on() {
+        let folder = Folder::new("step-late");
+        let child = started(&folder, BEATS_UNTIL_ENDED);
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        let wait = Duration::from_secs(2);
+        let step = move |deadline: Instant| match finish_by(child, deadline) {
+            Ok(Ran::EndedAtDeadline(pid)) => format!("ended at the deadline: pid {pid}"),
+            other => format!("not ended: {other:?}"),
+        };
+        let began = Instant::now();
+        end_in_order(None, bridge_stop(false), Some(step), wait, &say);
+        let took = began.elapsed();
+        assert!(took >= wait, "quit went on early, after {took:?}");
+        assert!(took < wait + Duration::from_secs(1), "quit waited past the runner step's time, {took:?}");
+        let lines = lines.into_inner();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0], "quit: no bridge to stop");
+        assert!(lines[1].starts_with("quit: ended at the deadline: pid "), "{lines:?}");
+        // The program is gone, not left running past the end of the step.
+        let beat = std::fs::read_to_string(folder.marker()).expect("it never ran");
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(std::fs::read_to_string(folder.marker()).unwrap(), beat, "it is still running");
+    }
+
+    // The bridge's own time, counted from when its input was closed, whatever the runner step is doing.
+
+    #[test]
+    fn a_bridge_that_ignores_its_input_is_killed_at_its_own_time_while_the_runner_step_is_still_going() {
+        let mut bridge = Standin::start("kill-during", IGNORES_ITS_INPUT);
+        let origin = Instant::now();
+        let lines = RefCell::new(Vec::<(Duration, String)>::new());
+        let say = |line: &str| lines.borrow_mut().push((origin.elapsed(), line.to_string()));
+        let wait = Duration::from_millis(700);
+        let runner_takes = Duration::from_secs(3);
+        let runner = move |_deadline: Instant| {
+            std::thread::sleep(runner_takes);
+            "runner stopped".to_string()
+        };
+        end_in_order(Some(&mut bridge.child), BridgeStop::Gracefully(wait), Some(runner), Duration::from_secs(30), &say);
+        let total = origin.elapsed();
+        let lines = lines.into_inner();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        // The bridge was killed first, at its own time, with the runner step still going.
+        let (killed_at, said) = &lines[0];
+        assert!(said.starts_with("quit: bridge pid ") && said.contains("so it was killed"), "{lines:?}");
+        assert!(*killed_at >= wait, "it was killed before its time, at {killed_at:?}");
+        assert!(*killed_at < Duration::from_secs(2), "it was killed only at {killed_at:?}, after the runner step went on to {runner_takes:?}");
+        assert!(matches!(bridge.child.try_wait(), Ok(Some(_))), "it is still running");
+        // Then the runner step finished, and the total is the longer of the two, not the sum.
+        assert_eq!(lines[1].1, "quit: runner stopped");
+        assert!(lines[1].0 >= runner_takes, "{lines:?}");
+        assert!(total < runner_takes + Duration::from_secs(2), "the waits added up, {total:?}");
+    }
+
+    // The runner step's own time, and how it is said to end.
+
+    #[test]
+    fn the_runner_step_is_given_its_time_counted_from_when_it_begins_whatever_the_bridge_does() {
+        let mut bridge = Standin::start("deadline", ENDS_WITH_ITS_INPUT);
+        let origin = Instant::now();
+        let given = Arc::new(Mutex::new(None::<Instant>));
+        let got = given.clone();
+        let runner = move |deadline: Instant| {
+            *got.lock().unwrap() = Some(deadline);
+            "runner stopped".to_string()
+        };
+        let wait = Duration::from_secs(8);
+        end_in_order(Some(&mut bridge.child), BridgeStop::Gracefully(Duration::from_secs(60)), Some(runner), wait, &|_| {});
+        let deadline = given.lock().unwrap().expect("the runner step never ran");
+        let after = deadline.duration_since(origin);
+        // Its own 8 seconds, not stretched by the bridge's time or shortened by the bridge ending.
+        assert!(after >= wait && after < wait + Duration::from_secs(2), "{after:?}");
+    }
+
+    #[test]
+    fn a_runner_step_that_ignores_its_deadline_is_given_up_on_a_little_after_it() {
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        let wait = Duration::from_millis(300);
+        let step = |_deadline: Instant| {
+            std::thread::sleep(Duration::from_secs(6));
+            "too late".to_string()
+        };
+        let started = Instant::now();
+        end_in_order(None, bridge_stop(false), Some(step), wait, &say);
+        let took = started.elapsed();
+        assert!(took >= wait + RUNNER_STEP_GRACE, "it was given up on early, after {took:?}");
+        assert!(took < wait + RUNNER_STEP_GRACE + Duration::from_secs(2), "it was waited for, {took:?}");
+        assert_eq!(
+            lines.into_inner(),
+            [
+                "quit: no bridge to stop",
+                "quit: the runner step was still going 2.3 seconds after it began, so quit went on without it (an on-demand runner may still be running)"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_runner_step_that_fails_is_said_to_have() {
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        let step = |_deadline: Instant| -> String { panic!("on purpose, for the test") };
+        end_in_order(None, bridge_stop(false), Some(step), Duration::from_secs(30), &say);
+        assert_eq!(lines.into_inner(), ["quit: no bridge to stop", "quit: the runner step failed"]);
+    }
+
+    #[test]
+    fn times_are_said_the_way_they_were_waited_for() {
+        assert_eq!(seconds(Duration::from_secs(3)), "3 seconds");
+        assert_eq!(seconds(Duration::from_secs(1)), "1 second");
+        assert_eq!(seconds(Duration::from_millis(700)), "0.7 seconds");
+        assert_eq!(seconds(Duration::from_millis(2300)), "2.3 seconds");
+        assert_eq!(BridgeEnd::Killed.describe(Duration::from_secs(3)), "was still running 3 seconds after its input was closed, so it was killed");
+    }
+
+    // What the exit step does with the script's two runs (stop_on_demand), with the script faked.
+
+    fn answer(text: &str) -> Result<Ran, String> {
+        Ok(Ran::Finished(0, text.to_string()))
+    }
+
+    #[test]
+    fn quitting_stops_an_on_demand_runner_with_both_runs_held_to_the_one_deadline() {
+        let asked = RefCell::new(Vec::<(String, Instant)>::new());
+        let ask = |args: &[String], deadline: Instant| -> Result<Ran, String> {
+            asked.borrow_mut().push((args.join(" "), deadline));
+            if args[0] == "--mode" {
+                answer("on-demand\n")
+            } else {
+                answer("Stopped the runner.\nmore")
+            }
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        assert_eq!(stop_on_demand(&ask, deadline), "runner mode on-demand: stop script said 0: Stopped the runner.");
+        let asked = asked.into_inner();
+        assert_eq!(asked.iter().map(|(args, _)| args.as_str()).collect::<Vec<_>>(), ["--mode", "--stop"]);
+        assert!(asked.iter().all(|(_, d)| *d == deadline), "the two runs were given different times");
+    }
+
+    #[test]
+    fn quitting_leaves_a_runner_that_starts_at_sign_in_alone() {
+        let asked = RefCell::new(Vec::<String>::new());
+        let ask = |args: &[String], _deadline: Instant| -> Result<Ran, String> {
+            asked.borrow_mut().push(args.join(" "));
+            answer("sign-in")
+        };
+        assert_eq!(stop_on_demand(&ask, Instant::now() + Duration::from_secs(10)), "runner mode sign-in: left running");
+        assert_eq!(asked.into_inner(), ["--mode"]);
+    }
+
+    #[test]
+    fn a_stop_still_running_at_the_deadline_is_said_to_have_been_ended_and_with_its_pid() {
+        let ask = |args: &[String], _deadline: Instant| -> Result<Ran, String> {
+            if args[0] == "--mode" {
+                answer("on-demand")
+            } else {
+                Ok(Ran::EndedAtDeadline(4242))
+            }
+        };
+        assert_eq!(
+            stop_on_demand(&ask, Instant::now() + Duration::from_secs(10)),
+            "runner mode on-demand: the stop script's Node (pid 4242) was still running when the step's time was up, so it was ended (the runner may still be running)"
+        );
+    }
+
+    #[test]
+    fn a_mode_check_still_running_at_the_deadline_is_ended_and_no_stop_is_tried() {
+        let asked = RefCell::new(Vec::<String>::new());
+        let ask = |args: &[String], _deadline: Instant| -> Result<Ran, String> {
+            asked.borrow_mut().push(args.join(" "));
+            Ok(Ran::EndedAtDeadline(77))
+        };
+        assert_eq!(
+            stop_on_demand(&ask, Instant::now() + Duration::from_secs(10)),
+            "runner mode unknown (the mode check's Node (pid 77) was still running when the step's time was up, so it was ended): left running"
+        );
+        assert_eq!(asked.into_inner(), ["--mode"]);
+    }
+
+    #[test]
+    fn a_script_that_fails_or_cannot_be_run_is_said_so_and_the_runner_is_left() {
+        let failing = |_: &[String], _: Instant| -> Result<Ran, String> { Ok(Ran::Finished(1, "boom\nmore".to_string())) };
+        assert_eq!(stop_on_demand(&failing, Instant::now() + Duration::from_secs(10)), "runner mode unknown (the script said 1: boom): left running");
+        let ask = |args: &[String], _: Instant| -> Result<Ran, String> {
+            if args[0] == "--mode" {
+                answer("on-demand")
+            } else {
+                Err("Couldn't run Node (nope).".to_string())
+            }
+        };
+        assert_eq!(
+            stop_on_demand(&ask, Instant::now() + Duration::from_secs(10)),
+            "runner mode on-demand: the stop script could not be run: Couldn't run Node (nope)."
+        );
+    }
+
+    #[test]
+    fn a_script_is_not_started_once_the_steps_time_is_already_up() {
+        let why = runner_script_until(&["--mode".to_string()], Instant::now()).unwrap_err();
+        assert_eq!(why, "the step's time was already up");
     }
 }

@@ -53,7 +53,7 @@ const LIST: ShellList = {
   notes: [],
 };
 
-function rig(more: { shells?: ShellList; spawnFails?: string; hold?: boolean; font?: () => TerminalFont } = {}) {
+function rig(more: { shells?: ShellList; spawnFails?: string; hold?: boolean; font?: () => TerminalFont; platform?: NodeJS.Platform; endProcesses?: (pids: number[]) => void } = {}) {
   const ptys: FakePty[] = [];
   // With hold, finding the shells waits until release() is called, as wsl.exe can for a second.
   let release: () => void = () => {};
@@ -63,6 +63,8 @@ function rig(more: { shells?: ShellList; spawnFails?: string; hold?: boolean; fo
       if (more.spawnFails) throw new Error(more.spawnFails);
       return (file, args, opts) => {
         const p = new FakePty(file, args, opts);
+        // Not real process ids: a test hands them to nothing that ends a process, unless it is a recorder.
+        p.pid = 1000 + ptys.length;
         ptys.push(p);
         return p;
       };
@@ -74,7 +76,8 @@ function rig(more: { shells?: ShellList; spawnFails?: string; hold?: boolean; fo
     // Never the real one: that reads this PC's Windows Terminal settings.
     font: more.font ?? (() => ({})),
     env: { PATH: 'x', THREADBEAR_BRIDGE_KEY: 'secret', THREADBEAR_THREAD_ID: 't1', THREADBARE_THREAD_ID: 't1', THREADBEAR_HOME: 'h' },
-    platform: 'win32',
+    platform: more.platform ?? 'win32',
+    endProcesses: more.endProcesses,
     home: 'C:\\Users\\me',
     isDir: (d) => d.startsWith('C:\\Users\\me'),
   });
@@ -325,6 +328,29 @@ describe('stopping', () => {
     r.terminals.stopAll();
     assert.ok(r.ptys.every((p) => p.killed));
     assert.deepEqual(r.terminals.running(), []);
+  });
+
+  // node-pty's own kill on Windows forks a helper to list the console's processes and ends them
+  // when it answers, which a bridge that is exiting never gets to see. So the exit handler ends
+  // the shells it started by their process ids, all in one go.
+  test('on Windows stopAll ends the live shells by their process ids, together, and not through the pty', async () => {
+    const ended: number[][] = [];
+    const r = rig({ endProcesses: (pids) => void ended.push(pids) });
+    for (const k of ['a', 'b', 'c']) await r.terminals.open(k, { cols: 80, rows: 24, create: true }, r.sink);
+    r.ptys[1]!.end(0);
+    r.terminals.stopAll();
+    assert.deepEqual(ended, [[r.ptys[0]!.pid, r.ptys[2]!.pid]], 'only the shells still running, in one call');
+    assert.ok(r.ptys.every((p) => !p.killed), 'the pty was not asked to kill itself');
+    assert.deepEqual(r.terminals.running(), []);
+  });
+
+  test('away from Windows stopAll asks each shell to stop through the pty, as before', async () => {
+    const ended: number[][] = [];
+    const r = rig({ platform: 'linux', endProcesses: (pids) => void ended.push(pids) });
+    for (const k of ['a', 'b']) await r.terminals.open(k, { cols: 80, rows: 24, create: true }, r.sink);
+    r.terminals.stopAll();
+    assert.deepEqual(ended, []);
+    assert.ok(r.ptys.every((p) => p.killed));
   });
 
   test('stopping a shell that has already exited is quiet', async () => {
@@ -580,6 +606,78 @@ describe('a real shell through the real bridge', () => {
       }
     } finally {
       first.ws.close();
+    }
+  });
+});
+
+// Quitting the app closes the bridge's standard input and kills the bridge only if it is still
+// there 3 seconds later (src-tauri/src/lib.rs, end_in_order). So with every shell it can hold
+// running it has to end by itself, well inside that, and its shells have to be gone. Before its
+// exit handler ended them with taskkill, a bridge holding more than a few shells never finished
+// ending (node-pty's kill, run from an exit handler, left it running for as long as the test
+// would look). The one bridge here is the test's own, and so are its shells: the one asked for
+// its process id, and the rest.
+describe('the bridge ending with all its shells running', () => {
+  const files = scratch();
+  after(() => files.remove());
+  let bridge: Running | undefined;
+  after(async () => {
+    await bridge?.shutdown();
+  });
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  test('closing its input ends it by itself within a few seconds, and the shells with it', async (t) => {
+    bridge = await startBridge({ THREADBEAR_HOME: files.home, THREADBEAR_DIST: files.dist, THREADBEAR_PORT: String(await freePort()), THREADBEAR_BRIDGE_PORT: '0', THREADBEAR_BRIDGE_WATCH_STDIN: '1' });
+    const ws = new WebSocket(`ws://127.0.0.1:${bridge.port}/terminal?k=${encodeURIComponent(bridge.key)}`, { headers: { Origin: bridge.origin } });
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    const pipe = new Pipe(ws);
+    try {
+      pipe.send({ t: 'shells' });
+      await pipe.until('the list of shells', () => pipe.heard.some((m) => m.t === 'shells'));
+      const shells = pipe.heard.find((m) => m.t === 'shells')!;
+      if (shells.unavailable) return t.skip(`no pseudo-terminal package here: ${String(shells.unavailable)}`);
+      if (!shells.auto) return t.skip('no shell on this machine');
+
+      // One shell that can say its own process id (PowerShell, which every Windows PC has, or a
+      // Unix shell) and fifteen more, Command Prompts on Windows as they start quickly: sixteen is
+      // the most the bridge holds.
+      const ids = new Set((shells.shells as { id: string }[]).map((s) => s.id));
+      const win = process.platform === 'win32';
+      const asker = win ? ['powershell', 'pwsh'].find((id) => ids.has(id)) : undefined;
+      if (win && (!asker || !ids.has('cmd'))) return t.skip('needs PowerShell and Command Prompt');
+      const others = win ? 'cmd' : undefined;
+      pipe.send({ t: 'open', key: 'asker', cols: 100, rows: 30, create: true, ...(asker ? { shell: asker } : {}) });
+      for (let i = 0; i < 15; i++) pipe.send({ t: 'open', key: `other${i}`, cols: 100, rows: 30, create: true, ...(others ? { shell: others } : {}) });
+      const keys = ['asker', ...Array.from({ length: 15 }, (_, i) => `other${i}`)];
+      await pipe.until('every shell to print something', () => keys.every((k) => pipe.output(k).length > 0), 60_000);
+      // What is typed shows as typed ($PID), what is printed as digits.
+      pipe.send({ t: 'in', key: 'asker', d: win ? 'echo "PID=$PID"\r' : 'echo PID=$$\r' });
+      await pipe.until("the shell's process id", () => /PID=\d+/.test(pipe.output('asker')), 20_000);
+      const pid = Number(/PID=(\d+)/.exec(pipe.output('asker'))![1]);
+      assert.ok(alive(pid), `shell ${pid} is not running before the bridge is asked to end`);
+
+      const started = Date.now();
+      bridge.closeStdin();
+      const limit = 5000;
+      const code = await Promise.race([bridge.exited, new Promise<'late'>((resolve) => setTimeout(() => resolve('late'), limit))]);
+      const took = Date.now() - started;
+      assert.equal(code, 0, `the bridge had not ended ${limit} ms after its input was closed`);
+      // It goes before its shells are looked at, so any still there are the exit handler's doing.
+      const end = Date.now() + 3000;
+      while (alive(pid) && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+      assert.ok(!alive(pid), `shell ${pid} was still running after the bridge ended (it took ${took} ms)`);
+    } finally {
+      ws.close();
     }
   });
 });
