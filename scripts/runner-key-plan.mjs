@@ -19,6 +19,10 @@
 // the flag). A joining Mac gets no Convex login, deploy key or backend
 // deploy from setup, and never the main key: its key comes from the first
 // Mac (tb runner add).
+//
+// joinKeyPlan, keyKind and RUNNER_KEY_SHAPE (below) are for a Windows or Linux
+// computer joining with scripts/setup-sync.mjs --join, which reads the key from
+// a file instead.
 export function isJoining({ existing, local }) {
   return Boolean(existing) || (local ?? '').startsWith('tbr_');
 }
@@ -44,4 +48,47 @@ export function runnerKeyPlan({ envGet, nextGet, local, joining }) {
   if (!nextGet || !unsetOk(nextGet)) return { action: 'fail', why: (nextGet?.status === 0 && (nextGet.stdout ?? '').trim()) ? 'The main key is being rotated (RUNNER_KEY_NEXT is set): finish with tb runner rotate-owner --finish, then run setup again.' : "Couldn't tell whether the main key is being rotated (npx convex env get RUNNER_KEY_NEXT failed), so setup stopped rather than guess. Run setup again." };
   if (value) return { action: 'copy' };
   return { action: 'set' };
+}
+
+// A runner key as the backend makes it (convex/sync.ts, addRunnerKey): "tbr_" and 32 random bytes in
+// lower case hex. runner-keys.test.ts reads that source, so this follows it.
+export const RUNNER_KEY_SHAPE = /^tbr_[0-9a-f]{64}$/;
+
+// What some text, a key file or secrets/convex-key, is a key of: 'runner', 'main' (64 hex, which is what
+// setup makes for RUNNER_KEY), 'deploy' (a Convex deploy key, or the env file holding one), 'empty' or 'other'.
+export function keyKind(text) {
+  const t = String(text ?? '').trim();
+  if (!t) return 'empty';
+  if (RUNNER_KEY_SHAPE.test(t)) return 'runner';
+  if (/^[0-9a-f]{64}$/.test(t)) return 'main';
+  if (/\b(?:prod|dev|preview):[a-z0-9-]+\|/i.test(t)) return 'deploy';
+  return 'other';
+}
+
+// scripts/setup-sync.mjs --join, on a computer that is not the first one: what to do about its runner key.
+//
+//   local  what secrets/convex-key holds now ('' for nothing)
+//   file   the text of the key file the first computer made (tb runner add --out), or undefined if
+//          none was given
+//
+// Returns { action, why? }:
+//   refuse   stop, change nothing. why: 'local' (secrets/convex-key holds something that is not a
+//            runner key, so it is the main key or a copy of it, which is never replaced), or
+//            'file-empty', 'file-main', 'file-deploy', 'file-other' (the file is not a runner key)
+//   need     no key yet and none given: part one, the computer waits for its key
+//   keep     the key here is right (none given, or the same one)
+//   install  there was none, and the file's is put in
+//   replace  the file's is a different runner key from the one here: the first computer made it to
+//            replace the old one, which no longer works
+export function joinKeyPlan({ local, file } = {}) {
+  const have = String(local ?? '').trim();
+  if (have && !have.startsWith('tbr_')) return { action: 'refuse', why: 'local' };
+  if (file !== undefined) {
+    const given = String(file).trim();
+    const kind = keyKind(given);
+    if (kind !== 'runner') return { action: 'refuse', why: `file-${kind}` };
+    if (!have) return { action: 'install' };
+    return given === have ? { action: 'keep' } : { action: 'replace' };
+  }
+  return have ? { action: 'keep' } : { action: 'need' };
 }

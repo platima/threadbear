@@ -288,6 +288,141 @@ test("a Mac that joined (its key is a runner key) is never handed the main key o
   assert.notEqual(runnerKeyPlan({ envGet: unset, local: 'tbr_mine', joining: false }).action, 'set');
 });
 
+// A computer joining with the key file `tb runner add --out` wrote (scripts/setup-sync.mjs --join):
+// what to do with the key it has already and the one it was given.
+type JoinPlan = (p: { local?: string; file?: string }) => { action: string; why?: string };
+const { joinKeyPlan, keyKind, RUNNER_KEY_SHAPE } = (await import(planModule)) as { joinKeyPlan: JoinPlan; keyKind: (text: string) => string; RUNNER_KEY_SHAPE: RegExp };
+const RK1 = 'tbr_' + 'ab12'.repeat(16);
+const RK2 = 'tbr_' + 'cd34'.repeat(16);
+const MAIN = 'f0e1'.repeat(16);
+
+test('joinKeyPlan: a main key already here is never replaced; a runner key is kept, installed or replaced', () => {
+  // Nothing here and nothing given: part one, the computer waits for its key.
+  assert.deepEqual(joinKeyPlan({}), { action: 'need' });
+  assert.deepEqual(joinKeyPlan({ local: '', file: undefined }), { action: 'need' });
+  // A runner key here and no file (or the same one): kept.
+  assert.deepEqual(joinKeyPlan({ local: RK1 }), { action: 'keep' });
+  assert.deepEqual(joinKeyPlan({ local: RK1, file: RK1 }), { action: 'keep' });
+  assert.deepEqual(joinKeyPlan({ local: `${RK1}\n`, file: ` ${RK1} \r\n` }), { action: 'keep' }, 'blanks around a key are not part of it');
+  // A key given and none here: installed. A different one given: replaces the old.
+  assert.deepEqual(joinKeyPlan({ file: RK1 }), { action: 'install' });
+  assert.deepEqual(joinKeyPlan({ local: RK1, file: RK2 }), { action: 'replace' });
+  // Something else in secrets/convex-key is the main key (or a copy of it): refused, with or without a file.
+  for (const local of [MAIN, 'my-local-main-key', 'prod:calm-fox-123|abc']) {
+    for (const file of [undefined, RK1, RK2]) assert.deepEqual(joinKeyPlan({ local, file }), { action: 'refuse', why: 'local' }, `${local} ${file}`);
+  }
+  // A file that isn't a runner key is refused, and says what it looks like.
+  assert.deepEqual(joinKeyPlan({ file: MAIN }), { action: 'refuse', why: 'file-main' });
+  assert.deepEqual(joinKeyPlan({ file: 'prod:calm-fox-123|SECRET' }), { action: 'refuse', why: 'file-deploy' });
+  assert.deepEqual(joinKeyPlan({ file: 'CONVEX_DEPLOY_KEY=prod:calm-fox-123|SECRET\n' }), { action: 'refuse', why: 'file-deploy' });
+  assert.deepEqual(joinKeyPlan({ file: '   \r\n' }), { action: 'refuse', why: 'file-empty' });
+  assert.deepEqual(joinKeyPlan({ file: '' }), { action: 'refuse', why: 'file-empty' });
+  for (const file of ['tbr_short', RK1 + '0', RK1.toUpperCase(), `${RK1}\n${RK1}`, 'tbr_' + 'zz'.repeat(32), 'hello']) {
+    assert.deepEqual(joinKeyPlan({ local: RK1, file }), { action: 'refuse', why: 'file-other' }, file);
+  }
+  // The same holds a runner key here: the file is judged before anything is replaced.
+  assert.deepEqual(joinKeyPlan({ local: RK1, file: MAIN }), { action: 'refuse', why: 'file-main' });
+});
+
+test('keyKind and RUNNER_KEY_SHAPE: what a runner key looks like is what the backend makes', () => {
+  assert.equal(keyKind(RK1), 'runner');
+  assert.equal(keyKind(MAIN), 'main');
+  assert.equal(keyKind('tbr_' + '1'.repeat(63)), 'other');
+  assert.equal(keyKind('prod:x|y'), 'deploy');
+  assert.equal(keyKind('dev:calm-fox-123|abc+/='), 'deploy');
+  assert.equal(keyKind(''), 'empty');
+  assert.ok(RUNNER_KEY_SHAPE.test(RK1) && !RUNNER_KEY_SHAPE.test(RK1 + '\n') && !RUNNER_KEY_SHAPE.test(MAIN));
+  // The backend makes 32 random bytes in lower case hex after "tbr_" (convex/sync.ts addRunnerKey). If that
+  // ever changes, this shape has to follow it, or a good key file would be refused.
+  const source = fs.readFileSync(path.join(import.meta.dirname, '..', '..', '..', 'convex', 'sync.ts'), 'utf8');
+  assert.match(source, /const bytes = new Uint8Array\(32\);\n\s+crypto\.getRandomValues\(bytes\);\n\s+const key = 'tbr_' \+ Array\.from\(bytes, \(b\) => b\.toString\(16\)\.padStart\(2, '0'\)\)\.join\(''\);/);
+});
+
+// scripts/setup-sync.mjs --join looks for the same five things as tb runner check, with its own copy of the code
+// (runner-keys.ts needs the runner's packages, and the script has to run before they are installed). These keep the
+// two from drifting apart: each is run over the same folders, and has to refuse them with the same words.
+type Script = {
+  parseKeyText: (bytes: Buffer) => string;
+  localAdmin: (home: string, userHome: string) => unknown;
+  hasAdmin: (admin: unknown) => boolean;
+  adminAdvice: (admin: unknown, where: string, url: string, words?: { rotateAt?: string; mac?: string; owner?: string }) => string;
+};
+const scriptModule: string = '../../../scripts/setup-sync.mjs';
+const script = (await import(scriptModule)) as Script;
+
+const ADMIN_FILES: [string, (home: string, userHome: string) => void][] = [
+  ["setup's deploy key", (home) => put(path.join(home, 'secrets', 'convex-deploy.env'), 'CONVEX_DEPLOY_KEY=prod:x|y\n')],
+  ["a self-hosted backend's admin key", (home) => put(path.join(home, 'secrets', 'convex-self-hosted.env'), "CONVEX_SELF_HOSTED_URL='http://127.0.0.1:13210'\nCONVEX_SELF_HOSTED_ADMIN_KEY='x|y'\n")],
+  ['a Convex team token', (home) => put(path.join(home, 'secrets', 'convex-team-token'), 'team-token\n')],
+  ["the Convex panel's deploy key", (home) => put(path.join(home, 'secrets', 'convex-panels', 'opulent-moose-249.json'), JSON.stringify({ name: 'threadbear-panel-bruce-ff00aa', adminKey: 'prod:secret' }))],
+  ['a panel key with a name this app did not give it', (home) => put(path.join(home, 'secrets', 'convex-panels', 'x.json'), JSON.stringify({ name: 'something-else' }))],
+  ['a panel key file that cannot be read', (home) => put(path.join(home, 'secrets', 'convex-panels', 'y.json'), 'not json')],
+  ['a panel key file with no name in it', (home) => put(path.join(home, 'secrets', 'convex-panels', 'z.json'), '{}')],
+  ['a Convex CLI login', (_home, userHome) => put(path.join(userHome, '.convex', 'config.json'), '{}')],
+];
+
+function put(file: string, text: string) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+}
+
+async function checkOf(make: (home: string, userHome: string) => void) {
+  const s = setup();
+  fs.writeFileSync(path.join(s.cfg.home, 'secrets', 'convex-key'), 'tbr_mine\n');
+  const userHome = tmpDir();
+  make(s.cfg.home, userHome);
+  const code = await runnerKeysCommand(s.cfg, ['check'], {}, { ...s.deps, userHome });
+  return { code, said: s.printed.join('\n'), admin: script.localAdmin(s.cfg.home, userHome) };
+}
+
+for (const [what, make] of ADMIN_FILES) {
+  test(`tb runner check and setup-sync --join agree about ${what}: both refuse it, in the same words`, async () => {
+    const { code, said, admin } = await checkOf(make);
+    assert.equal(code, 1, said);
+    assert.equal(script.hasAdmin(admin), true);
+    assert.equal(script.adminAdvice(admin, 'This Mac', URL_), said);
+  });
+}
+
+test('tb runner check and setup-sync --join agree when all of them are there, and when none is', async () => {
+  const all = await checkOf((home, userHome) => ADMIN_FILES.forEach(([, make]) => make(home, userHome)));
+  assert.equal(all.code, 1);
+  assert.equal(script.adminAdvice(all.admin, 'This Mac', URL_), all.said);
+  const none = await checkOf(() => undefined);
+  assert.equal(none.code, 0, none.said);
+  assert.equal(script.hasAdmin(none.admin), false);
+  // Files that are not keys (a panel folder with other files in it) are not counted by either.
+  const other = await checkOf((home) => put(path.join(home, 'secrets', 'convex-panels', 'README.txt'), 'hello'));
+  assert.equal(other.code, 0, other.said);
+  assert.equal(script.hasAdmin(other.admin), false);
+});
+
+test('the advice for a computer that is joining says the first computer rotates the key, and never calls it a Mac', async () => {
+  const { admin } = await checkOf((home, userHome) => ADMIN_FILES.forEach(([, make]) => make(home, userHome)));
+  const words = { rotateAt: 'on the first computer', mac: 'computer', owner: 'the first computer' };
+  const joined = script.adminAdvice(admin, 'This computer', URL_, words);
+  assert.match(joined, /^This computer also has /);
+  assert.match(joined, /3\. Then rotate the main key, which they could read: tb runner rotate-owner on the first computer\. Only the first computer needs any of these\.$/);
+  assert.doesNotMatch(joined, /\bMac\b/);
+  // Only the words differ: the rest is tb runner check's.
+  assert.equal(joined.replace('This computer', 'This Mac').replace('on the first computer. Only the first computer', 'here. Only the main Mac').replaceAll("that computer's", "that Mac's").replaceAll('this computer', 'this Mac'), script.adminAdvice(admin, 'This Mac', URL_));
+});
+
+test("the key file tb runner add --out writes is one setup-sync --join accepts, and it holds exactly the key the backend made", async () => {
+  const s = setup();
+  const key = 'tbr_' + 'ab12'.repeat(16);
+  const deps = { ...s.deps, post: async (kind: string, fn: string, args: Record<string, unknown>) => (fn === 'sync:addRunnerKey' ? { runnerId: args.runnerId, key } : s.deps.post(kind, fn, args)) };
+  const file = path.join(s.cfg.home, 'out', 'work.key');
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'work'], { out: file, id: 'cb921b2447ea' }, deps as never), 0);
+  const read = script.parseKeyText(fs.readFileSync(file));
+  assert.equal(read, key);
+  assert.equal(keyKind(read), 'runner');
+  assert.ok(RUNNER_KEY_SHAPE.test(read));
+  assert.equal(joinKeyPlan({ file: read }).action, 'install');
+  // The same text as Windows PowerShell 5.1's > redirection saves it (UTF-16 LE with a byte order mark) reads the same.
+  assert.equal(script.parseKeyText(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(key + '\r\n', 'utf16le')])), key);
+});
+
 test('tb runner add gives a Mac set up without Convex the deployment as well as its key', async () => {
   const s = setup({ sync: { runnerId: 'fresh0000001', name: 'new' } });
   assert.equal(await runnerKeysCommand(s.cfg, ['add', 'new'], { ssh: 'new' }, s.deps), 0);

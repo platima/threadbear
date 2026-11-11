@@ -78,6 +78,18 @@ It needs Node 24 or newer, git, tar and flock (util-linux). A server install wit
 `install-runner.sh` (INSTALL.md, section 6) joins a backend that a Mac set up
 instead.
 
+A second Linux computer (or a Windows one) takes the backend the first computer
+made with `node scripts/setup-sync.mjs --join`, in two runs: part one records the
+address and the computer's runner id and prints a `tb runner add <name> --out
+<file> --id <id>` to run on the first computer, and part two, given that file with
+`--key-file`, checks the key with the backend, installs it in
+`~/Library/Application Support/Threadbear/secrets/convex-key` (owner only) and
+restarts the runner's systemd user service (after asking). It needs only Node 24
+or newer, the repository's files (a Download ZIP will do) and that key file: no git,
+tar, flock or Convex login. It can't pair a phone; that is done on the first
+computer. docs/pairing.md, "Joining from a second computer", has the steps, what it
+refuses and how to undo it.
+
 ## What it needs
 
 WebKitGTK 4.1 (Debian and Ubuntu: `libwebkit2gtk-4.1-0`), a desktop session,

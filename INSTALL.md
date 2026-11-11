@@ -347,8 +347,12 @@ backend and restarts the runner. From inside a Threadbear thread it does not
 restart the runner (that would end the thread's turn): it says how, and the
 person does it from the Runners page or a terminal outside any thread. Show them
 the dry run first, and never print or send what it writes under `secrets\`.
-docs/pairing.md has the rest. To join a deployment that already exists instead,
-copy its key and address as in section 6.
+docs/pairing.md has the rest. To join a deployment that already exists instead
+(a second computer using the first one's backend), do not copy that computer's
+keys here: a joining computer must not hold the main key, and
+`node scripts/setup-sync.mjs --join` refuses one that does. Run it with `--join`
+instead, which takes a runner key made for this computer by `tb runner add
+--out` on the first one (docs/pairing.md, "Joining from a second computer").
 
 What's left out on Windows: everything that needs a Mac (the iOS simulator,
 Xcode, BrowserBear, ComputerCub, dialogs on the screen), Threadbear installing

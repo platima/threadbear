@@ -5,7 +5,11 @@ Two ways, and the first needs nothing built.
 Both ways need a Convex deployment of your own for the computer to pair with. On
 Windows and Linux, `node scripts/setup-sync.mjs` from a clone of the repository
 makes one and turns on the "Show a code" button; docs/pairing.md says how, what it
-creates, what it costs and how to undo it.
+creates, what it costs and how to undo it. A second Windows or Linux computer uses
+the same deployment with `node scripts/setup-sync.mjs --join` instead of making
+another (docs/pairing.md, "Joining from a second computer"). The phone is paired on
+the first computer, the one that made the deployment, as only its key can make the
+code.
 
 ## 1. The website, installed
 
