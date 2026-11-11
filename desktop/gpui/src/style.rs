@@ -23,9 +23,92 @@ pub fn set_zoom_percent(percent: u32) {
     ZOOM_PERCENT.store(percent, Ordering::Relaxed);
 }
 
+/// `AppAppearance`: light or dark for this app only, or the Mac's (Settings ›
+/// General › Appearance). Kept here so the windows' appearance observers can
+/// tell whether to follow the Mac.
+static APPEARANCE: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Appearance {
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    pub const ALL: [Appearance; 3] = [Appearance::System, Appearance::Light, Appearance::Dark];
+
+    /// The Swift app's raw value, which the settings file keeps.
+    pub fn name(self) -> &'static str {
+        match self {
+            Appearance::System => "system",
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Appearance {
+        match name {
+            "light" => Appearance::Light,
+            "dark" => Appearance::Dark,
+            _ => Appearance::System,
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Appearance::System => "Same as the Mac",
+            Appearance::Light => "Light",
+            Appearance::Dark => "Dark",
+        }
+    }
+}
+
+pub fn appearance() -> Appearance {
+    match APPEARANCE.load(Ordering::Relaxed) {
+        1 => Appearance::Light,
+        2 => Appearance::Dark,
+        _ => Appearance::System,
+    }
+}
+
+/// Sets the preference and puts it on the window: the theme is the app's, so
+/// every window follows.
+pub fn set_appearance(appearance: Appearance, window: &mut Window, cx: &mut App) {
+    use gpui_kit::component::{Theme, ThemeMode};
+    APPEARANCE.store(
+        match appearance {
+            Appearance::System => 0,
+            Appearance::Light => 1,
+            Appearance::Dark => 2,
+        },
+        Ordering::Relaxed,
+    );
+    match appearance {
+        Appearance::System => Theme::sync_system_appearance(Some(window), cx),
+        Appearance::Light => Theme::change(ThemeMode::Light, Some(window), cx),
+        Appearance::Dark => Theme::change(ThemeMode::Dark, Some(window), cx),
+    }
+}
+
 /// `zoomed`: a design size at the window's zoom (`TypeScale.scaled`).
 pub fn zoomed(size: f32) -> f32 {
     threadbear_core::zoom::scaled(size, zoom_percent())
+}
+
+/// A SwiftUI `Text`'s own line height at `size`, as SwiftUI lays it out on
+/// macOS (measured with NSHostingView.fittingSize: 14 at 11 pt, 16 at 13, 19
+/// at 15). GPUI's own is 1.618 times the size, so a view drawn in SwiftUI
+/// with no line height of its own comes out this tall per line, not GPUI's.
+pub fn natural_line(size: f32) -> f32 {
+    match size.round() as i32 {
+        ..=11 => 14.,
+        12 => 15.,
+        13 => 16.,
+        14 => 17.,
+        15 => 19.,
+        _ => (size * 1.22).ceil(),
+    }
 }
 
 /// GPUI's `px`, at the window's zoom.
@@ -69,6 +152,67 @@ pub const SIDE_INSET: f32 = 28.;
 pub const COMPOSER_RADIUS: f32 = 20.;
 pub const COMPOSER_PADDING: f32 = 14.;
 pub const COMPOSER_GAP: f32 = 10.;
+
+/// The window's background in each look, as the Swift app draws its panels,
+/// sidebar and transcript (NSColor.windowBackgroundColor, BearDock's
+/// `DockTheme.panel`). gpui-kit's own dark theme is a near-black #0a0a0a, so the
+/// whole GPUI app looked much darker than the Swift one (10 Nov). Put into
+/// gpui-kit's light and dark themes before the first switch to either, so
+/// every switch after (the system's, the automation's `appearance`) keeps it.
+/// Popovers and menus get it lifted a little, as macOS's own menus are on dark.
+pub(crate) fn install_window_colours(cx: &mut App) {
+    use gpui_kit::component::Theme;
+    use std::rc::Rc;
+    let (light, dark) = window_backgrounds();
+    let hex = |c: Rgba| -> SharedString { format!("#{:02x}{:02x}{:02x}", (c.r * 255.).round() as u8, (c.g * 255.).round() as u8, (c.b * 255.).round() as u8).into() };
+    let lift = |c: Rgba, by: f32| Rgba { r: c.r + (1. - c.r) * by, g: c.g + (1. - c.g) * by, b: c.b + (1. - c.b) * by, a: 1. };
+    let theme = Theme::global_mut(cx);
+    for (config, background, popover) in [(&mut theme.light_theme, light, light), (&mut theme.dark_theme, dark, lift(dark, 0.06))] {
+        let mut changed = (**config).clone();
+        changed.colors.background = Some(hex(background));
+        changed.colors.sidebar = Some(hex(background));
+        changed.colors.popover = Some(hex(popover));
+        *config = Rc::new(changed);
+    }
+}
+
+/// NSColor.windowBackgroundColor in the light and dark looks. On the Mac it's
+/// read from AppKit, so it follows whatever this macOS draws; elsewhere it's
+/// what macOS 26 and 27 give, so the app looks the same everywhere.
+fn window_backgrounds() -> (Rgba, Rgba) {
+    let fallback = (srgb_rgba(1., 1., 1.), srgb_rgba(30. / 255., 30. / 255., 30. / 255.));
+    #[cfg(target_os = "macos")]
+    {
+        let light = system_window_background(false).unwrap_or(fallback.0);
+        let dark = system_window_background(true).unwrap_or(fallback.1);
+        (light, dark)
+    }
+    #[cfg(not(target_os = "macos"))]
+    fallback
+}
+
+fn srgb_rgba(r: f32, g: f32, b: f32) -> Rgba {
+    Rgba { r, g, b, a: 1. }
+}
+
+// A dynamic colour resolves for the current appearance. The block form
+// (performAsCurrentDrawingAppearance) needs block2; setting it is deprecated
+// but does the same for a moment on the main thread.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn system_window_background(dark: bool) -> Option<Rgba> {
+    use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColor, NSColorSpace};
+    unsafe {
+        let name = if dark { NSAppearanceNameDarkAqua } else { NSAppearanceNameAqua };
+        let appearance = NSAppearance::appearanceNamed(name)?;
+        let previous = NSAppearance::currentAppearance();
+        NSAppearance::setCurrentAppearance(Some(&appearance));
+        let color = NSColor::windowBackgroundColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace());
+        NSAppearance::setCurrentAppearance(previous.as_deref());
+        let c = color?;
+        Some(srgb_rgba(c.redComponent() as f32, c.greenComponent() as f32, c.blueComponent() as f32))
+    }
+}
 
 fn pick(cx: &App, dark: Hsla, light: Hsla) -> Hsla {
     if cx.theme().is_dark() {
@@ -151,9 +295,10 @@ pub fn chip_divider(cx: &App) -> Hsla {
     pick(cx, white(0.12), black(0.12))
 }
 
-/// The Needs you orange (Theme.needsYou).
+/// The Needs you orange (Theme.needsYou): systemOrange on dark, a deeper
+/// orange on light, the same as `needs_you_text`.
 pub fn needs_you(cx: &App) -> Hsla {
-    pick(cx, hsla(0.09, 0.95, 0.56, 1.), hsla(0.09, 0.9, 0.45, 1.))
+    needs_you_text(cx)
 }
 
 /// The answer box under an ask's Something else.
@@ -211,6 +356,12 @@ pub fn pane_icon(cx: &App) -> Hsla {
 /// `Theme.answerRowsFill`.
 pub fn answer_rows_fill(cx: &App) -> Hsla {
     pick(cx, white(0.02), black(0.015))
+}
+
+/// The small star beside "Recommended" on the agent's own pick: a muted gold,
+/// as on the Mac app (Theme.recommendedStar), after Ghostex's (Mike, 9 Nov 2026).
+pub fn recommended_star(cx: &App) -> Hsla {
+    pick(cx, srgb(0.86, 0.70, 0.33, 1.), srgb(0.72, 0.54, 0.12, 1.))
 }
 
 fn srgb(r: f32, g: f32, b: f32, a: f32) -> Hsla {

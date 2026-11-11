@@ -7061,6 +7061,7 @@ name = "threadbear-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dunce",
  "serde",
  "serde_json",
 ]
@@ -7091,9 +7092,12 @@ name = "threadbear-gpui"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "serde",
  "serde_json",
  "taffy",
+ "tempfile",
  "threadbear-client",
  "threadbear-core",
  "threadbear-dock",

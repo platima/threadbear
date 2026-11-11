@@ -90,9 +90,10 @@ Before(async function (this: ThreadbearWorld, { pickle }) {
   // both drivers leave out otherwise (TB_MOCK_NO_REMOTE in gpui.ts, swift.ts).
   if (pickle.tags.some((t) => t.name === '@remote-threads')) process.env.TB_MOCK_REMOTE = '1';
   else delete process.env.TB_MOCK_REMOTE;
-  // The recap box needs a thread that has sat for a while.
-  if (pickle.tags.some((t) => t.name === '@quiet-thread')) process.env.TB_MOCK_QUIET = '1';
-  else delete process.env.TB_MOCK_QUIET;
+  // Decisions on the Projects page: the mock's cards of asks in Threadbear,
+  // and the projectDecisions experiment on in its hello.
+  if (pickle.tags.some((t) => t.name === '@project-decisions')) process.env.TB_MOCK_DECISIONS = '1';
+  else delete process.env.TB_MOCK_DECISIONS;
   await this.app.start();
 });
 

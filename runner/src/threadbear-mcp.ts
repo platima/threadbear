@@ -25,7 +25,13 @@ import { SAID_MAX } from './wake-when.ts';
 
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
-import { ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, turnReply, type TurnReply } from './needs.ts';
+import { runCommandProblem, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, turnReply, type TurnReply } from './needs.ts';
+
+// end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
+// 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
+// a repo where merging needed Mike's OK, and he nearly archived it
+// (loose-ends.ts has the check that backs this up).
+const WHOLE_JOB = "Done is the whole job, not this step: if the next step to finish it is theirs (a merge, a deploy), it's an ask.";
 import { asksForAppRestart, type AppRestarts } from './app-restarts.ts';
 import { PANEL_PLACES } from './panel-requests.ts';
 import { nudgedThisTurn, signInNudge, turnSignIns, uncovered, type ConnectorService } from './connectors.ts';
@@ -40,6 +46,8 @@ import type { SecretAnswer, SecretRequest } from './runner/approvals.ts';
 import type { StartRequest } from './cross-runner.ts';
 import { SECRET_TIMEOUT_DEFAULT_MIN, SECRET_TIMEOUT_MAX_MIN } from './secrets.ts';
 import { cutSafely, firstLineSafely } from './safe-cut.ts';
+import { pickRunner } from './moves.ts';
+import { FINDINGS_REFUSALS, FINDINGS_REFUSED, MAX_FINDINGS, findingsProblem, refusalsThisTurn } from './runner/lab-review.ts';
 
 // What the tools drive: the Runner itself, or during a handover
 // (docs/protocol.md) a ThreadRouter (handover.ts) that reaches threads on
@@ -56,6 +64,8 @@ export type ThreadControl = {
   endTurnNudged?: (threadId: string) => boolean;
   // What this thread's subagents are parked on (approvals.ts).
   openSubagentCards?: (threadId: string) => string[];
+  // What end_turn owes a review by another lab (runner/lab-review.ts).
+  reviewOwes?: (threadId: string) => ReturnType<Runner['reviewOwes']>;
   requestSecret?: (threadId: string, req: SecretRequest) => Promise<SecretAnswer>;
   // A card a threadbear tool puts up itself, with no "Always allow": for a
   // call from a thread not in full mode that would raise access (below).
@@ -86,8 +96,13 @@ export type RemoteControl = {
   list: () => Promise<RemoteThreads>;
   call: (threadId: string, method: string, params: Record<string, unknown>) => Promise<unknown>;
   // move_thread with a runner: the whole thread to another machine, asked
-  // of the main Mac's runner (threads.move). Answers what to tell the agent.
-  move?: (p: { threadId: string; runner: string; cwd?: string; accountId?: string }) => Promise<string>;
+  // of the main Mac's runner (threads.move). `runners` names the runners
+  // to pick from (moves.ts pickRunner), so the card shows the one picked,
+  // by name and id, and `move` goes to that id: it checks again that the
+  // runner is still there under the name the card showed. Answers what to
+  // tell the agent.
+  runners?: () => Promise<{ id: string; name: string }[]>;
+  move?: (p: { threadId: string; runnerId: string; runnerName: string; cwd?: string; accountId?: string }) => Promise<string>;
 };
 
 export type ScheduleControl = Async<Scheduler, 'create' | 'list' | 'find' | 'update' | 'delete'>;
@@ -112,6 +127,14 @@ export const raises = (to: PermissionMode, from: PermissionMode): boolean => ACC
 export type Authority = { mode: PermissionMode; confined: boolean };
 // More than the caller has: a higher mode, or out of the caller's sandbox.
 export const above = (t: Authority, caller: Authority): boolean => raises(t.mode, caller.mode) || (caller.confined && !t.confined);
+// A new_thread schedule's mode for the access checks: its own, or what it
+// inherits (Schedule.defaultMode). One whose inherited mode isn't known here
+// (another runner's default) counts as the least for raising it and the most
+// for what its runs reach, so neither check is passed by guessing.
+export function scheduleModes(sc: Pick<Schedule, 'permissionMode' | 'defaultMode'>): { floor: PermissionMode; ceiling: PermissionMode } {
+  const known = sc.permissionMode ?? sc.defaultMode;
+  return known ? { floor: known, ceiling: known } : { floor: 'ask', ceiling: 'full' };
+}
 const accessName = (t: Authority, caller: Authority): string => `${MODE_NAMES[t.mode]}${caller.confined && !t.confined ? ' outside the sandbox' : ''}`;
 // Asked about every time, even in a thread with full access: deleting is
 // the one thing here that's hard to take back.
@@ -209,29 +232,24 @@ export function buildThreadbearTools(
     pocket?: () => PocketControl | undefined;
     gateway?: () => string | undefined;
     gatewayHealth?: () => Promise<ConnectorService[] | undefined>;
-    // The scheduleChecks experiment (schedule-check.ts): the schedule
-    // tools take a `check` only while it's on, so agents elsewhere aren't
-    // handed an argument that does nothing.
-    scheduleChecks?: () => boolean;
     remote?: () => RemoteControl | undefined;
-    // The replyButtons experiment (runner/buttons.ts): add_button is only
-    // handed out while it's on.
-    replyButtons?: () => boolean;
+    // The runAsks experiment: end_turn's asks[].run is only offered while
+    // it's on.
+    runAsks?: () => boolean;
+    // The looseEnds experiment: end_turn's open is only offered while it's on.
+    looseEnds?: () => boolean;
   } = {},
 ) {
   const codex = opts.provider === 'codex';
-  const checks = opts.scheduleChecks?.() === true;
-  const checkArg = (update: boolean): Record<string, z.ZodOptional<z.ZodTypeAny>> =>
-    checks
-      ? {
+  // A schedule's check (schedule-check.ts).
+  const checkArg = (update: boolean): Record<string, z.ZodOptional<z.ZodTypeAny>> => ({
           check: (update ? z.string().nullable() : z.string())
             .optional()
-            .describe(`A shell command run first, in its folder, before each run${update ? ' (null takes it off)' : ''}. If it prints nothing the run is skipped and no agent starts; what it prints is added to the message. For pollers: check for something new cheaply here. $THREADBEAR_CHECK_STATE is a file it can keep state in. It's bound to what it runs: after a change to its scripts it doesn't run until you pass the same check again.`),
+            .describe(`Shell command run in its folder before each run${update ? ' (null removes it)' : ''}. Prints nothing: the run is skipped and no agent starts; its output is added to the message. Use it to poll cheaply. $THREADBEAR_CHECK_STATE is a file for its state. After its scripts change it won't run until you pass the same check again.`),
           checkTimeoutSecs: (update ? z.number().int().min(1).max(MAX_CHECK_TIMEOUT_SECS).nullable() : z.number().int().min(1).max(MAX_CHECK_TIMEOUT_SECS))
             .optional()
             .describe(`Seconds the check may take before it counts as failed. Default 60${update ? ' (null)' : ''}.`),
-        }
-      : {};
+  });
   const bulletReplies = () => opts.bulletReplies?.() !== false;
   const oneReply = opts.oneReply?.() === true;
   const all = async (): Promise<ThreadSummary[]> => control.list(['inbox', 'snoozed', 'archived']);
@@ -598,18 +616,18 @@ export function buildThreadbearTools(
   ];
 
   // docs/protocol.md, "Reply buttons".
-  const buttonTools = opts.replyButtons?.() === true && control.createButton
+  const buttonTools = control.createButton
     ? [
         tool(
           'add_button',
-          "Makes a button for your reply that the user can press while reading it, to start a new thread with a brief you write (start) or send a message to another thread (send). Nothing runs until they press it, and it runs once. Returns a button:<id> link: put [title](button:<id>) in your reply on the line it belongs to. Offer one where there's a clear next job they'd otherwise have to type out, not for everything.",
+          "Makes a button the user can press while reading your reply: it starts a new thread with your brief (start) or messages another thread (send), once, only when pressed. Put the [title](button:<id>) it returns on the line it belongs to. Only for a clear next job they'd otherwise type out.",
           {
             title: z.string().min(1).max(60).describe('What the button says, a few words starting with a verb: "Fill in the form".'),
             start: z.object({
               text: z.string().min(1).max(20000).describe('The brief: complete, since the new thread knows nothing else.'),
               title: z.string().optional().describe("The new thread's title. Default: the button's."),
-              folder: z.string().optional().describe("Its folder. Default: this thread's. Relative paths are from this thread's folder."),
-              account: z.string().optional().describe('Account id or email (list_accounts). Default: a pool picks.'),
+              folder: z.string().optional().describe("Default: this thread's, which relative paths start from."),
+              account: z.string().optional().describe('Account id or email. Default: a pool picks.'),
               pool: z.string().optional(),
               model: z.string().optional(),
               effort: effortEnum.optional(),
@@ -767,6 +785,7 @@ export function buildThreadbearTools(
           .enum(PANEL_PLACES as [PanelPlace, ...PanelPlace[]])
           .optional()
           .describe('Where a closed panel opens: tab (beside the thread, closing when the user moves on), left, right, top or bottom (along that side of the window), or window (its own). Default: its usual place.'),
+        reload: z.boolean().optional().describe("Load a web panel's page afresh, after you've changed it."),
       },
       handle(async (input, extra) => {
         if (!control.showPanel) throw new Error("This runner can't show panels yet.");
@@ -889,8 +908,9 @@ export function buildThreadbearTools(
         if (caller) {
           // What its runs reach: the thread it sends to, or new threads the
           // runner starts (outside any sandbox this caller is in).
-          const was: Authority = current.threadId ? await accessOf(current.threadId) : { mode: current.permissionMode ?? 'full', confined: false };
-          const raised = !current.threadId && permissionMode !== undefined && raises(permissionMode, was.mode);
+          const modes = scheduleModes(current);
+          const was: Authority = current.threadId ? await accessOf(current.threadId) : { mode: modes.ceiling, confined: false };
+          const raised = !current.threadId && permissionMode !== undefined && raises(permissionMode, modes.floor);
           const will: Authority = raised ? { mode: permissionMode!, confined: false } : was;
           // What it sends (its title goes into the message too), where, or
           // that it runs again; not its login, model or zone, and not pausing it.
@@ -907,7 +927,9 @@ export function buildThreadbearTools(
           ];
           // Setting the mode it already has is left out, so a write that
           // lands after someone else lowers it can't raise it back.
-          if (permissionMode !== undefined && !current.threadId && permissionMode === was.mode) permissionMode = undefined;
+          // Only a mode it has itself: one it inherits is set, so the runs keep
+          // it if the default changes.
+          if (permissionMode !== undefined && !current.threadId && permissionMode === current.permissionMode) permissionMode = undefined;
           // Moving it re-approves its check there too (Scheduler.update).
           const checkNow = typeof check === 'string' ? check : newFolder !== undefined ? current.check : undefined;
           card = checkGuard(checkNow, current.threadId ? await threadFolder(current.threadId) : (newFolder ?? (current.cwd ? path.resolve(expandHome(current.cwd)) : undefined)), caller);
@@ -1237,6 +1259,21 @@ export function buildThreadbearTools(
     }
   };
 
+  // Review by another lab (runner/lab-review.ts): a review thread's
+  // end_turn gives its verdict, and the thread it reviewed answers each
+  // finding, before either can end. Refused at most FINDINGS_REFUSALS
+  // times a turn, then taken as it is: a session that kept end_turn's
+  // older form can't send findings.
+  const checkFindings = (input: Record<string, unknown>, needs: string, events: PersistedEvent[]): void => {
+    const problem = findingsProblem(control.reviewOwes?.(selfId), input, needs);
+    if (problem && refusalsThisTurn(events, FINDINGS_REFUSED) < FINDINGS_REFUSALS) throw new Error(problem);
+  };
+  const findingsArg = z
+    .array(z.record(z.string(), z.unknown()))
+    .max(MAX_FINDINGS)
+    .optional()
+    .describe('Only when a code review asks, in the shape its message gives.');
+
   const waitForArg = z
     .array(z.union([z.string(), z.object({ thread: z.string(), until: z.string().max(MAX_UNTIL) })]))
     .max(MAX_WAIT_FOR)
@@ -1253,7 +1290,7 @@ export function buildThreadbearTools(
       endTurnDescription(codex ? 'codex' : 'claude', bulletReplies(), true),
       {
         headline: z.string().optional().describe('One line, at most 80 characters, for the sidebar and notifications: the result, or what you need from them.'),
-        needs: z.enum(['you', 'nothing']).optional().describe('"you" when the user has to do something before this can go on (an approval, a decision, a key, something to look at, or trying what you made when only they can tell whether it works); "nothing" when it is done or still going by itself. Left out, it follows the asks.'),
+        needs: z.enum(['you', 'nothing']).optional().describe(`"you" when the user has to do something before this can go on (an approval, a decision, a key, something to look at, or trying what you made when only they can tell whether it works); "nothing" when it is done or still going by itself. ${WHOLE_JOB} Left out, it follows the asks.`),
         asks: z
           .array(
             z.object({
@@ -1279,6 +1316,9 @@ export function buildThreadbearTools(
                 .max(3)
                 .optional()
                 .describe('Where to go to do it or judge it: the page, the PR, the file. Give one whenever there is somewhere to go.'),
+              ...(opts.runAsks?.() === true
+                ? { run: z.string().optional().describe("A shell command for them to run with one press, when it's theirs to run and you can't (prod, a deploy). The card shows it with a Run button; it runs once in this thread's folder with no way to answer a prompt, and the output comes back to you as a message.") }
+                : {}),
             }),
           )
           .max(10)
@@ -1289,6 +1329,12 @@ export function buildThreadbearTools(
           .max(3)
           .optional()
           .describe('With needs "nothing": follow-ups worth doing next, in the user\'s voice, which they read later with this thread forgotten: which app or thing, and what they\'d see change or get, in their words, 8 to 15 words. See the description. Only ones that really came up; usually none.'),
+        // The agent's own "anything else?" before Mike has to type it
+        // (experiment looseEnds; docs/protocol.md, "Loose ends"): the
+        // runner sees git and threads, not a reply worth sending.
+        ...(opts.looseEnds?.() === true
+          ? { open: z.array(z.string()).max(3).optional().describe('With needs "nothing": what\'s still open that git and Threadbear can\'t see (a reply worth sending, a decision waiting elsewhere, a job still running), a short line each; [] when nothing is. The done card lists them.') }
+          : {}),
         byline: z
           .string()
           .optional()
@@ -1302,9 +1348,16 @@ export function buildThreadbearTools(
           .optional()
           .describe('Hibernates this thread once the turn is over, until 2h, 1d, tomorrow, an ISO time with its offset, "restart" (the runner next starting), "release" (it starting on a new release) or words saying when ("when the phone arrives"), with needs "nothing": when the user asked for that, or when the rest waits on a message (one wakes it), until it should have come. Asked after you called end_turn? Call it again with this.'),
         waitFor: waitForArg,
+        findings: findingsArg,
       },
       handle(sayingOpenCards(async (input) => {
         checkSnooze(input.snooze);
+        // Refused rather than dropped, so the agent doesn't tell them there's
+        // a Run button when the card has none.
+        for (const ask of (input as { asks?: { run?: unknown }[] }).asks ?? []) {
+          const problem = typeof ask.run === 'string' ? runCommandProblem(ask.run) : undefined;
+          if (problem) throw new Error(problem);
+        }
         const parsed = needsFromTool(input);
         const needs = parsed?.needs ?? 'nothing';
         await checkWaitFor(input.waitFor, needs);
@@ -1312,6 +1365,7 @@ export function buildThreadbearTools(
         const events = await turnEvents();
         const repeat = repeatEndTurn(events, input);
         if (repeat) return repeat;
+        checkFindings(input, needs, events);
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
         if (needs === 'you' && offersToTakeItBack(asks) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
@@ -1347,7 +1401,7 @@ export function buildThreadbearTools(
       END_TURN_TOOL,
       endTurnDescription(codex ? 'codex' : 'claude', bulletReplies()),
       {
-        needs: z.enum(['you', 'nothing']).optional().describe('"you" when the user has to do something before this can go on; "nothing" when it is done. Left out, it follows the asks.'),
+        needs: z.enum(['you', 'nothing']).optional().describe(`"you" when the user has to do something before this can go on; "nothing" when it is done. ${WHOLE_JOB} Left out, it follows the asks.`),
         summary: z
           .array(z.string())
           .max(8)
@@ -1396,6 +1450,7 @@ export function buildThreadbearTools(
           .optional()
           .describe('Hibernate this thread once the turn is over, until 30m, 2h, 1d, tomorrow, an ISO time with its offset, "restart" (until the runner next starts), "release" (until it starts on a new release), or words saying when ("when the phone arrives"). Only with needs "nothing": when the user has asked for this thread to be snoozed or hibernated, or when the rest waits on a message (one wakes it), until it should have come. If they ask after you have called end_turn, call it again with this.'),
         waitFor: waitForArg,
+        findings: findingsArg,
       },
       handle(sayingOpenCards(async (args) => {
         checkSnooze(args.snooze);
@@ -1433,6 +1488,7 @@ export function buildThreadbearTools(
         // and where, so Mike gets an ask with the page to do it on rather
         // than an error buried in a work group (connectors.ts).
         const events = await turnEvents();
+        checkFindings(args, needs, events);
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
         if (needs === 'you' && offersToTakeItBack(asks ?? []) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
@@ -1552,7 +1608,7 @@ export function buildThreadbearTools(
         const words = (query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
         const want = new Set(include ?? ['inbox']);
         const known = new Set(here.map((t) => t.id));
-        const far = rt.threads.filter((t) => !known.has(t.threadId) && (query ? words.every((w) => `${t.title}\n${t.preview}`.toLowerCase().includes(w)) : want.has(remoteWhere(t))));
+        const far = rt.threads.filter((t) => !known.has(t.threadId) && (query ? words.every((w) => `${t.title}\n${t.preview}\n${t.keywords ?? ''}`.toLowerCase().includes(w)) : want.has(remoteWhere(t))));
         const rows = [
           ...here.map((t) => ({ at: t.lastActivityAt, text: line(t) })),
           ...far.map((t) => ({ at: t.lastActivityAt, text: remoteLine(t, runnerName(rt, t.runnerId)) })),
@@ -1699,7 +1755,9 @@ export function buildThreadbearTools(
           text: head + text,
           title: title?.trim() || firstLineSafely(text, 200) || undefined,
           cwd: cwd!,
-          ...(confined ? { confined } : {}),
+          // From a sandboxed thread: shut in, or out with the user's yes on
+          // the card above (ask() asks whenever it wouldn't be shut in).
+          ...(confined ? { confined } : caller?.confined ? { unconfine: true } : {}),
           accountId: await account(acc),
           ...(p !== undefined && !acc ? { poolId: pool(p) } : {}),
           model,
@@ -1833,18 +1891,24 @@ export function buildThreadbearTools(
       handle(async ({ folder: f, runner: to, threadId, id: alias, account: acc, then }, extra) => {
         const id = await resolve(threadId ?? alias);
         if (to?.trim()) {
-          const mover = opts.remote?.()?.move;
-          if (!mover) throw new Error("Moving a thread to another machine needs the main Mac's runner, connected to Threadbear's backend, with the moveToRunner experiment on.");
+          const remote = opts.remote?.();
+          const mover = remote?.move;
+          if (!mover || !remote.runners) throw new Error("Moving a thread to another machine needs the main Mac's runner, connected to Threadbear's backend, with the moveToRunner experiment on.");
           if (then?.trim()) throw new Error('`then` only goes with a folder move. Send the message after: it waits and moves with the thread.');
+          // The runner is picked now, before any card, and the move goes to
+          // that one by id: a name is another Mac's own word and can change
+          // while the card is up.
+          const dest = pickRunner(to, await remote.runners());
+          if ('problem' in dest) throw new Error(dest.problem);
           // It runs on another machine from then on: always the user's call
           // from a thread with less than full access.
           const caller = await restricted();
           if (caller) {
             const t = id === selfId ? undefined : await accessOf(id);
             const name = threadName(id, t?.title ?? '');
-            await confirm('move_thread', [`Move ${name} to the runner ${to.trim()}: it carries on there, on that machine`], { threadId: id, runner: to.trim(), ...(f ? { folder: f } : {}), ...(acc ? { account: acc } : {}) }, extra?.signal);
+            await confirm('move_thread', [`Move ${name} to the runner ${dest.name} (${dest.id}): it carries on there, on that machine`], { threadId: id, runner: dest.id, runnerName: dest.name, ...(f ? { folder: f } : {}), ...(acc ? { account: acc } : {}) }, extra?.signal);
           }
-          return mover({ threadId: id, runner: to.trim(), ...(f?.trim() ? { cwd: f.trim() } : {}), ...(acc?.trim() ? { accountId: acc.trim() } : {}) });
+          return mover({ threadId: id, runnerId: dest.id, runnerName: dest.name, ...(f?.trim() ? { cwd: f.trim() } : {}), ...(acc?.trim() ? { accountId: acc.trim() } : {}) });
         }
         if (!f?.trim()) throw new Error('folder is required (or runner, to move it to another machine).');
         // Raising access (above). A thread with more access than this one
@@ -1947,10 +2011,11 @@ export const SHOWING_THE_USER =
   "For a single file or link they should look at (a doc, a screenshot, a preview URL, a PR), use pin, with show: true to open it in Threadbear's side pane rather than running `open`. " +
   "To put one of Threadbear's own panels in front of them (this thread's Highlights, a patch panel such as the Convex dashboard, Usage), use show_panel.";
 
-// With the richBlocks experiment on (experiments.ts): the Mac and iPhone
-// apps draw these fences as what they show, in a box with a switch to the
-// source (Ayush's bearfooding notes, 6 Nov). Agents don't reach for a
-// diagram unless they know it'll be drawn.
+// The Mac and iPhone apps draw these fences as what they show, in a box
+// with a switch to the source (Ayush's bearfooding notes, 6 Nov). Agents
+// don't reach for a diagram unless they know it'll be drawn. An experiment
+// until 10 Nov; made standard after the one diagram an agent drew was one
+// Mike wanted bigger.
 export const RICH_BLOCKS_LINE =
   'Threadbear draws a ```mermaid block in your reply as a diagram, and a ```html block as a small static page (no scripts or network: inline CSS, SVG and data: images only), each with a switch to its source. Use one when a picture explains better than words.';
 
@@ -2011,7 +2076,7 @@ export function patchesLine(guide = guidePath(), exists: (p: string) => boolean 
 // What a Claude session's threadbear server tells it, standing in every
 // turn's context. Measured by the context budget test with the tools
 // (test/unit/context-budget.test.ts), so growth is a choice.
-export function serverInstructions(selfId: string, o: { one: boolean; bulletReplies: boolean; pocket: boolean; projects: boolean; richBlocks?: boolean }): string {
+export function serverInstructions(selfId: string, o: { one: boolean; bulletReplies: boolean; pocket: boolean; projects: boolean }): string {
   const guide = guideLine();
   const patches = patchesLine();
   return (
@@ -2022,7 +2087,7 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
     'These tools manage Threadbear itself: list and read threads, start new ones, message them, rename, snooze, archive, move and delete them, schedule messages for later (once or on a cron), and keep the user\'s projects (groupings above folders with goals, state and notes) up to date. ' +
     'Use move_thread when the work belongs in another folder (for example a repo), so this thread runs there from the next turn. ' +
     `${SHOWING_THE_USER} ` +
-    (o.richBlocks ? `${RICH_BLOCKS_LINE} ` : '') +
+    `${RICH_BLOCKS_LINE} ` +
     (o.pocket ? `${POCKET_LINE} ` : '') +
     (o.projects ? `${FILING_PROJECTS} ` : '') +
     (o.one
@@ -2033,13 +2098,13 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
   );
 }
 
-export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, scheduleChecks?: () => boolean, remote?: () => RemoteControl | undefined, richBlocks: () => boolean = () => false, replyButtons?: () => boolean): McpSdkServerConfigWithInstance {
+export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, runAsks?: () => boolean, looseEnds?: () => boolean): McpSdkServerConfigWithInstance {
   const one = oneReply();
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: RUNNER_VERSION,
-    instructions: serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects), richBlocks: richBlocks() }),
-    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, scheduleChecks, remote, replyButtons }),
+    instructions: serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects) }),
+    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, runAsks, looseEnds }),
   });
   server.tools = [...ALWAYS_ASK_TOOLS].map((name) => ({ name: name.split('__').at(-1)!, permission_policy: 'always_ask' as const }));
   return server;

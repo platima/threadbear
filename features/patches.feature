@@ -36,6 +36,21 @@ Feature: What a folder's patches give a thread
     And I show the "xcode.simulator" section of the pane
     Then the image panel shows a picture
 
+  @manual @gpui-pending @panel.web
+  Scenario: A url panel's link to another site doesn't take over the panel
+    When a patch's url panel shows its page on localhost with a link to a video on another site
+    And I click the link
+    Then the video opens where Default says, in the browser or over the panel with Back
+    And the panel still shows the patch's page
+    When I click a link to another of the patch's own pages
+    Then the panel's bar has Back, which goes back to the first page
+
+  @manual @gpui-pending @panel.web
+  Scenario: Closing a url panel stops what it's playing
+    When a patch's url panel is playing a video
+    And I close the panel's tab
+    Then the video stops
+
   @patches.run
   Scenario: A chip runs its action and it lands in the transcript
     When I open the thread "Add dark mode to the dashboard"

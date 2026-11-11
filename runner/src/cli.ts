@@ -19,6 +19,7 @@ import { landRefusal } from './follow-origin.ts';
 import { activityCommand } from './activity.ts';
 import { pairCommand } from './pair.ts';
 import { runnerKeysCommand } from './runner-keys.ts';
+import { pickRunner } from './moves.ts';
 
 const OPTIONS = {
   cwd: { type: 'string' },
@@ -116,7 +117,7 @@ const HELP = `tb: talk to the Threadbear runner
   tb actions <threadId> [--json]  the thread's actions, panels and patches (from its folder)
   tb highlights <threadId> [--json]  what the thread made, shared and pinned, and the librarian's brief
   tb panel <threadId> <panelId> [--json]  draws an image panel or fills a list panel now
-  tb show-panel <threadId> <panel> [--json]  opens a panel when the user looks at that thread
+  tb show-panel <threadId> <panel> [--reload] [--json]  opens a panel when the user looks at that thread (--reload: its page afresh)
   tb run <threadId> <actionId>    run one: a command's output is printed and goes into the thread
   tb schedule "text" (--at WHEN | --cron "0 9 * * 1-5") [--tz ZONE] [--title T]
               [--thread ID | --cwd DIR [--account ID | --pool ID] [--model M] [--effort L] [--ask | --auto | --full]]
@@ -518,7 +519,7 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
     case 'show-panel': {
       const id = await resolveId(client, args[0]);
       if (!args[1]) throw new Error('Name a panel, such as browser or highlights.');
-      const result = await client.call<{ available: boolean; shown?: boolean }>('threads.showPanel', { threadId: id, panel: args[1] });
+      const result = await client.call<{ available: boolean; shown?: boolean }>('threads.showPanel', { threadId: id, panel: args[1], ...(f.reload ? { reload: true } : {}) });
       if (f.json) console.log(JSON.stringify(result));
       else console.log(!result.available ? 'The Threadbear Mac app is not connected.' : result.shown ? 'The panel is open.' : 'The panel will open when the user next opens that thread.');
       return result.available ? 0 : 1;
@@ -772,6 +773,8 @@ function printSettings(s: Settings): void {
   console.log(`Follow main      ${s.followMain ? 'on' : 'off'}`);
   console.log(`Bullet replies   ${s.bulletReplies === false ? 'off' : 'on'}`);
   console.log(`One reply        ${s.oneReply ? 'on' : 'off'}`);
+  console.log(`Lab review       ${s.labReview === false ? 'off' : 'on'}`);
+  if (s.keepAwake !== undefined) console.log(`Keep Mac awake   ${s.keepAwake ? 'on' : 'off'}`);
   printModels(s);
 }
 
@@ -867,12 +870,11 @@ async function resolveApproval(client: RunnerClient, threadId: string, prefix: s
 // tb move --to: the runner by name or id (runners.list), then
 // threads.movePreview or threads.move on this runner.
 async function moveToRunner(client: RunnerClient, threadId: string, f: Flags): Promise<number> {
-  const want = String(f.to).toLowerCase();
   const { runners } = await client.call<{ runners: { id: string; name: string; online: boolean; isSelf?: boolean }[] }>('runners.list', {});
-  // Its id, its name, or a word of its name only it has ("cloud" for "Hetzner Cloud").
-  const partly = runners.filter((r) => r.name.toLowerCase().includes(want));
-  const runner = runners.find((r) => r.id === f.to) ?? runners.find((r) => r.name.toLowerCase() === want) ?? (partly.length === 1 ? partly[0] : undefined);
-  if (!runner) throw new Error(`No runner called ${String(f.to)}. There are: ${runners.map((r) => r.name).join(', ')}.`);
+  // Its id, its name, or a word of its name only it has ("cloud" for
+  // "Hetzner Cloud"), and never a guess between two (moves.ts pickRunner).
+  const runner = pickRunner(String(f.to), runners);
+  if ('problem' in runner) throw new Error(runner.problem);
   const params: Record<string, unknown> = { threadId, runnerId: runner.id };
   if (typeof f.cwd === 'string') params.cwd = f.cwd;
   if (typeof f.account === 'string') params.accountId = f.account;

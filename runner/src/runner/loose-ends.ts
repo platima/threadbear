@@ -8,7 +8,7 @@ import type { Runner, ThreadState } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { LooseEnd } from '../protocol.ts';
 import { experimentOn } from '../experiments.ts';
-import { childLooseEnds, scheduleLooseEnds, worktreeLooseEnds, type ChildThread } from '../loose-ends.ts';
+import { agentLooseEnds, childLooseEnds, editedLooseEnds, scheduleLooseEnds, worktreeLooseEnds, type ChildThread } from '../loose-ends.ts';
 
 // Opening a thread checks again at most this often: a click between
 // threads shouldn't run git each time.
@@ -33,10 +33,20 @@ export const looseEndsPart = {
     const run = (rt.looseEndsRun ?? 0) + 1;
     rt.looseEndsRun = run;
     rt.looseEndsAt = this.clock.now();
+    rt.looseEndsBusy = true;
     const ends: LooseEnd[] = [];
     try {
       const w = rec.worktree;
-      if (w && !w.removedAt) ends.push(...(await worktreeLooseEnds(w)));
+      const own = w && !w.removedAt ? w : undefined;
+      if (own) ends.push(...(await worktreeLooseEnds(own)));
+      // What it changed anywhere else, and the commits it made there.
+      this.catchUpHighlights(st);
+      const hl = rec.highlights;
+      const made = (hl?.items ?? []).filter((h) => h.kind === 'commit' && h.sha);
+      const commits = made.filter((h) => !h.pushed).map((h) => h.sha!);
+      const pushed = made.filter((h) => h.pushed).map((h) => h.sha!);
+      ends.push(...(await editedLooseEnds(hl?.edited ?? [], commits, own?.path, { pushed, dirs: [rec.cwd] })));
+      ends.push(...agentLooseEnds(rec.needs?.open));
       const children: ChildThread[] = [];
       for (const other of this.threads.values()) {
         const o = other.rec;
@@ -49,6 +59,8 @@ export const looseEndsPart = {
     } catch (e) {
       this.log.warn("couldn't check a thread's loose ends", { threadId: rec.id, error: String(e) });
       return;
+    } finally {
+      if (rt.looseEndsRun === run) rt.looseEndsBusy = false;
     }
     // A newer check started, or the card it was for has gone.
     if (rt.deleted || rt.looseEndsRun !== run || this.looseEndsCard(st) !== seq) return;
@@ -62,7 +74,8 @@ export const looseEndsPart = {
   // the card is still there). `opened`: only if the last was a while ago.
   recheckLooseEnds(this: Runner, st: ThreadState | undefined, opened = false): void {
     if (!st || !st.rec.looseEnds || this.looseEndsCard(st) !== st.rec.looseEnds.seq) return;
-    if (opened && this.clock.now() - (st.rt.looseEndsAt ?? 0) < RECHECK_ON_OPEN_MS) return;
+    // Nor while one is still going: a slow git or gh would pile them up.
+    if (opened && (st.rt.looseEndsBusy || this.clock.now() - (st.rt.looseEndsAt ?? 0) < RECHECK_ON_OPEN_MS)) return;
     void this.checkLooseEnds(st);
   },
 

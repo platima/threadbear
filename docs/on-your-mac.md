@@ -87,7 +87,10 @@ File references are where to look.
   your tailnet. The backend's admin key is in
   `secrets/convex-self-hosted.env`, and setup sets `PUSH_RELAY=off` on it,
   as the push relay only works with Convex cloud. runner.json gets
-  `sync.site`, the website's address.
+  `sync.site`, the website's address. With `--local` there's no
+  `tailscale serve` at all: the three stay on 127.0.0.1, the API and the
+  website on 13210 and 13211 inside the container as well as out, and
+  only this Mac can reach them.
 - **Apps:** `~/Applications/Threadbear.app` and
   `~/Applications/Threadbear Runner.app`, both built and signed on your Mac.
   If you turn on the `gpuiApp` experiment and run
@@ -108,7 +111,9 @@ File references are where to look.
   them stop when the app quits (`app/Sources/Threadbear/Views/TerminalPanel.swift`).
 - **Files:** the data folder `~/Library/Application Support/Threadbear`
   (threads, settings, `secrets/`, runner releases, the pinned release key
-  `upstream-signers`, and `sync-sent.json`, hashes of what's already in your
+  `upstream-signers`, the Mac app's `app-drafts.json`, what's typed but not
+  sent in each message box, so a quit or relaunch doesn't lose it, and
+  `sync-sent.json`, hashes of what's already in your
   Convex mirror so a restart sends only what changed, and
   `shared-pools.json`, the last pools your Convex backend had, which every
   runner shares, so one starts with them while the backend can't be reached,
@@ -232,16 +237,17 @@ File references are where to look.
   rewrites anything: a commit made only there stays, and `tb status` says so.
   `tb land` refuses in that repo. If `origin` is Mike's repo rather than
   your own, leave this off.
-- **Schedule checks** (`runner/src/schedule-check.ts`, experiment
-  `scheduleChecks`, off by default): a schedule's check command runs in
+- **Schedule checks** (`runner/src/schedule-check.ts`): a schedule's
+  check command, if it has one, runs in
   `/bin/sh` before each run, as you, for at most a minute (or up to five,
   if the schedule says). Each keeps a
   state file (and a note that a held check was told about, `<id>.held`) in `schedule-checks/` in Threadbear's data folder, and
   beside it what the check last printed (`<id>.<hash>.kept.json`, readable
   only by you) until a run carrying it has been sent, and, while a check
   runs, which runner process is running it (`<id>.running.json`).
-- **Keeping the Mac awake** (`runner/src/keep-awake.ts`, experiment
-  `keepAwake`, off by default): while a thread is working and for 3
+- **Keeping the Mac awake** (`runner/src/keep-awake.ts`, on unless
+  Settings > General > Sleep or `"keepAwake": false` in `runner.json`
+  turns it off): while a thread is working and for 3
   minutes after, the runner runs macOS's `/usr/bin/caffeinate -i -w
   <runner pid>`, which stops idle sleep only (the display still sleeps
   and the screen still locks). While it does, it reads `pmset -g batt`
@@ -280,6 +286,9 @@ File references are where to look.
 - **Small model calls** (`runner/src/models/`): thread titles, filing
   threads into projects (the librarian, every 5 minutes) and similar jobs
   send short excerpts of your threads to `claude -p` on your own logins.
+  It also asks for a few search words for each thread, and threads from
+  before that get them in batches of 15 (title, first message and last
+  reply), every 2 minutes until each has some, once.
   When a project's notes pass 12,000 characters, the librarian sends them
   the same way to be rewritten shorter, and keeps the old notes in the
   data folder's `project-notes/` (the last 5 for each project).
@@ -316,7 +325,10 @@ File references are where to look.
   held back the same way (`runner/src/claude-trust.ts`): the runner reads
   those files and the scripts they reach to hash them, runs `git ls-files`
   in the folder to find skills in folders under it, and keeps what you
-  trusted in the same `patch-trust.json`.
+  trusted in the same `patch-trust.json`. Beside it,
+  `patch-trust-unvouched.json` lists worktrees a thread moved from another
+  Mac changed the patches or Claude settings of, which Threadbear's own
+  checkout's standing trust doesn't reach.
 - **Menus on macOS 27.2** (`app/Sources/Threadbear/DragSpace.swift`): every
   5 seconds, and before a button opens a menu, the app asks the window
   server which Spaces its own windows are on, and takes them off the drag
@@ -369,7 +381,7 @@ File references are where to look.
 | GitHub (the Windows app) | the fork's | Only the installed Windows app (see "On Windows"): `api.github.com/repos/<the fork>/releases/latest` once a day (the recent releases, `.../releases?per_page=10`, for a copy that is itself a pre-release, since "latest" never includes one), to say in its rail when a newer release is out. A plain request: GitHub sees the PC's address and the app's user agent, and nothing else is sent. Settings, "This app", turns it off. |
 | downloads.claude.ai, registry.npmjs.org | Anthropic, npm | CLI version checks and installs; `npm ci` |
 | registry.npmjs.org (the Windows runner) | npm | Only a Windows install, on the runner's first start after it is installed or updated: the one tarball of the Claude Agent SDK (about 4 MB) that `runner/package-lock.json` names, checked against the hash in that file before it is unpacked (see "On Windows"). A plain request: npm sees the PC's address. Nothing else is sent. |
-| Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `cardReviewer` experiment on (off by default), an approval card in a thread on Auto, with the thread's first and latest messages, goes to Opus through the same CLI so it can decide in your place. With the `labReview` experiment on (off by default), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one. After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
+| Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `cardReviewer` experiment on (off by default), an approval card in a thread on Auto, with the thread's first and latest messages, goes to Opus through the same CLI so it can decide in your place. Unless you turn off Settings > General > Code review (`"labReview": false`), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one (or a fresh session of the same provider, with no other login). After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
 | OpenCode's Zen (opencode.ai), models.dev, and whichever providers you've logged it into | theirs | Only with the `acpAgents` experiment on and a thread on OpenCode: that thread's prompts and tool output, through the official CLI, and small jobs' text when a pool of only OpenCode logins is picked for them in Settings |
 | Cursor (api2.cursor.sh) | theirs | Only with the `acpAgents` experiment on and a thread on Cursor: the same, on your own login |
 | Mike's push relay | Mike's | Only when a paired iPhone or Android phone gets a notification (an Android phone's goes on to Google's Firebase Cloud Messaging, from the relay). It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |

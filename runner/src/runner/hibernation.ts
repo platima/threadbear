@@ -13,7 +13,7 @@ import { parseWhen } from '../when.ts';
 import type { WaitFor } from '../needs.ts';
 import path from 'node:path';
 import { providerName } from '../providers.ts';
-import { LAB_REVIEW_REPLY_CHARS } from './lab-review.ts';
+import { LAB_REVIEW_REPLY_CHARS, addVerdict, findingLine } from './lab-review.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
 
 // How long a thread waiting on others sleeps at most when end_turn gave no
@@ -252,8 +252,21 @@ export const hibernationPart = {
       const edited = reviewer ? [...reviewEdits(this, reviewer)] : [];
       const findings = w.done.reply?.trim() || '(It gave no reply. read_thread has what it did.)';
       const edits = edited.length ? `\n\nIt was asked not to edit files but changed ${edited.join(', ')}. Look at those changes before going on, and keep or undo them.` : '';
-      text = `${who} reviewed the change you just made (thread ${id8}). Its findings:\n\n${findings}${edits}\n\n` +
-        'Check each finding against the code: fix what holds up and run the tests again. In your reply, say briefly what it found, what you fixed, and anything you left and why. If it found nothing, say so in a line and finish as you were.';
+      // Its verdict, numbered into the ledger (lab-review.ts): the agent
+      // answers each by id in end_turn, and can't end the turn without.
+      const ledger = st.rec.labReview;
+      const added = ledger ? addVerdict(ledger, reviewer?.rec.reviewVerdict) : [];
+      if (ledger) this.markDirty(st);
+      const round = ledger && ledger.rounds > 1 ? ` (review round ${ledger.rounds})` : '';
+      if (ledger && !ledger.unstructured && !added.length) {
+        text = `${who} reviewed the change you just made${round} (thread ${id8}) and found nothing that holds up.${edits}\n\nIts reply:\n\n${findings}\n\nSay so in a line in your reply and finish as you were.`;
+      } else if (added.length) {
+        text = `${who} reviewed the change you just made${round} (thread ${id8}). Its findings, numbered:\n\n${added.map(findingLine).join('\n')}\n\nIts reply, with the detail:\n\n${findings}${edits}\n\n` +
+          'Check each finding against the code: fix what holds up and run the tests again. When you call end_turn, answer every one in its `findings`, by number: `[{ "id": ' + added[0].id + ', "outcome": "fixed" }]`, one per finding, each "fixed", "disputed" with a note saying why it doesn\'t hold up, or "left" with a note saying what the user has to decide (that goes with needs "you" and an ask). Fixes get another review. In your reply, say briefly what it found and what you did about each.';
+      } else {
+        text = `${who} reviewed the change you just made (thread ${id8}). Its findings:\n\n${findings}${edits}\n\n` +
+          'Check each finding against the code: fix what holds up and run the tests again. In your reply, say briefly what it found, what you fixed, and anything you left and why. If it found nothing, say so in a line and finish as you were.';
+      }
     } else {
       text = `The review of your change (thread ${id8}) ${w.done?.how === 'deleted' ? 'was deleted' : 'was archived'} before it finished, so it wasn't reviewed. Say so in a line in your reply and finish as you were.`;
     }

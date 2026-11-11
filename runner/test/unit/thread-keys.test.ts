@@ -28,7 +28,7 @@ async function serve(extra: Opts = {}) {
   const gate = new CallerGate({ runner: h.runner, schedules: scheduler });
   const server = new RpcServer({ host: '127.0.0.1', port: 0, token, runner: h.runner, log: nullLogger, gate, methods: { ...scheduleMethods(scheduler), 'runner.restart': () => ({}), 'instructions.set': () => ({}), 'settings.update': () => ({}), 'pools.save': () => ({}), 'devices.pair': () => ({}) }, ...extra });
   const { port } = await server.listen();
-  return { h, server, token, port, url: `ws://127.0.0.1:${port}/rpc` };
+  return { h, server, token, port, url: `ws://127.0.0.1:${port}/rpc`, scheduler };
 }
 
 const thread = (h: ReturnType<typeof makeHarness>, mode: PermissionMode, title: string = mode) =>
@@ -329,7 +329,15 @@ test('reading the runner token file: Claude tools are denied it outside Full acc
     assert.equal(deny('Bash', { command: 'tb status' }), undefined);
     assert.ok(deny('Bash', { command: 'cat "$THREADBEAR_HOME"/secr*/*token*' }), 'a wildcard after the data dir');
     assert.ok(deny('Grep', { path: home, pattern: '^[a-z]{40}$' }), 'from the data dir, whatever the pattern');
-    assert.equal(deny('Grep', { path: os.homedir(), pattern: 'hello' }), undefined, 'from higher up, a pattern that does not name it');
+    // From higher up, a Grep reads every file under it whatever its pattern
+    // says (cross-lab review of #54, 11 Nov 2026); one beside it is fine.
+    assert.ok(deny('Grep', { path: path.dirname(home), pattern: 'hello' }), 'from higher up, whatever the pattern');
+    const beside = fs.realpathSync(fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), 'tb-beside-')));
+    try {
+      assert.equal(deny('Grep', { path: beside, pattern: 'hello' }), undefined, 'a folder beside it');
+    } finally {
+      fs.rmSync(beside, { recursive: true, force: true });
+    }
     assert.ok(denySecrets('Read', { file_path: 'runner-token' }, home, path.join(home, 'secrets')), 'a relative path, against the call\'s cwd');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -517,6 +525,27 @@ test('a draining server takes the same care with a thread as the main one', asyn
     const c = await RunnerClient.connect(url, token, { server: 'drain' });
     await assert.rejects(c.call('threads.create', { text: 'x', permissionMode: 'full', accountId: 'claude-3' }), refused);
     assert.equal((await c.call<{ limited: boolean }>('auth.whoami')).limited, true);
+    c.close();
+  } finally {
+    await server.close();
+  }
+});
+
+// Daybreak, 10 Nov (finding 71), through the RPC gate: a schedule that
+// inherits an Ask default can't be switched to Auto with a thread's key.
+test("ask: schedules.update can't raise a schedule that inherits an Ask default", async () => {
+  const { h, server, token, url, scheduler } = await serve();
+  h.runner.cfg.defaults.permissionMode = 'ask';
+  const me = thread(h, 'ask');
+  const sc = await scheduler.create({ text: 'Tidy', cron: '0 9 * * *', title: 'Inherits', cwd: h.home, accountId: 'claude-3' });
+  try {
+    const c = await as(url, token, me.id);
+    await assert.rejects(c.call('schedules.update', { scheduleId: sc.id, permissionMode: 'auto' }), refused);
+    assert.equal(scheduler.find(sc.id).permissionMode, undefined);
+    await assert.rejects(c.call('schedules.update', { scheduleId: sc.id, permissionMode: 'full' }), refused);
+    // Its runs have Ask, as this thread does: changing what it sends is fine, and so is setting Ask.
+    await c.call('schedules.update', { scheduleId: sc.id, text: 'Tidy it', permissionMode: 'ask' });
+    assert.equal(scheduler.find(sc.id).permissionMode, 'ask');
     c.close();
   } finally {
     await server.close();

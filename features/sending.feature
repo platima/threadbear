@@ -82,3 +82,14 @@ Feature: Sending a message
     When I paste the picture into the composer
     And the composer holds 1 picture
     Then hovering chip 1 shows its picture
+
+  # The Swift app keeps drafts only when it's Mike's own app (AppDelegate
+  # starts its DraftStore), never in a scripted run, so this one is driven on
+  # the GPUI app only.
+  @composer.textbox @swift-pending
+  Scenario: What's typed and not sent is still in the box after the app is quit and opened again
+    When I type "half a thought about the backups" in the composer
+    And I wait a moment
+    And the app is quit and opened again
+    And I open the thread "Morning brief"
+    Then the composer says "half a thought about the backups"

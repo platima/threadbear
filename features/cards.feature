@@ -70,3 +70,11 @@ Feature: Answering the agent
   Scenario: A review card says what it's comparing
     When I open the thread "Compare account picker designs"
     Then a review card says "images · pending"
+
+  @manual @gpui-pending @cards.run
+  Scenario: A command on the card runs once and the agent hears how it went
+    When I open a thread whose card carries a command
+    Then the card shows the whole command and the folder it runs in
+    When I press Run
+    Then the button shows it's running and can't be pressed again
+    And the agent is told the output and carries on

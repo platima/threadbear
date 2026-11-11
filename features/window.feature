@@ -32,6 +32,15 @@ Feature: The window and its panels
     And I open the app again
     Then the window is where it was
 
+  # A real drag through the window server, which a scripted click can't make:
+  # features/tools/window-drag.ts does this from each part of the top of the
+  # window on Tinker Desk's desktop (it takes the pointer, so never on Mike's).
+  @dock.titlebar @manual
+  Scenario: Dragging the top of the window moves it, and a click on the title still renames
+    When I drag the window by the bar over the thread, by its title and beside it
+    Then the window moves with the pointer each time
+    And a click on the title starts renaming the thread
+
   @foundation.zoom
   Scenario: Zooming makes everything bigger, and Actual Size puts it back
     Given I open the thread "Morning brief"

@@ -220,6 +220,7 @@ final class RenderCache: @unchecked Sendable {
     /// A reply that links a reply button renders again when a button
     /// changes (made, pressed, failed, a press on its way).
     static func buttonStamp(_ row: TranscriptRow) -> Int {
+        if case .asks(let card) = row.content { return card.asks.contains { $0.run != nil } ? ReplyButtons.shared.generation : -1 }
         guard case .assistant(let item) = row.content, ReplyButtons.mayHold(item.text) else { return -1 }
         return ReplyButtons.shared.generation
     }
@@ -1107,16 +1108,22 @@ enum RowRenderer {
                 output.append(NSAttributedString(string: "  " + ApprovalText.shown(folder), attributes: attributes))
             }
         }
-        // Codex says why it's asking, in the model's own words ("Allow
-        // creating b.txt in the current directory?").
-        if let reason = item.request.input["reason"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty {
+        // Threadbear's own gates say what they'd do ("Switch this thread to
+        // Full access"), which the generic title doesn't.
+        if let why = ApprovalText.runnerReason(item.request) {
+            output.append(NSAttributedString(string: "\n" + why, attributes: Theme.text(Theme.detailFont, color: .labelColor, line: TypeScale.scaled(19))))
+        }
+        // Why it's asking: Claude's CLI says (Auto's safety check, a rule, a
+        // hook), and Codex says in the model's own words ("Allow creating
+        // b.txt in the current directory?").
+        if let reason = (item.request.reason ?? item.request.input["reason"]?.stringValue)?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty {
             output.append(NSAttributedString(string: "\n" + ApprovalText.shown(reason), attributes: Theme.text(Theme.detailFont, color: Theme.quietText, line: TypeScale.scaled(19))))
         }
         return output
     }
 
-    /// The command, the start of what would be written to a file, the page,
-    /// or the tool's input, in a monospaced block. The file's name and
+    /// The command, what would be written to a file, the page, or the
+    /// tool's input, in a monospaced block. The file's name and
     /// folder are in the title above it. A command and a tool's input are
     /// shown whole, every line and field, as Allow allows all of them: the
     /// card grows to fit (Daybreak, 7 Nov 2026, a long command's tail was
@@ -1128,7 +1135,7 @@ enum RowRenderer {
             // are part of what Allow allows; a reason or description isn't.
             // Characters that hide, break or reorder text are named, not
             // drawn: the card shows what the shell will read (ApprovalText.shown).
-            let output = NSMutableAttributedString(attributedString: mono(ApprovalText.shown(command), .labelColor))
+            let output = NSMutableAttributedString(attributedString: mono(ApprovalText.shownExactly(command), .labelColor))
             let extra = ApprovalText.shown(ToolPresentation.fields(input, whole: true).filter { !["command", "description", "reason"].contains($0.key) })
             if !extra.isEmpty {
                 output.append(mono("\n", .labelColor))
@@ -1143,19 +1150,28 @@ enum RowRenderer {
                                 title: request.title, input: input)
             if var diff = DiffBuilder.diff(forTool: call), !diff.hunks.isEmpty {
                 // What it writes, with any character that hides, breaks or
-                // reorders a line named, as for a command.
+                // reorders a line named, and tabs and spaces at a line's end
+                // shown, as for a command.
                 diff.hunks = diff.hunks.map { hunk in
                     var hunk = hunk
-                    hunk.lines = hunk.lines.map(ApprovalText.shown)
+                    hunk.lines = hunk.lines.map(ApprovalText.shownExactly)
                     return hunk
                 }
-                // A file Threadbear runs as code, or can't rule out, shows
-                // every line it writes: a hook past the eighth line is still a hook.
-                let code = request.title.contains("Threadbear runs this file as code")
-                    || request.title.contains("Threadbear can't tell whether this file runs as code")
-                return diffText([diff], maxLines: code ? 1_000_000 : 8, inset: 0).0
+                // Every line it writes, and every argument the diff doesn't
+                // draw: Allow allows all of it, so the card grows to fit, as
+                // for a command (Codex review, 10 Nov 2026: a ninth line past
+                // eight harmless ones was hidden with no note).
+                let output = NSMutableAttributedString(attributedString: diffText([diff], maxLines: 1_000_000, inset: 0).0)
+                let extra = ApprovalText.fieldsBeyondDiff(input)
+                if !extra.isEmpty {
+                    output.append(mono("\n", .labelColor))
+                    output.append(fieldsText(extra))
+                }
+                return output
             }
-            return mono(ApprovalText.shown(ToolPresentation.shortTitle(ApprovalText.filePath(request) ?? "", limit: 300)), Theme.quietText)
+            // Nothing a diff can draw (a notebook cell, say): every field.
+            let fields = ApprovalText.shown(ToolPresentation.fields(input, whole: true)) + ApprovalText.lineBreakNotes(input)
+            if !fields.isEmpty { return fieldsText(fields) }
         }
         if !request.name.hasPrefix("mcp__"), let url = input["url"]?.stringValue {
             return mono(ApprovalText.shown(url), .labelColor)
@@ -1549,6 +1565,7 @@ enum RowRenderer {
                 output.append(NSAttributedString(string: "\n", attributes: [.font: small, .paragraphStyle: noteStyle]))
                 output.append(noteText(place, font: small, color: Theme.faintText, style: noteStyle, offset: noteOffset))
             }
+            if let run = ask.run { appendRun(run, ask: i, indent: indent, to: output) }
             // Links on a row of their own, over the answers: going to look
             // comes before answering.
             var links: [AskButton] = []
@@ -1591,7 +1608,52 @@ enum RowRenderer {
                 ]))
             }
         }
+        // The review's ledger under the asks (one it left for Mike is
+        // usually what they're about): under them all, or on the last page
+        // when the composer pages a tall card.
+        if let review = card.review, card.isOpen, page == nil || page == card.asks.count - 1 {
+            let (labelStyle, labelOffset) = Theme.lines(TypeScale.scaled(19), font: small, before: zoomed(10))
+            output.append(reviewText(review, inset: 0, labelStyle: labelStyle, labelOffset: labelOffset))
+        }
         return output
+    }
+
+    /// An ask's command, whole and in a box, as what's shown is what Mike is
+    /// agreeing to; where it runs; and Run, which shows how the press is
+    /// going (docs/protocol.md, "Run on the card").
+    private static func appendRun(_ run: AskRun, ask i: Int, indent: CGFloat, to output: NSMutableAttributedString) {
+        let pad = MarkdownRenderer.codePad
+        let (box, boxOffset) = Theme.lines(Theme.codeLine, font: Theme.codeFont, spacing: pad + zoomed(6), before: pad + zoomed(8), head: indent + pad, tail: -pad)
+        box.lineBreakMode = .byCharWrapping
+        output.append(NSAttributedString(string: "\n", attributes: [.font: Theme.codeFont, .paragraphStyle: box]))
+        output.append(NSAttributedString(string: run.command.replacingOccurrences(of: "\n", with: "\u{2028}"), attributes: [
+            .font: Theme.codeFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: box, .baselineOffset: boxOffset,
+            .tbBlockBackground: Theme.codeBackground,
+        ]))
+        let small = Theme.smallFont
+        let (noteStyle, noteOffset) = Theme.lines(TypeScale.scaled(19), font: small, spacing: zoomed(2), head: indent)
+        let button = run.buttonId.flatMap { ReplyButtons.shared.known($0)?.button }
+        let failed = button.map { $0.failed?.error } ?? run.failed
+        var notes: [(String, NSColor)] = []
+        if let cwd = run.cwd { notes.append(("In " + (cwd as NSString).abbreviatingWithTildeInPath, Theme.faintText)) }
+        if let failed { notes.append((failed, .systemRed)) }
+        for (words, color) in notes {
+            output.append(NSAttributedString(string: "\n", attributes: [.font: small, .paragraphStyle: noteStyle]))
+            output.append(noteText(words, font: small, color: color, style: noteStyle, offset: noteOffset))
+        }
+        guard let id = run.buttonId else { return }
+        let font = Theme.labelFont
+        let (style, offset) = Theme.lines(TypeScale.scaled(38), font: font, before: zoomed(6), head: indent)
+        let pressing = ReplyButtons.shared.isPressing(id)
+        let item: AskButton
+        if button?.pressed != nil {
+            item = AskButton(title: "✓ Ran", action: "", style: .plain)
+        } else if pressing || button?.running != nil || (button == nil && run.running == true) {
+            item = AskButton(title: "Running…", action: "", style: .plain)
+        } else {
+            item = AskButton(title: failed == nil ? "▶ Run" : "▶ Run again", action: "run:\(i):0", style: .primary)
+        }
+        appendButtons([item], to: output, font: font, style: style, offset: offset)
     }
 
     /// A line of the card's buttons: `.tbAction` runs that
@@ -1604,15 +1666,17 @@ enum RowRenderer {
             // no-break ones keep a short title from wrapping apart.
             var attributes: [NSAttributedString.Key: Any] = [
                 .font: font, .foregroundColor: item.style.textColor, .paragraphStyle: style, .baselineOffset: offset,
-                .tbAction: item.action, .tbButton: item.style.rawValue,
+                .tbButton: item.style.rawValue,
             ]
+            // No action: a button that's busy shows but can't be pressed.
+            if !item.action.isEmpty { attributes[.tbAction] = item.action }
             if let peek = item.peek { attributes[.tbPeek] = peek }
             output.append(NSAttributedString(string: "\u{00A0}\u{00A0}\u{00A0}" + item.title.replacingOccurrences(of: " ", with: "\u{00A0}") + "\u{00A0}\u{00A0}\u{00A0}", attributes: attributes))
         }
     }
 
     /// An ask's answers as rows (one reply, docs/reply-card-design A): a
-    /// circle, the label, "my pick" on the agent's, and under it what
+    /// circle, the label, a star and "Recommended" on the agent's, and under it what
     /// picking it does, in a box with a line between rows, then "Something
     /// else…". The whole row is the click (`.tbRow`, `pick:<ask>:<n>`), as
     /// on the done card; picking fills its circle. Each row is one
@@ -1657,13 +1721,17 @@ enum RowRenderer {
             let isSuggested = !own && ask.suggested == n
             output.append(isPicked
                 ? symbol("checkmark.circle.fill", label: "Picked", font: font, attributes: attributes, color: .controlAccentColor)
-                : symbol("circle", label: "Not picked", font: font, attributes: attributes, color: isSuggested ? .controlAccentColor : Theme.faintText))
+                : symbol("circle", label: "Not picked", font: font, attributes: attributes))
             output.append(NSAttributedString(string: "\t" + (own ? "Something else…" : choices[n]), attributes: attributes))
             if isSuggested {
+                // A small gold star and "Recommended" in grey, after Ghostex's:
+                // quieter than the accent-blue "my pick" it replaces (Mike, 9 Nov 2026).
                 var pickAttributes = attributes
                 pickAttributes[.font] = small
-                pickAttributes[.foregroundColor] = NSColor.controlAccentColor
-                output.append(NSAttributedString(string: "  my pick", attributes: pickAttributes))
+                pickAttributes[.foregroundColor] = NSColor.secondaryLabelColor
+                output.append(NSAttributedString(string: "  ", attributes: pickAttributes))
+                output.append(symbol("star.fill", label: "Recommended", font: NSFont.systemFont(ofSize: small.pointSize - 2), attributes: pickAttributes, color: Theme.recommendedStar))
+                output.append(NSAttributedString(string: " Recommended", attributes: pickAttributes))
             }
             if !own, n < ask.optionNotes.count, !ask.optionNotes[n].isEmpty {
                 var noteAttributes = attributes
@@ -1797,6 +1865,7 @@ enum RowRenderer {
         // the text view clips anything drawn left of its text.
         let inset = rowInset
         let (labelStyle, labelOffset) = Theme.lines(TypeScale.scaled(19), font: small, before: zoomed(10), head: inset)
+        if let review = card.review { output.append(reviewText(review, inset: inset, labelStyle: labelStyle, labelOffset: labelOffset)) }
         if let ends, !ends.isEmpty { output.append(looseEndsText(ends, inset: inset, labelStyle: labelStyle, labelOffset: labelOffset)) }
         guard !card.next.isEmpty else { return output }
         output.append(NSAttributedString(string: "\nOr carry on", attributes: [
@@ -1853,6 +1922,48 @@ enum RowRenderer {
             if end.isBooked, let when = end.at.flatMap(ISO8601.parse) { text = "\(bookedFormat.string(from: when)): \(text)" }
             if let id = end.threadId, let url = URL(string: "thread:\(id)") { attributes[.link] = url }
             output.append(NSAttributedString(string: "\t" + text, attributes: attributes))
+        }
+        return output
+    }
+
+    /// Review by another lab's ledger (protocol "Review by another lab"):
+    /// a line saying who reviewed and how it came out, which opens the
+    /// review thread, then each finding with what the agent did about it
+    /// (fixed, disputed and why, left for Mike, or no answer) and where.
+    /// Mike picked this over a fixes-only gate and a gate at landing
+    /// (11 Nov, thread d42a3d91). Plain lines: nothing on it is his to
+    /// press, as the agent has already acted on each.
+    private static func reviewText(_ review: LabReview, inset: CGFloat, labelStyle: NSParagraphStyle, labelOffset: CGFloat) -> NSAttributedString {
+        let output = NSMutableAttributedString()
+        let small = Theme.smallFont
+        var label: [NSAttributedString.Key: Any] = [
+            .font: small, .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: labelStyle, .baselineOffset: labelOffset,
+        ]
+        if !review.threadId.isEmpty, let url = URL(string: "thread:\(review.threadId)") { label[.link] = url }
+        output.append(NSAttributedString(string: "\n" + review.heading, attributes: label))
+        let font = Theme.bodyFont
+        let words = inset + ceil(font.pointSize * 1.2) + zoomed(8)
+        let (rowStyle, rowOffset) = Theme.lines(TypeScale.bodyLine, font: font, spacing: zoomed(2), before: zoomed(6), head: words, first: inset)
+        rowStyle.tabStops = [NSTextTab(textAlignment: .left, location: words)]
+        let (detailStyle, detailOffset) = Theme.lines(TypeScale.scaled(17), font: small, head: words, first: words)
+        for finding in review.findings {
+            output.append(NSAttributedString(string: "\n", attributes: [.font: font, .paragraphStyle: rowStyle]))
+            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: rowStyle, .baselineOffset: rowOffset]
+            let (name, word, color): (String, String, NSColor?) = switch finding.outcome {
+            case "fixed": ("checkmark.circle", "Fixed", .systemGreen)
+            case "disputed": ("exclamationmark.bubble", "Disputed", .systemOrange)
+            case "left": ("person.crop.circle", "Left for you", .systemBlue)
+            default: ("circle", "No answer", nil)
+            }
+            output.append(symbol(name, label: word, font: font, attributes: attributes, color: color ?? Theme.faintText))
+            output.append(NSAttributedString(string: "\t" + finding.claim, attributes: attributes))
+            var detail = word
+            if let note = finding.note { detail += ": " + note }
+            if finding.severity == "high" { detail += " · serious" }
+            if let place = finding.where { detail += " · " + place }
+            output.append(NSAttributedString(string: "\n" + detail, attributes: [
+                .font: small, .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: detailStyle, .baselineOffset: detailOffset,
+            ]))
         }
         return output
     }

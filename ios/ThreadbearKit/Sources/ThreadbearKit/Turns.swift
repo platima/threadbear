@@ -45,7 +45,11 @@ public enum Turns {
                 out += shownWhole(body)
                 continue
             }
-            let reply = replies(body)
+            // A plan stays out of the fold wherever it is in the turn: it's
+            // what Go ahead approves, and a sent-back one is what he asked
+            // to change.
+            let replyOnly = replies(body)
+            let reply = replyOnly.isEmpty ? [] : Array(Set(replyOnly).union(body.indices.filter { body[$0].plan }))
             if reply.isEmpty {
                 out += shownWhole(body)
                 continue
@@ -213,6 +217,8 @@ public struct PhoneAsk: Codable, Sendable, Hashable {
     /// Web pages to go to; files on the Mac never come to the phone.
     public var links: [PhoneAskLink]?
     public var ticked: Bool?
+    /// A command with a Run button (backend API 71), shown whole.
+    public var run: PhoneAskRun?
 
     public init(action: String, why: String? = nil, reply: String? = nil, options: [String]? = nil, optionNotes: [String]? = nil, suggested: Double? = nil, links: [PhoneAskLink]? = nil, ticked: Bool? = nil) {
         self.action = action
@@ -261,6 +267,22 @@ public struct PhoneAsk: Codable, Sendable, Hashable {
     /// The agent's pick, as a Convex number: one that isn't a whole index
     /// is none (Int(_:) of 1e100 traps).
     public var suggestedIndex: Int? { suggested.flatMap { $0.wholeCount() } }
+}
+
+public struct PhoneAskRun: Codable, Sendable, Hashable {
+    public var command: String
+    public var buttonId: String
+    public var cwd: String?
+    public var running: Bool?
+    public var failed: String?
+
+    public init(command: String, buttonId: String, cwd: String? = nil, running: Bool? = nil, failed: String? = nil) {
+        self.command = command
+        self.buttonId = buttonId
+        self.cwd = cwd
+        self.running = running
+        self.failed = failed
+    }
 }
 
 public struct PhoneAskLink: Codable, Sendable, Hashable {

@@ -19,7 +19,7 @@ import { call, load, memoryBackend } from './convex-memory.ts';
 import { ConvexSync } from '../../src/sync.ts';
 import { Relay } from '../../src/relay.ts';
 import { nullLogger } from '../../src/log.ts';
-import type { ImageRef } from '../../src/protocol.ts';
+import type { ImageRef, LabReviewLedger } from '../../src/protocol.ts';
 import type { Post } from '../../src/sync.ts';
 
 const OWNER = 'owner-key';
@@ -28,12 +28,15 @@ const RUNNER = 'bruce0000001';
 const END_TURN = 'mcp__threadbear__end_turn';
 
 // What a person sees of a thread, on any of the three: its card and its messages.
-export type Ask = { action: string; options?: string[]; optionNotes?: string[]; suggested?: number; links?: { title: string; url: string }[] };
+export type Ask = { action: string; options?: string[]; optionNotes?: string[]; suggested?: number; links?: { title: string; url: string }[]; run?: { command: string; buttonId?: string; cwd?: string } };
 export type View = {
   needs?: string;
   asks: Ask[];
   next: string[];
-  recap?: string;
+  // The done card's loose ends (experiment looseEnds), as their words.
+  looseEnds: string[];
+  // Review by another lab's ledger on the last turn's card.
+  review?: unknown;
   messages: { role: 'user' | 'assistant'; text: string; pictures: number }[];
 };
 
@@ -44,8 +47,15 @@ export type Play = {
   endTurn(input: Record<string, unknown>): void;
   /** Mike sends a message, with pictures (paths of real files) if any. */
   send(text: string, images?: ImageRef[]): void;
-  /** The librarian writes its note on the thread (with the recap box on). */
-  librarianWrites(text: string, purpose: string): void;
+  /** Turns on Run on the card, for the next end_turn. */
+  runAsks(): void;
+  /** The agent puts a Plan first plan to Mike (plan.proposed). */
+  proposePlan(text: string): void;
+  /** Turns on the done card's loose ends, with a check-in booked for this thread. */
+  looseEnds(checkIn: { title: string; at: string }): void;
+  /** A review by another lab has given this ledger's findings to the
+   * agent (runner/lab-review.ts), so the next end_turn answers them. */
+  reviewed(ledger: LabReviewLedger): void;
 };
 
 export async function threeWays(play: (p: Play) => void | Promise<void>) {
@@ -86,7 +96,7 @@ export async function threeWays(play: (p: Play) => void | Promise<void>) {
   const here = (): View => {
     const t = h.runner.get(id);
     const events = h.runner.events(id, {}).events as Record<string, any>[];
-    return { needs: t.needs, asks: (t.asks ?? []) as Ask[], next: lastNext(events), recap: t.recap, messages: messagesOf(events) };
+    return { needs: t.needs, asks: (t.asks ?? []) as Ask[], next: lastNext(events), looseEnds: (t.looseEnds?.ends ?? []).map((e) => e.text), review: events.filter((e) => e.type === 'turn.completed').at(-1)?.review, messages: messagesOf(events) };
   };
   const viaRelay = async (): Promise<View> => {
     // A turn's end is held back until that runner's row has said so for 4 s.
@@ -94,13 +104,11 @@ export async function threeWays(play: (p: Play) => void | Promise<void>) {
     h.clock.advance(5000);
     const { events } = (await relay.call(id, 'threads.events', { threadId: id })) as { events: Record<string, any>[] };
     const end = events.filter((e) => e.type === 'turn.completed').at(-1);
-    // The sidebar's row, as the Mac reads another runner's thread from it.
-    const rows = (await b.ctx.db.query('threadIndex').collect()) as unknown as { threadId: string; recap?: string }[];
-    return { needs: end?.needs, asks: (end?.asks ?? []) as Ask[], next: (end?.next ?? []) as string[], recap: rows.find((r) => r.threadId === id)?.recap, messages: messagesOf(events) };
+    return { needs: end?.needs, asks: (end?.asks ?? []) as Ask[], next: (end?.next ?? []) as string[], looseEnds: [], review: end?.review, messages: messagesOf(events) };
   };
   const viaPhone = async (): Promise<View> => {
     const r = (await call(b.ctx, mods.phone.thread!, { token: TOKEN, threadId: id })) as { thread: Record<string, any>; messages: { role: 'user' | 'assistant'; text: string }[] };
-    return { needs: r.thread.needs, asks: (r.thread.asks ?? []) as Ask[], next: (r.thread.next ?? []) as string[], recap: r.thread.recap, messages: r.messages.map((m) => ({ role: m.role, text: m.text, pictures: 0 })) };
+    return { needs: r.thread.needs, asks: (r.thread.asks ?? []) as Ask[], next: (r.thread.next ?? []) as string[], looseEnds: ((r.thread.looseEnds ?? []) as { text: string }[]).map((e) => e.text), review: r.thread.review, messages: r.messages.map((m) => ({ role: m.role, text: m.text, pictures: 0 })) };
   };
   const views = { here: here(), relay: await viaRelay(), phone: await viaPhone() };
   await sync.stop();
@@ -108,10 +116,10 @@ export async function threeWays(play: (p: Play) => void | Promise<void>) {
 }
 
 // Without a subscriber of its own a ConvexSync opens a real Convex client for its url, and
-// 'https://x.convex.cloud' is a real host: the client connected, was told "Couldn't parse
-// deployment name x" and threw that into whichever test was running (scenarios.test.ts failed
-// on GitHub's Ubuntu and Windows runners, 10 Nov). Writes go through `post`, so nothing here
-// needs the phone's command subscription.
+// x.convex.cloud is a real host: it accepts the websocket, sends back a FatalError ("Couldn't
+// parse deployment name x") and the client throws that into whichever test is running, which
+// made this file flaky on GitHub's runners. The client is made when the thread index starts
+// watching the other runners' threads. Writes go through `post`, so nothing here needs that watch.
 const NO_SUBSCRIBER = { subscribe: () => () => undefined, close: () => undefined };
 
 /**
@@ -132,6 +140,7 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
     let n = 0;
     await play({
       say: (text) => s.text(`m${++n}`, text),
+      proposePlan: (text) => s.out({ kind: 'planProposed', itemId: `p${++n}`, text }),
       endTurn: (input) => {
         const id = `e${++n}`;
         s.out({ kind: 'event', event: { type: 'tool.call', itemId: id, name: END_TURN, kind: 'mcp', title: 'threadbear: end_turn', input } });
@@ -142,14 +151,28 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
         h.runner.send(thread.id, text, images, {});
         h.adapter.last.init();
       },
-      librarianWrites: (text, purpose) => {
+      reviewed: (ledger) => {
+        h.runner.threads.get(thread.id)!.rec.labReview = { ...ledger, delivered: ledger.rounds };
+      },
+      runAsks: () => {
         const file = path.join(h.cfg.home, 'runner.json');
         const json = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-        fs.writeFileSync(file, JSON.stringify({ ...json, experiments: { ...json.experiments, recapBox: true } }));
-        h.clock.advance(6000); // past the runner's short memory of the switch
-        h.runner.setBrief(thread.id, text, purpose);
+        fs.writeFileSync(file, JSON.stringify({ ...json, experiments: { ...json.experiments, runAsks: true } }));
+      },
+      looseEnds: (checkIn) => {
+        const file = path.join(h.cfg.home, 'runner.json');
+        const json = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+        fs.writeFileSync(file, JSON.stringify({ ...json, experiments: { ...json.experiments, looseEnds: true } }));
+        const mine = thread.id;
+        const others = h.runner.schedulesFor;
+        h.runner.schedulesFor = (t) => (t === mine ? [{ id: `s-${mine}`, title: checkIn.title, text: '', whenText: '', paused: false, createdAt: '', updatedAt: '', runs: 0, threadId: t, nextRunAt: checkIn.at }] : (others?.(t) ?? []));
       },
     });
+  }
+  // The loose ends check runs after the turn ends, off the turn's path.
+  for (const id of ids) {
+    const end = Date.now() + 2000;
+    while (h.runner.threads.get(id)?.rec.needs?.needs === 'nothing' && !h.runner.get(id).looseEnds && fs.readFileSync(path.join(h.cfg.home, 'runner.json'), 'utf8').includes('"looseEnds":true') && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
   }
   sync.start();
   await sync.flushNow();
@@ -169,9 +192,11 @@ function lastNext(events: Record<string, any>[]): string[] {
   return (events.filter((e) => e.type === 'turn.completed').at(-1)?.next ?? []) as string[];
 }
 
-// Mike's messages and the agent's text, in order; tool rows left out.
+// Mike's messages and the agent's text, in order; tool rows left out. A
+// plan is the agent's words too: the Mac draws it as its plan card, the
+// phone as its own (API 72), another Mac as a reply.
 function messagesOf(events: Record<string, any>[]): View['messages'] {
   return events
-    .filter((e) => e.type === 'user.message' || e.type === 'assistant.text')
+    .filter((e) => e.type === 'user.message' || e.type === 'assistant.text' || e.type === 'plan.proposed')
     .map((e) => ({ role: e.type === 'user.message' ? ('user' as const) : ('assistant' as const), text: String(e.text ?? ''), pictures: Array.isArray(e.images) ? e.images.length : 0 }));
 }

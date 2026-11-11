@@ -116,3 +116,19 @@ When('I open the last thread in the Inbox', async function (this: ThreadbearWorl
 Then("a note says I've reached the end of the inbox", async function (this: ThreadbearWorld) {
   await this.until('the end-of-inbox note', (d) => d.inboxEndNote === 'end');
 });
+
+Then('the limit line starts {string}', async function (this: ThreadbearWorld, words: string) {
+  await this.until(`a limit line starting "${words}"`, (d) => d.limit?.text?.startsWith(words));
+});
+
+Then('the limit box carries on by itself', async function (this: ThreadbearWorld) {
+  await this.until('the limit box offering to carry on by itself, set to Yes', (d) => d.limit?.carryOn === 'Yes');
+});
+
+Then("the limit line's button says {string}", async function (this: ThreadbearWorld, title: string) {
+  await this.until(`the limit line's button "${title}"`, (d) => d.limit?.button === title);
+});
+
+Then('the model chip is marked {string}', async function (this: ThreadbearWorld, badge: string) {
+  await this.until(`the model chip marked "${badge}"`, (d) => d.composer.chipBadge === badge);
+});

@@ -14,13 +14,16 @@ import { threeWays, type View } from '../helpers/routes.ts';
 import { SCENARIOS } from '../helpers/scenario-list.ts';
 
 type Route = 'relay' | 'phone';
-type Field = 'needs' | 'asks' | 'next' | 'recap' | 'messages' | 'pictures';
+type Field = 'needs' | 'asks' | 'next' | 'looseEnds' | 'review' | 'messages' | 'pictures';
 
 // Differences that are meant, each with why. A test below fails once one
 // of these stops being a difference, so the list can't outlive its reason.
 const KNOWN: { route: Route; field: Field; why: string }[] = [
   { route: 'relay', field: 'pictures', why: "Pictures in messages stay on that runner; the Mac shows each one's chip in the words." },
+  { route: 'relay', field: 'looseEnds', why: "Another runner's thread is read from its sidebar row, which doesn't carry the done card's loose ends; that runner's own Mac and the phone show them." },
   { route: 'phone', field: 'pictures', why: "phone:thread carries words only; the phone gets a message's pictures from phone:images." },
+  { route: 'relay', field: 'review', why: "Another lab's review ledger isn't in the Convex mirror yet; another Mac shows the agent's reply, which says what was found and what it did about each." },
+  { route: 'phone', field: 'review', why: "Another lab's review ledger isn't in the Convex mirror yet; the phone and website show the agent's reply, which says what was found and what it did about each." },
 ];
 
 
@@ -31,10 +34,10 @@ function pick(v: View, field: Field): unknown {
     case 'pictures':
       return v.messages.map((m) => m.pictures);
     default:
-      return field === 'needs' ? (v.needs ?? null) : field === 'recap' ? (v.recap ?? null) : v[field];
+      return field === 'needs' || field === 'review' ? (v[field] ?? null) : v[field];
   }
 }
-const FIELDS: Field[] = ['needs', 'asks', 'next', 'recap', 'messages', 'pictures'];
+const FIELDS: Field[] = ['needs', 'asks', 'next', 'looseEnds', 'review', 'messages', 'pictures'];
 const known = (route: Route, field: Field) => KNOWN.find((k) => k.route === route && k.field === field);
 
 for (const s of SCENARIOS) {

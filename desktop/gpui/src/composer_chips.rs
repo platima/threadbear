@@ -1,6 +1,8 @@
 // The row under the composer's text: "+" (pictures and the folder), the
 // account, model and permission chips and the context ring (ComposerControls.swift).
 // The numbers are the Swift app's, at 100% zoom.
+use threadbear_core::new_thread::ChipBadge;
+use crate::app::Threadbear;
 use crate::composer::Composer;
 use crate::style::{self, size};
 use gpui_kit::assets::IconName;
@@ -182,11 +184,13 @@ impl Composer {
 
     /// The folders "+" > Folder offers (ThreadSettings.recentFolders): this
     /// thread's, the default, then the ones most recently used, eight at most.
-    fn recent_folders(&self, current: &str, data: &ChipData, cx: &App) -> Vec<String> {
-        let mut folders: Vec<String> = vec![current.to_owned(), data.logins.defaults.cwd.clone()];
-        if let Some(app) = self.app.upgrade() {
+    /// Worked out when the menu opens, not at every render: it looks at every
+    /// thread, and the box is drawn on every frame of a scroll.
+    fn recent_folders(app: &WeakEntity<Threadbear>, current: &str, default_folder: &str, cx: &App) -> Vec<String> {
+        let mut folders: Vec<String> = vec![current.to_owned(), default_folder.to_owned()];
+        if let Some(app) = app.upgrade() {
             let mut threads: Vec<&ThreadSummary> = app.read(cx).threads.values().collect();
-            threads.sort_by_key(|t| std::cmp::Reverse(t.activity_ms()));
+            threads.sort_by_cached_key(|t| std::cmp::Reverse(t.activity_ms()));
             folders.extend(threads.into_iter().map(|t| t.cwd.clone()));
         }
         let mut out = Vec::new();
@@ -285,12 +289,16 @@ impl Composer {
     fn render_plus(&self, data: &ChipData, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let composer = cx.entity().downgrade();
         let current = data.summary.as_ref().map(|t| t.cwd.clone()).unwrap_or_default();
-        let folders = self.recent_folders(&current, data, cx);
         let default_folder = data.logins.defaults.cwd.clone();
+        let app = self.app.clone();
+        // Not for another Mac's thread or a new one for another Mac: its
+        // schedules are made there (the Swift app's Send menu says the same).
+        let can_schedule = data.away.is_none() && self.app.upgrade().is_some_and(|a| a.read(cx).schedules_supported);
         Popover::new("composer-plus")
             .anchor(Anchor::BottomLeft)
-            .trigger(ChipTrigger { id: "composer-plus-button".into(), kind: TriggerKind::Plus, title: SharedString::default(), icon: None, tip: "Attach images, change the folder or schedule the message".into(), selected: false })
+            .trigger(ChipTrigger { badge: None, id: "composer-plus-button".into(), kind: TriggerKind::Plus, title: SharedString::default(), icon: None, tip: "Attach images, change the folder or schedule the message".into(), selected: false })
             .content(move |_, window, cx| {
+                let folders = Self::recent_folders(&app, &current, &default_folder, cx);
                 let popover = cx.entity();
                 let c1 = composer.clone();
                 let (popover2, c2) = (popover.clone(), composer.clone());
@@ -323,6 +331,19 @@ impl Composer {
                             }
                         })
                     })
+                    // Sending the message later, from what's in the box.
+                    .when(can_schedule, |menu| {
+                        let (popover, c) = (popover2.clone(), c2.clone());
+                        menu.child(div().my(px(4.)).h(gpui_kit::px(1.)).bg(style::hairline(cx))).child(menu_row("schedule", Some(IconName::Clock), "Schedule…", None, false, window, cx, move |window, cx| {
+                            popover.update(cx, |s, cx| s.dismiss(window, cx));
+                            if let Some(c) = c.upgrade() {
+                                let app = c.read(cx).app.clone();
+                                if let Some(app) = app.upgrade() {
+                                    app.update(cx, |app, cx| app.new_schedule_from_composer(&c, window, cx));
+                                }
+                            }
+                        }))
+                    })
             })
     }
 
@@ -334,7 +355,7 @@ impl Composer {
         let provider = self.chip_data(cx).summary.map(|t| t.provider).unwrap_or_default();
         Popover::new("composer-permission")
             .anchor(Anchor::BottomLeft)
-            .trigger(ChipTrigger { id: "composer-permission-chip".into(), kind: TriggerKind::Chip, title: title.into(), icon: Some(icon), tip: help.into(), selected: false })
+            .trigger(ChipTrigger { badge: None, id: "composer-permission-chip".into(), kind: TriggerKind::Chip, title: title.into(), icon: Some(if mode == "full" { crate::icons::symbol("lock.open") } else { Icon::from(icon) }), tip: help.into(), selected: false })
             .content(move |_, window, cx| {
                 let popover = cx.entity();
                 let modes: &[&str] = if threadbear_core::logins::has_auto_mode(&provider) || mode == "auto" { &["full", "auto", "ask", "plan"] } else { &["full", "ask", "plan"] };
@@ -360,7 +381,7 @@ impl Composer {
         let composer = cx.entity().downgrade();
         Popover::new("composer-account")
             .anchor(Anchor::BottomLeft)
-            .trigger(ChipTrigger { id: "composer-account-chip".into(), kind: TriggerKind::Chip, title: title.into(), icon: Some(IconName::CircleUser), tip: tip.into(), selected: false })
+            .trigger(ChipTrigger { badge: settings.account_badge(), id: "composer-account-chip".into(), kind: TriggerKind::Chip, title: title.into(), icon: Some(Icon::from(IconName::CircleUser)), tip: tip.into(), selected: false })
             .content(move |_, window, cx| {
                 let popover = cx.entity();
                 v_flex().w(px(320.)).p(px(4.)).children(accounts.iter().enumerate().map(|(i, account)| {
@@ -380,12 +401,23 @@ impl Composer {
         let Some(settings) = data.settings() else { return div().into_any_element() };
         let title = settings.model_chip_title();
         let tip = settings.model_chip_help();
-        // The provider's mark leads the chip when there's no pool icon to show.
-        let icon = if settings.uses_pools() && settings.pool().is_none() { IconName::CircleUser } else { IconName::Sparkles };
+        // The pool's own icon when one was picked for it, a pinned login's
+        // person, else the provider's logo (`modelChipLogo`, `modelChipIcon`).
+        let icon: Icon = if !settings.uses_pools() {
+            crate::icons::provider_mark(&settings.provider)
+        } else {
+            match settings.pool() {
+                None => Icon::from(IconName::CircleUser),
+                Some(pool) => match pool.icon.as_deref().filter(|i| !i.is_empty()) {
+                    Some(symbol) => crate::icons::try_symbol(symbol).unwrap_or_else(|| Icon::from(IconName::Layers)),
+                    None => crate::icons::provider_mark(&settings.provider),
+                },
+            }
+        };
         let picker = self.picker_state(window, cx);
         Popover::new("composer-model")
             .anchor(Anchor::BottomLeft)
-            .trigger(ChipTrigger { id: "composer-model-chip".into(), kind: TriggerKind::Chip, title: title.into(), icon: Some(icon), tip: tip.into(), selected: false })
+            .trigger(ChipTrigger { badge: settings.model_chip_badge(), id: "composer-model-chip".into(), kind: TriggerKind::Chip, title: title.into(), icon: Some(icon), tip: tip.into(), selected: false })
             .content(move |_, _, _| picker.clone())
             .into_any_element()
     }
@@ -398,7 +430,7 @@ impl Composer {
         let tip = meter.tip();
         Popover::new("composer-context")
             .anchor(Anchor::BottomRight)
-            .trigger(ChipTrigger { id: "composer-context-ring".into(), kind: TriggerKind::Ring(meter), title: SharedString::default(), icon: None, tip: tip.into(), selected: false })
+            .trigger(ChipTrigger { badge: None, id: "composer-context-ring".into(), kind: TriggerKind::Ring(meter), title: SharedString::default(), icon: None, tip: tip.into(), selected: false })
             .content(move |_, _, cx| {
                 let fraction = meter.fraction() as f32;
                 let note = format!("{} compacts it by itself when it's nearly full.", if provider == "codex" { "Codex" } else { "Claude" });
@@ -488,9 +520,14 @@ struct ChipTrigger {
     id: ElementId,
     kind: TriggerKind,
     title: SharedString,
-    icon: Option<IconName>,
+    /// A bundled icon or one drawn from data (a provider's logo).
+    icon: Option<Icon>,
     tip: SharedString,
     selected: bool,
+    /// After the title: "· 12%" in orange, "Limit reached" in red
+    /// (`ComposerChip.badge`). Colour only here, where it means the login,
+    /// or every login in the pool, is running out.
+    badge: Option<ChipBadge>,
 }
 
 impl Selectable for ChipTrigger {
@@ -506,14 +543,19 @@ impl Selectable for ChipTrigger {
 impl RenderOnce for ChipTrigger {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tip = self.tip.clone();
-        let base = div().id(self.id).flex().items_center().cursor_pointer().tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx));
+        // Named for VoiceOver and the automation's `click`: its words, or its
+        // tip when it's an icon alone.
+        let label: SharedString = if self.title.is_empty() { self.tip.clone() } else { self.title.clone() };
+        let base = div().id(self.id).flex().items_center().cursor_pointer().test_support().aria_label(label).tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx));
         match self.kind {
             TriggerKind::Plus => base
                 .justify_center()
                 .size(px(26.))
                 .rounded_full()
                 .hover(|s| s.bg(style::hover_fill(cx)))
-                .child(Icon::from(IconName::Plus).with_size(px(15.)).text_color(style::quiet_text(cx)))
+                // SF's plus at 15 pt is about 11.7 across with a 1.5 stroke;
+                // Lucide's comes to that at 17.5.
+                .child(Icon::from(IconName::Plus).with_size(px(17.5)).text_color(style::quiet_text(cx)))
                 .into_any_element(),
             TriggerKind::Ring(meter) => base.justify_center().size(px(26.)).rounded_full().hover(|s| s.bg(style::hover_fill(cx))).child(context_ring(meter, cx)).into_any_element(),
             TriggerKind::Chip => base
@@ -522,10 +564,13 @@ impl RenderOnce for ChipTrigger {
                 .gap(px(4.))
                 .rounded(px(7.))
                 .hover(|s| s.bg(style::chip_hover_fill(cx)))
-                .when_some(self.icon, |s, icon| s.child(Icon::from(icon).with_size(px(size::CHIP - 1.)).text_color(style::faint_icon(cx))))
-                .when(!self.title.is_empty(), |s| {
-                    s.child(div().text_size(px(size::CHIP)).text_color(style::quiet_text(cx)).whitespace_nowrap().child(self.title.clone())).child(Icon::from(IconName::ChevronDown).with_size(px(9.)).text_color(style::faint_icon(cx)))
+                .when_some(self.icon, |s, icon| s.child(icon.with_size(px(size::CHIP - 1.)).text_color(style::faint_icon(cx))))
+                .when(!self.title.is_empty(), |s| s.child(div().text_size(px(size::CHIP)).text_color(style::quiet_text(cx)).whitespace_nowrap().child(self.title.clone())))
+                .when_some(self.badge.clone(), |s, badge| {
+                    let color = if badge == ChipBadge::Blocked { cx.theme().danger } else { style::needs_you(cx) };
+                    s.child(div().text_size(px(size::CHIP)).text_color(color).whitespace_nowrap().child(badge_words(&badge)))
                 })
+                .when(!self.title.is_empty(), |s| s.child(Icon::from(IconName::ChevronDown).with_size(px(9.)).text_color(style::faint_icon(cx))))
                 .into_any_element(),
         }
     }
@@ -612,6 +657,9 @@ fn menu_row(id: impl Into<ElementId>, icon: Option<IconName>, title: &str, subti
     let _ = window;
     h_flex()
         .id(id.into())
+        // Found by its words, as scripts click a menu's line.
+        .test_support()
+        .aria_label(title.to_owned())
         .gap(px(8.))
         .px(px(10.))
         .py(px(6.))
@@ -653,8 +701,22 @@ impl Render for ModelPickerView {
         let data = composer.read(cx).chip_data(cx);
         let Some(settings) = data.settings() else { return div().into_any_element() };
         let pools = settings.uses_pools();
-        let columns: Vec<(String, String, Option<String>)> = if pools {
-            data.logins.pools.iter().map(|p| (p.id.clone(), p.title.clone(), None)).collect()
+        // A pool's column has its providers' logos over its title, and its
+        // logins and best room under it ("3 · 61%", `Pools.railSubtitle`);
+        // without pools a column is a provider, drawn as its logo alone.
+        let columns: Vec<(String, String, Option<String>, Vec<String>)> = if pools {
+            data.logins
+                .pools
+                .iter()
+                .map(|p| {
+                    let count = threadbear_core::new_thread::pool_logins(p, &data.logins.accounts, None).len();
+                    let subtitle = match threadbear_core::new_thread::best_room(p, &data.logins.accounts) {
+                        Some(best) => format!("{count} \u{00B7} {}", threadbear_core::new_thread::percent(best)),
+                        None => count.to_string(),
+                    };
+                    (p.id.clone(), p.title.clone(), Some(subtitle), threadbear_core::new_thread::pool_providers(p, &data.logins.accounts))
+                })
+                .collect()
         } else {
             let mut seen: Vec<String> = Vec::new();
             for a in &data.logins.accounts {
@@ -662,7 +724,7 @@ impl Render for ModelPickerView {
                     seen.push(a.provider_id().to_owned());
                 }
             }
-            seen.into_iter().map(|p| (p.clone(), provider_title(&p), None)).collect()
+            seen.into_iter().map(|p| (p.clone(), provider_title(&p), None, vec![p])).collect()
         };
         let own_column = if pools { settings.pool().map_or(PINNED_COLUMN.to_owned(), |p| p.id.clone()) } else { settings.provider.clone() };
         let column = self.column.clone().unwrap_or(own_column);
@@ -679,22 +741,51 @@ impl Render for ModelPickerView {
         let width = if pools { 440. } else { 380. };
         let rail_width = if pools { 96. } else { 44. };
         let this = cx.entity().downgrade();
-        let rail = v_flex().w(px(rail_width)).flex_shrink_0().py(px(6.)).px(px(6.)).gap(px(4.)).bg(style::chip_fill(cx)).children(columns.into_iter().enumerate().map(|(i, (id, title, _))| {
+        let (fg, secondary) = (cx.theme().foreground, cx.theme().muted_foreground);
+        let (active_fill, hover_fill) = (style::primary_opacity(cx, 0.1), style::primary_opacity(cx, 0.06));
+        // Down the whole of the popover's left, a shade off its fill
+        // (`PickerRail`).
+        let rail = v_flex().w(px(rail_width)).h_full().flex_shrink_0().py(px(6.)).gap(px(4.)).bg(style::primary_opacity(cx, 0.03)).children(columns.into_iter().enumerate().map(|(i, (id, title, subtitle, providers))| {
             let active = id == column;
             let this = this.clone();
-            div()
-                .id(("picker-rail", i))
-                .px(px(6.))
-                .py(px(8.))
-                .rounded(px(7.))
-                .text_size(px(12.))
-                .text_center()
-                .truncate()
+            let color = if active { fg } else { secondary };
+            let tip = match &subtitle {
+                Some(sub) if pools => format!("{title}: {sub}"),
+                _ => title.clone(),
+            };
+            let button = if pools {
+                // `PoolButton`: the pool's providers' logos, its title, and
+                // its logins and best room.
+                v_flex()
+                    .id(("picker-rail", i))
+                    .mx(px(6.))
+                    .h(px(if providers.is_empty() { 40. } else { 56. }))
+                    .px(px(4.))
+                    .items_center()
+                    .justify_center()
+                    .gap(px(1.))
+                    .rounded(px(7.))
+                    .when(!providers.is_empty(), |s| {
+                        s.child(h_flex().gap(px(4.)).pb(px(3.)).children(providers.iter().map(|p| crate::icons::provider_mark(p).with_size(px(15.)).text_color(color))))
+                    })
+                    .child(div().max_w_full().text_size(px(12.)).text_color(color).truncate().child(title))
+                    .when_some(subtitle, |s, sub| s.child(div().text_size(px(10.5)).text_color(style::faint_text(cx)).child(sub)))
+            } else {
+                // `IconButton`: a provider's logo, its name in the tip.
+                v_flex()
+                    .id(("picker-rail", i))
+                    .mx(px(7.))
+                    .size(px(30.))
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(7.))
+                    .child(crate::icons::provider_mark(providers.first().map_or("claude", String::as_str)).with_size(px(16.)).text_color(color))
+            };
+            button
                 .cursor_pointer()
-                .text_color(if active { cx.theme().foreground } else { cx.theme().muted_foreground })
-                .when(active, |s| s.bg(style::hover_fill(cx)))
-                .hover(|s| s.bg(style::hover_fill(cx)))
-                .child(title)
+                .when(active, |s| s.bg(active_fill))
+                .when(!active, |s| s.hover(move |s| s.bg(hover_fill)))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 .on_click(move |_, _, cx| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |this, cx| {
@@ -707,7 +798,7 @@ impl Render for ModelPickerView {
         let row_view = |row: PickerRow, cx: &App| {
             let composer = self.composer.clone();
             let (data, column, picked) = (self.chip_snapshot(cx), column.clone(), row.clone());
-            model_row(row, cx, move |window, cx| {
+            model_row(row, &provider, cx, move |window, cx| {
                 if let Some(c) = composer.upgrade() {
                     c.update(cx, |c, cx| c.pick_model(&picked, &column, &data, cx));
                 }
@@ -757,7 +848,8 @@ impl Render for ModelPickerView {
             .child(h_flex().h(px(36.)).px(px(12.)).gap(px(6.)).border_b_1().border_color(style::hairline(cx)).child(Icon::from(IconName::Search).with_size(px(12.)).text_color(style::faint_text(cx))).child(div().flex_1().child(Input::new(&self.search).appearance(false).bordered(false).text_size(px(13.)))))
             .child(div().id("picker-list").max_h(px(320.)).overflow_y_scroll().child(list))
             .children(effort.map(|e| div().border_t_1().border_color(style::hairline(cx)).child(e)));
-        h_flex().w(px(width)).items_start().child(rail).child(div().w(px(1.)).h_full().bg(style::hairline(cx))).child(right).into_any_element()
+        // Stretched, so the rail runs down the whole popover beside the list.
+        h_flex().w(px(width)).child(rail).child(div().w(px(1.)).bg(style::hairline(cx))).child(right).into_any_element()
     }
 }
 
@@ -767,8 +859,10 @@ impl ModelPickerView {
     }
 }
 
-fn model_row(row: PickerRow, cx: &App, action: impl Fn(&mut Window, &mut App) + 'static) -> impl IntoElement {
+fn model_row(row: PickerRow, provider: &str, cx: &App, action: impl Fn(&mut Window, &mut App) + 'static) -> impl IntoElement {
     let selected = row.is_selected;
+    let (fg, secondary) = (cx.theme().foreground, cx.theme().muted_foreground);
+    let (selected_fill, hover_fill) = (style::primary_opacity(cx, 0.1), style::primary_opacity(cx, 0.06));
     h_flex()
         .id(SharedString::from(format!("model-{}", row.id)))
         .gap(px(10.))
@@ -777,10 +871,11 @@ fn model_row(row: PickerRow, cx: &App, action: impl Fn(&mut Window, &mut App) + 
         .py(px(5.))
         .rounded(px(8.))
         .cursor_pointer()
-        .when(selected, |s| s.bg(style::hover_fill(cx)))
-        .hover(|s| s.bg(style::hover_fill(cx)))
+        .when(selected, |s| s.bg(selected_fill))
+        .when(!selected, |s| s.hover(move |s| s.bg(hover_fill)))
         .on_click(move |_, window, cx| action(window, cx))
-        .child(div().size(px(26.)).rounded(px(7.)).bg(style::chip_fill(cx)).flex().items_center().justify_center().when(row.is_older, |s| s.opacity(0.6)).child(Icon::from(IconName::Sparkles).with_size(px(15.)).text_color(if selected { cx.theme().foreground } else { cx.theme().muted_foreground })))
+        // `ModelRow`: the provider's logo on a faint tile.
+        .child(div().size(px(26.)).rounded(px(7.)).bg(style::primary_opacity(cx, 0.07)).flex().items_center().justify_center().when(row.is_older, |s| s.opacity(0.6)).child(crate::icons::provider_mark(provider).with_size(px(15.)).text_color(if selected { fg } else { secondary })))
         .child(
             v_flex()
                 .flex_1()
@@ -788,7 +883,8 @@ fn model_row(row: PickerRow, cx: &App, action: impl Fn(&mut Window, &mut App) + 
                 .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(row.title.clone()))
                 .when_some(row.subtitle.clone().filter(|s| !s.is_empty()), |s, sub| s.child(div().text_size(px(11.)).text_color(cx.theme().muted_foreground).truncate().child(sub))),
         )
-        .when(row.is_default, |s| s.child(Icon::from(IconName::Star).with_size(px(9.)).text_color(style::faint_text(cx))))
+        // The default, as a filled star (`star.fill`, tertiary).
+        .when(row.is_default, |s| s.child(crate::icons::symbol("star.fill").with_size(px(9.)).text_color(style::faint_text(cx))))
 }
 
 /// The picker as text for the automation's `composer-menu` (ThreadSettings
@@ -841,10 +937,24 @@ pub(crate) fn picker_lines(data: &ChipData) -> Vec<String> {
     lines
 }
 
+/// A chip's badge as it reads after its title (`ComposerChip`).
+pub(crate) fn badge_words(badge: &ChipBadge) -> String {
+    match badge {
+        ChipBadge::Low(percent) => format!("\u{00B7} {percent}"),
+        ChipBadge::Blocked => "Limit reached".to_owned(),
+    }
+}
+
 /// The model chip's words, for the dump's `composer.chip`.
 #[cfg(feature = "automation")]
 pub(crate) fn model_chip_text(data: &ChipData) -> String {
     data.settings().map(|s| s.model_chip_title()).unwrap_or_default()
+}
+
+/// The model chip's badge as it reads, for the dump's `composer.chipBadge`.
+#[cfg(feature = "automation")]
+pub(crate) fn model_chip_badge_text(data: &ChipData) -> Option<String> {
+    data.settings().and_then(|s| s.model_chip_badge()).map(|b| badge_words(&b))
 }
 
 /// The modes the permission menu offers, in its order.

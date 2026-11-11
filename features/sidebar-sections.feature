@@ -38,3 +38,11 @@ Feature: Section headings in the sidebar
     When I sort the Inbox oldest first
     Then the Inbox is sorted oldest first
     And "Add dark mode to the dashboard" comes before "Ship the beta to TestFlight" in the "Inbox" section
+
+  @sidebar.sections
+  Scenario: A quiet thread with a check-in booked waits under Hibernating
+    Given the "Inbox" section lists "Add dark mode to the dashboard"
+    When a check-in is booked on "Add dark mode to the dashboard"
+    And the "hibernating" section is unfolded
+    Then the "Hibernating" section lists "Add dark mode to the dashboard"
+    And the row "Add dark mode to the dashboard" says when its schedule messages it

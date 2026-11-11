@@ -52,7 +52,9 @@ export type Dump = {
     /** Before the runner's first list: the grey loading rows are showing. */
     loading?: boolean;
   };
-  composer: { draft: string; text: string; images?: number; chip?: string; mode?: string; card?: string[] | null; cwd?: string; runner?: string | null; creating?: boolean };
+  /** The line under the bar when the thread can't go on where it is (LimitBanner). */
+  limit?: { text: string; button?: string | null; carryOn?: string | null } | null;
+  composer: { draft: string; text: string; images?: number; chip?: string; chipBadge?: string | null; mode?: string; card?: string[] | null; cwd?: string; runner?: string | null; creating?: boolean };
   /** The new-thread page while it's showing. */
   newThread?: { heading: string; note: string; project?: string | null; rooms: { label: string; line: string; selected: boolean; note?: string | null }[] } | null;
   /** The slash palette over the composer while it's open. */

@@ -43,6 +43,8 @@ pub struct Threadbear {
     /// Each thread's message box, kept so what's typed (with its undo and
     /// pictures) stays with the thread while others are open.
     pub(crate) composers: HashMap<String, Entity<Composer>>,
+    /// What every box has, kept across a quit (drafts.rs).
+    pub(crate) drafts: crate::drafts::Drafts,
     pub(crate) sidebar: crate::sidebar::SidebarState,
 
     // The window shell (shell.rs, rails.rs, header.rs).
@@ -55,6 +57,9 @@ pub struct Threadbear {
     pub(crate) settings_save_task: Option<Task<()>>,
     pub(crate) dock: Entity<DockModel>,
     pub(crate) dock_view: Entity<DockView>,
+    /// View > Show Frame Rate's readout, while it's showing.
+    #[cfg(feature = "frame-stats")]
+    pub(crate) frame_rate: Option<Entity<crate::frame_stats::FrameRate>>,
     /// The pane sections Hide Panels closed, for Show Panels (`hiddenPanes`).
     pub(crate) hidden_panes: Vec<String>,
     pub(crate) mode: SidebarMode,
@@ -66,6 +71,18 @@ pub struct Threadbear {
     pub(crate) shortcuts_path: Option<PathBuf>,
     /// What the menu bar says, so it's rebuilt only when that changes.
     pub(crate) menu_signature: String,
+    /// Something changed since the menu bar was last worked out. It's
+    /// rebuilt only then, not every frame: scrolling redraws the window as
+    /// fast as the screen refreshes, and this was a noticeable part of each
+    /// frame (set by an observer of the app itself, in `new`).
+    pub(crate) menus_stale: bool,
+    /// The login each thread was on when it went into error
+    /// (`failedOnAccount`), so the limit line blames that login only while
+    /// the thread's still on it, not the one it's just been switched to.
+    pub(crate) failed_on_account: HashMap<String, String>,
+    /// The Threads button's badge, kept until the app next changes (the same
+    /// observer clears it), as working it out sorts every thread.
+    pub(crate) inbox_count_cache: std::cell::Cell<Option<usize>>,
     pub(crate) last_window_title: String,
     pub(crate) archived_note: Option<ArchivedNote>,
     pub(crate) inbox_end_note: Option<InboxEndNote>,
@@ -88,7 +105,41 @@ pub struct Threadbear {
     /// When the runner last said it was restarting.
     pub(crate) restart_notice_ms: Option<i64>,
     pub(crate) schedules_supported: bool,
-    pub(crate) active_schedule_count: usize,
+    /// The Scheduled view: the list, its folded headings, what's on the way
+    /// (scheduled.rs).
+    pub(crate) scheduled: crate::scheduled::ScheduledState,
+    /// The schedule editor, while it's up (schedule_editor.rs).
+    pub(crate) schedule_editor: Option<Entity<crate::schedule_editor::ScheduleEditor>>,
+    /// The activity bar's page for the sidebar's view is in the main panel
+    /// (`showsScheduledHome` and friends), not the selected thread. Picking a
+    /// thread puts the thread back.
+    pub(crate) shows_home: bool,
+    /// Back or Forward is putting a place back (`navigationPending`): the
+    /// steps on the way aren't recorded.
+    pub(crate) restoring_place: bool,
+    /// The Librarian view (librarian.rs).
+    pub(crate) librarian: crate::librarian::LibrarianState,
+    /// What the Librarian page's picture says when it's poked.
+    pub(crate) librarian_pokes: crate::home_page::Pokes,
+    /// The runner's settings (`settings.get`, then `settings.updated`), as
+    /// they came: the Librarian page's Runs on reads them, Settings will.
+    pub(crate) runner_settings: Option<Value>,
+    /// The providers whose logins can run small jobs (titles, the
+    /// librarian), from hello's `providers` (`ProviderInfo.smallJobs`).
+    pub(crate) small_jobs: Vec<String>,
+    /// The Settings window while it's open (settings_window.rs).
+    pub(crate) settings_window: Option<(AnyWindowHandle, Entity<crate::settings_window::SettingsWindow>)>,
+    /// The last settings change the runner turned down (`settingsError`).
+    pub(crate) settings_error: Option<String>,
+    /// A runner from before `settings.get`.
+    pub(crate) settings_unsupported: bool,
+    /// Standing instructions (`instructions.get`), None from a runner without them.
+    pub(crate) standing_instructions: Option<threadbear_core::runner_settings::StandingInstructions>,
+    /// The runner's version, from hello (`runnerVersion`).
+    pub(crate) runner_version: String,
+    /// This copy checks for Mike's releases (hello's `updates.upstream`, on
+    /// a fork), so Settings offers how often to bring them in.
+    pub(crate) upstream_on: bool,
     pub(crate) projects_supported: bool,
     /// Every project's id, title and whether it's archived, for the
     /// header's chips (`projects.list`).
@@ -104,6 +155,9 @@ pub struct Threadbear {
     pub(crate) move_sheet: Option<Entity<crate::move_sheet::MoveSheet>>,
     /// The pane beside the thread: Highlights, previews, Patches, Files (highlights.rs).
     pub(crate) side: Entity<SidePane>,
+    /// The Threads panel's view, made the first time the dock asks for it
+    /// (sidebar.rs, `SidebarView`).
+    pub(crate) sidebar_view: Option<Entity<crate::sidebar::SidebarView>>,
     _events: Task<()>,
     _subs: Vec<Subscription>,
 }
@@ -111,9 +165,20 @@ pub struct Threadbear {
 impl Threadbear {
     pub(crate) fn new(settings: Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // gpui-kit starts in its light theme whatever the system says; follow
-        // the system's light or dark, and keep following it when it changes.
-        Theme::sync_system_appearance(Some(window), cx);
-        let appearance = window.observe_window_appearance(|window, cx| Theme::sync_system_appearance(Some(window), cx));
+        // the system's light or dark, and keep following it when it changes,
+        // in the system's own window colours (style.rs). Scroll bars show only
+        // while scrolling, whatever the system's set to, as the Swift app's
+        // transcript and composer have them (`scrollerStyle = .overlay`).
+        crate::style::install_window_colours(cx);
+        Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Scrolling, cx);
+        // Light or dark as Settings › General says, else the Mac's, followed
+        // as it changes.
+        crate::style::set_appearance(crate::style::Appearance::from_name(settings.saved.appearance.as_deref().unwrap_or("system")), window, cx);
+        let appearance = window.observe_window_appearance(|window, cx| {
+            if crate::style::appearance() == crate::style::Appearance::System {
+                Theme::sync_system_appearance(Some(window), cx);
+            }
+        });
         crate::style::set_zoom_percent(settings.zoom_percent());
         shell::apply_zoom_to_theme(settings.zoom_percent(), cx);
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -131,6 +196,7 @@ impl Threadbear {
         let side_client = client.clone();
         let side = cx.new(|cx| SidePane::new(weak_app, side_client, window, cx));
         crate::viewer::viewer_handle_global(side.downgrade(), cx);
+        crate::open_gate::install(cx.entity().downgrade(), cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search threads"));
         // The filter is worked out at render, so a change only needs a redraw.
         let searching = cx.subscribe(&search, |_, _, ev: &InputEvent, cx| {
@@ -145,6 +211,12 @@ impl Threadbear {
         // changes (a moment after the last change, as a divider drag is many).
         let layout = shell::make_layout(settings.saved.dock_layout.as_ref());
         let app = cx.entity().downgrade();
+        // A reply button's pill presses through here (reply_buttons.rs): the
+        // kit draws it inside the reply's text, where there's no app to hand.
+        let press_app = app.clone();
+        cx.set_global(crate::reply_buttons::PressHook(Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
+            press_app.update(cx, |this, cx| this.press_reply_button(id, window, cx)).ok();
+        })));
         let dock = cx.new(|_| {
             let mut model = DockModel::new(layout);
             let app = app.clone();
@@ -160,15 +232,35 @@ impl Threadbear {
             model
         });
         let content = Rc::new(shell::Panels { app: app.clone() });
-        let options = shell::dock_options(cx);
+        let options = shell::dock_options(app.clone(), cx);
         let dock_view = {
             let model = dock.clone();
             cx.new(|cx| DockView::new(model, content, options, cx))
         };
         let frame = cx.observe_window_bounds(window, |this, window, cx| this.window_frame_changed(window, cx));
+        // What's typed and not sent is written as the app quits (drafts.rs).
+        let quitting = cx.on_app_quit(|this, cx| {
+            this.save_drafts(cx);
+            async {}
+        });
+        // A thread is read once Mike's looking at it (AppModel.isLooking,
+        // which is the app being active, whichever of its windows is in
+        // front): coming back reads the open one (appBecameActive). The
+        // Settings window says so too (`SettingsWindow::new`).
+        crate::thread::set_looking(crate::thread::window_key(window), window.is_window_active());
+        let looking = cx.observe_window_activation(window, |this, window, cx| this.looking_changed(crate::thread::window_key(window), window.is_window_active(), cx));
+        // Everything the menus say is the app's state, which notifies when it
+        // changes (the dock's layout too: `dock_layout_changed`).
+        // Its 20-second tick notifies too (SidebarState), so the badge's
+        // count follows a snooze running out as the list does.
+        let menus = cx.observe(&cx.entity(), |this: &mut Threadbear, _, _| {
+            this.menus_stale = true;
+            this.inbox_count_cache.set(None);
+        });
 
         let mut sidebar = crate::sidebar::SidebarState::new(cx);
         sidebar.order = settings.inbox_order();
+        let scheduled = crate::scheduled::ScheduledState::new(settings.saved.collapsed_schedule_sections.as_deref());
         let folded: HashSet<&'static str> = match &settings.saved.collapsed_sections {
             // The section keys are the Swift enum's raw values.
             Some(saved) => ["starred", "inbox", "running", "hibernating", "archived"].into_iter().filter(|k| saved.iter().any(|s| s == k)).collect(),
@@ -185,6 +277,7 @@ impl Threadbear {
             search,
             folded,
             composers: HashMap::new(),
+            drafts: crate::drafts::Drafts::load(&threadbear_client::config::RunnerConfig::from_env().home),
             logins: RunnerLogins::default(),
             sidebar,
             root_focus: cx.focus_handle(),
@@ -194,6 +287,8 @@ impl Threadbear {
             settings_save_task: None,
             dock,
             dock_view,
+            #[cfg(feature = "frame-stats")]
+            frame_rate: None,
             hidden_panes: Vec::new(),
             mode: SidebarMode::Inbox,
             history: NavigationHistory::default(),
@@ -202,6 +297,9 @@ impl Threadbear {
             shortcuts_watch: None,
             shortcuts_path: None,
             menu_signature: String::new(),
+            menus_stale: true,
+            failed_on_account: HashMap::new(),
+            inbox_count_cache: Default::default(),
             last_window_title: String::new(),
             archived_note: None,
             inbox_end_note: None,
@@ -219,7 +317,20 @@ impl Threadbear {
             website_url: None,
             restart_notice_ms: None,
             schedules_supported: false,
-            active_schedule_count: 0,
+            scheduled,
+            schedule_editor: None,
+            shows_home: false,
+            restoring_place: false,
+            librarian: crate::librarian::LibrarianState::new(),
+            librarian_pokes: crate::home_page::Pokes::new(crate::home_page::Art::Librarian),
+            runner_settings: None,
+            small_jobs: vec!["claude".into()],
+            settings_window: None,
+            settings_error: None,
+            settings_unsupported: false,
+            standing_instructions: None,
+            runner_version: String::new(),
+            upstream_on: false,
             projects_supported: false,
             all_projects: Vec::new(),
             new_thread: crate::new_thread::NewThreadState::new(),
@@ -227,14 +338,79 @@ impl Threadbear {
             slash: Default::default(),
             move_sheet: None,
             side,
+            sidebar_view: None,
             _events: events,
-            _subs: vec![appearance, searching, frame],
+            _subs: vec![appearance, searching, frame, menus, looking, quitting],
         };
         // The window starts on the Inbox with nothing open (`noteNavigation`
         // on launch), so Back from the first thread comes back here.
         this.note_navigation();
         this.watch_shortcuts(cx);
         this
+    }
+
+    /// A reply button's pill was clicked (AppModel.pressReplyButton). Not
+    /// pressed yet: presses it, "…" until the runner answers, and a second
+    /// click meanwhile does nothing. Pressed: opens the thread it started or
+    /// messaged rather than pressing again.
+    pub(crate) fn press_reply_button(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((thread_id, button)) = crate::reply_buttons::known(&id) else { return };
+        // Only from the transcript of the thread that made it: ids are the
+        // runner's per thread, and a link copied into another thread's reply
+        // mustn't press this one.
+        if self.selected.as_deref() != Some(thread_id.as_str()) {
+            self.show_error("That button belongs to another thread, so it can't be pressed from here.".into(), cx);
+            return;
+        }
+        if let Some(pressed) = &button.pressed {
+            if self.threads.contains_key(&pressed.thread_id) {
+                self.open(pressed.thread_id.clone(), window, cx);
+            } else {
+                let what = if button.send.is_some() { "messaged" } else { "started" };
+                self.show_error(format!("The thread that button {what} isn't in your sidebar, so it can't open here. It was deleted, or it's archived on another machine."), cx);
+            }
+            return;
+        }
+        if !crate::reply_buttons::set_pressing(&id, true) {
+            return;
+        }
+        self.redraw_pane(cx);
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let res = call(client, "buttons.press", json!({ "threadId": thread_id, "buttonId": id })).await;
+            this.update(cx, |this, cx| {
+                match res {
+                    Ok(v) => {
+                        if let Some(button) = threadbear_core::reply_buttons::ReplyButton::decode(&v["button"]) {
+                            crate::reply_buttons::receive([button], &thread_id);
+                        }
+                    }
+                    Err(e) => this.show_error(e.message, cx),
+                }
+                crate::reply_buttons::set_pressing(&id, false);
+                this.redraw_pane(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The open thread draws again: its pills read the buttons as they draw.
+    fn redraw_pane(&self, cx: &mut Context<Self>) {
+        if let Some(pane) = &self.pane {
+            pane.update(cx, |_, cx| cx.notify());
+        }
+        cx.notify();
+    }
+
+    /// One of the app's windows came to the front or went (`active`, as the
+    /// window itself has it, set before its observers run): with any in
+    /// front, the open thread is read.
+    pub(crate) fn looking_changed(&mut self, window: u64, active: bool, cx: &mut Context<Self>) {
+        crate::thread::set_looking(window, active);
+        if let (true, Some(pane)) = (crate::thread::is_looking(), self.pane.clone()) {
+            pane.read(cx).mark_seen();
+        }
     }
 
     fn on_seen(&mut self, seen: Seen, cx: &mut Context<Self>) {
@@ -244,6 +420,12 @@ impl Threadbear {
                 if let Status::Connected { hello, .. } = &status {
                     self.logins = RunnerLogins::from_hello(hello);
                     self.remote.experiments = hello["experiments"].as_array().into_iter().flatten().filter_map(|e| e.as_str().map(str::to_owned)).collect();
+                    self.runner_version = hello["runnerVersion"].as_str().unwrap_or("").to_owned();
+                    self.upstream_on = hello["updates"]["upstream"]["state"].as_str().is_some_and(|s| s != "off");
+                    // A runner from before `providers` has Claude's built in.
+                    if let Some(providers) = hello["providers"].as_array() {
+                        self.small_jobs = providers.iter().filter(|p| p["smallJobs"].as_bool() == Some(true)).filter_map(|p| p["id"].as_str().map(str::to_owned)).collect();
+                    }
                 }
                 self.status = status;
                 // Each time it's connected, the whole list again, and the
@@ -253,6 +435,7 @@ impl Threadbear {
                     self.load_list(cx);
                     self.refresh_restart(cx);
                     self.load_projects(cx);
+                    self.load_runner_settings(cx);
                     self.load_schedules(cx);
                     self.load_remote(cx);
                     self.side.update(cx, |side, cx| side.connected(cx));
@@ -270,11 +453,14 @@ impl Threadbear {
                         if let Some(pane) = &self.pane {
                             pane.update(cx, |p, cx| p.summary_changed(&t, cx));
                         }
-                        self.threads.insert(t.id.clone(), t);
+                        let before = self.threads.insert(t.id.clone(), t.clone());
+                        self.note_failed_account(before.as_ref(), &t);
                     }
                 }
                 "thread.deleted" => {
-                    self.threads.remove(params["threadId"].as_str().unwrap_or(""));
+                    let id = params["threadId"].as_str().unwrap_or("");
+                    self.threads.remove(id);
+                    self.failed_on_account.remove(id);
                 }
                 "runner.notice" => {
                     // The runner said it's restarting: the connection going
@@ -284,14 +470,24 @@ impl Threadbear {
                     }
                     self.refresh_restart(cx);
                 }
+                "librarian.updated" => self.librarian.status = Some(threadbear_core::librarian::Status::decode(&params["librarian"])),
+                "settings.updated" => self.runner_settings = Some(params["settings"].clone()),
+                // A login appearing or going, its models once asked, its
+                // usage; and the pools after a save: both replace `hello`'s.
+                "accounts.updated" => self.logins.set_accounts(&params["accounts"]),
+                "pools.updated" => self.logins.set_pools(&params["pools"]),
+                "instructions.updated" => self.standing_instructions = Some(threadbear_core::runner_settings::StandingInstructions::decode(&params["instructions"])),
                 "projects.updated" => {
+                    self.librarian.projects_made = crate::librarian::projects_made(&params["projects"]);
                     self.sidebar.project_icons = crate::sidebar::project_icons(&params["projects"]);
                     self.sidebar.projects = crate::sidebar::project_briefs(&params["projects"]);
                     self.all_projects = project_list(&params["projects"]);
                     self.side.update(cx, |side, cx| side.projects_updated(&params["projects"], cx));
                 }
                 "schedules.updated" => {
-                    self.load_schedules(cx);
+                    // The whole list, in order.
+                    self.schedules_supported = true;
+                    self.set_schedules(&params["schedules"]);
                     self.side.update(cx, |side, cx| side.schedules_updated(&params["schedules"], cx));
                 }
                 "remoteThreads.updated" => self.receive_remote(&params, cx),
@@ -314,7 +510,9 @@ impl Threadbear {
                 match res {
                     Ok(v) => {
                         let list: Vec<ThreadSummary> = serde_json::from_value(v["threads"].clone()).unwrap_or_default();
+                        let before = std::mem::take(&mut this.threads);
                         this.threads = list.into_iter().map(|t| (t.id.clone(), t)).collect();
+                        this.note_failed_accounts(&before);
                         // Other runners' rows stay listed beside these.
                         this.apply_remote_index(cx);
                         this.list_error = None;
@@ -331,14 +529,14 @@ impl Threadbear {
 
     /// Whether the runner has schedules at all, and how many are active
     /// (`schedulesSupported`, `activeScheduleCount`), for the activity bar.
-    fn load_schedules(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn load_schedules(&mut self, cx: &mut Context<Self>) {
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
             let res = call(client, "schedules.list", json!({})).await;
             this.update(cx, |this, cx| {
                 if let Ok(v) = res {
                     this.schedules_supported = true;
-                    this.active_schedule_count = v["schedules"].as_array().map_or(0, |list| list.iter().filter(|s| schedule_is_active(s)).count());
+                    this.set_schedules(&v["schedules"]);
                     cx.notify();
                 }
             })
@@ -347,8 +545,93 @@ impl Threadbear {
         .detach();
     }
 
+    /// The runner's settings (`settings.get`), for the pages that show some
+    /// of them (the Librarian's Runs on), and Settings once it's here.
+    pub(crate) fn load_runner_settings(&mut self, cx: &mut Context<Self>) {
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let res = call(client, "settings.get", json!({})).await;
+            this.update(cx, |this, cx| {
+                match res {
+                    Ok(v) => {
+                        this.runner_settings = Some(v["settings"].clone());
+                        this.settings_unsupported = false;
+                    }
+                    // A runner from before settings.
+                    Err(e) if e.code == -32601 => {
+                        this.settings_unsupported = true;
+                        this.runner_settings = None;
+                    }
+                    Err(_) => {}
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// `updateSettings`: shown at once; the runner's answer (or its error,
+    /// which puts it back) has the last word. `change` is what
+    /// `settings.update` takes.
+    pub(crate) fn update_runner_settings(&mut self, change: Value, cx: &mut Context<Self>) {
+        let before = self.runner_settings.clone();
+        if let Some(settings) = self.runner_settings.as_mut() {
+            merge_json(settings, &change);
+        }
+        let guess = self.runner_settings.clone();
+        cx.notify();
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let res = call(client, "settings.update", change).await;
+            this.update(cx, |this, cx| {
+                match res {
+                    Ok(v) => {
+                        this.runner_settings = Some(v["settings"].clone());
+                        this.settings_error = None;
+                    }
+                    Err(e) => {
+                        // Put back only if nothing newer has come since
+                        // (`settings.updated` from another window), and ask
+                        // again either way: the runner has the last word.
+                        if this.runner_settings == guess {
+                            this.runner_settings = before;
+                        }
+                        this.load_runner_settings(cx);
+                        // Under the form in Settings (`SettingsErrorRow`).
+                        this.settings_error = Some(e.message);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Settings › General › Appearance: this app's own, kept in its settings
+    /// file (`AppAppearance`).
+    pub(crate) fn set_appearance(&mut self, appearance: crate::style::Appearance, window: &mut Window, cx: &mut Context<Self>) {
+        crate::style::set_appearance(appearance, window, cx);
+        self.settings.saved.appearance = (appearance != crate::style::Appearance::System).then(|| appearance.name().to_owned());
+        self.save_settings_soon(cx);
+        cx.notify();
+    }
+
+    /// The providers whose logins can run small jobs (`smallJobs`).
+    pub(crate) fn small_job_providers(&self) -> Vec<String> {
+        self.small_jobs.clone()
+    }
+
     pub(crate) fn open(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected.as_deref() == Some(id.as_str()) {
+            // Open already, behind a page (a schedule's target was clicked):
+            // the page goes.
+            if self.shows_home {
+                self.shows_home = false;
+                self.note_navigation();
+                cx.notify();
+            }
             return;
         }
         let Some(summary) = self.threads.get(&id).cloned() else { return };
@@ -362,12 +645,18 @@ impl Threadbear {
         }
         let client = self.client.clone();
         let app = cx.entity().downgrade();
+        let made = !self.composers.contains_key(&id);
         let composer = self
             .composers
             .entry(id.clone())
             .or_insert_with(|| cx.new(|cx| Composer::new(Some(id.clone()), client.clone(), app, window, cx)))
             .clone();
+        // Its words from before a quit, the first time its box is made.
+        if made {
+            self.restore_saved_draft(&id, &composer, cx);
+        }
         self.selected = Some(id);
+        self.shows_home = false;
         let pane = cx.new(|cx| ThreadPane::new(client, summary, composer.clone(), cx));
         composer.update(cx, |c, cx| {
             c.attach(pane.downgrade());
@@ -393,6 +682,7 @@ impl Threadbear {
             old.read(cx).unsubscribe();
         }
         self.selected = None;
+        self.shows_home = false;
         self.note_navigation();
         cx.notify();
     }
@@ -489,6 +779,14 @@ impl Threadbear {
         let dock = self.dock.read(cx).layout().summary().replace("threadbear.", "");
         let mut sidebar = self.sidebar_dump(cx);
         sidebar["mode"] = json!(self.mode.name());
+        // The Scheduled view in the thread shape, as the Swift app's dump has it.
+        if self.mode == SidebarMode::Scheduled {
+            sidebar["sections"] = self.scheduled_dump()["sections"].clone();
+        }
+        let (librarian_sections, librarian_state) = self.librarian_dump();
+        if self.mode == SidebarMode::Librarian {
+            sidebar["sections"] = librarian_sections;
+        }
         json!({
             "connection": connection,
             "selection": self.selection_dump(),
@@ -497,9 +795,22 @@ impl Threadbear {
             "newThread": crate::new_thread::page_dump(self, cx),
             "palette": self.composer(cx).map_or(Value::Null, |c| c.read(cx).palette_dump(cx)),
             "moveSheet": self.move_sheet.as_ref().map_or(Value::Null, |s| s.read(cx).dump(cx)),
+            "scheduleEditor": self.schedule_editor.as_ref().map_or(Value::Null, |e| e.read(cx).dump(cx)),
+            // The Settings window while it's open, and what it shows.
+            "settingsWindow": self.settings_window.as_ref().map_or(Value::Null, |(_, view)| view.read(cx).dump(cx)),
+            // The page in the main panel in place of a thread (`showsHomePage`).
+            "homePage": match self.home_page() {
+                Some(SidebarMode::Scheduled) => self.scheduled_home_dump(),
+                Some(SidebarMode::Projects) => json!({ "title": "Projects" }),
+                Some(_) => self.librarian_home_dump(),
+                None => Value::Null,
+            },
+            // The librarian's state in words, once the runner has said.
+            "librarian": librarian_state,
             "transcript": pane.map(|p| p.dump(cx)).unwrap_or_else(|| json!({ "rows": [] })),
             "decisions": pane.and_then(|p| p.composer.read(cx).decision_lines(cx)),
             "banner": self.banner_dump(),
+            "limit": self.limit_dump(cx),
             "error": self.error_message.clone(),
             "dock": dock,
             "zoom": crate::style::zoom_percent(),
@@ -534,6 +845,7 @@ impl Threadbear {
                 out["runner"] = json!(away.name);
             }
             out["chip"] = json!(crate::composer_chips::model_chip_text(&data));
+            out["chipBadge"] = json!(crate::composer_chips::model_chip_badge_text(&data));
             if let Some(card) = composer.card_lines(cx) {
                 out["card"] = json!(card);
             }
@@ -544,7 +856,8 @@ impl Threadbear {
     /// The sections with the search applied, as they're drawn.
     pub(crate) fn shown_sections(&self, cx: &App, now: i64) -> Vec<inbox::Section> {
         let query = self.search.read(cx).value().trim().to_lowercase();
-        inbox::sections_ordered(self.threads.values().filter(|t| query.is_empty() || inbox::matches(t, &query)), now, self.sidebar.order)
+        let wakes = inbox::wakes(&self.scheduled.list);
+        inbox::sections_ordered(self.threads.values().filter(|t| query.is_empty() || inbox::matches(t, &query)), now, self.sidebar.order, &wakes)
     }
 
     pub(crate) fn connection_note(&self) -> Option<String> {
@@ -556,19 +869,37 @@ impl Threadbear {
     }
 }
 
+/// `change`'s fields written over `into`'s, objects within objects too, as a
+/// `settings.update` changes only what it names.
+fn merge_json(into: &mut Value, change: &Value) {
+    match (into, change) {
+        (Value::Object(into), Value::Object(change)) => {
+            for (key, value) in change {
+                match into.get_mut(key) {
+                    Some(existing) if existing.is_object() && value.is_object() => merge_json(existing, value),
+                    _ => {
+                        into.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        (into, change) => *into = change.clone(),
+    }
+}
+
 pub(crate) fn project_list(projects: &Value) -> Vec<(String, String, bool)> {
     projects.as_array().map_or_else(Vec::new, |list| list.iter().filter_map(|p| Some((p["id"].as_str()?.to_string(), p["title"].as_str()?.to_string(), p["archived"].as_bool().unwrap_or(false)))).collect())
 }
 
-/// `Schedule.isActive`: not paused and not finished.
-fn schedule_is_active(schedule: &Value) -> bool {
-    !schedule["paused"].as_bool().unwrap_or(false) && schedule["finishedAt"].is_null() && !schedule["finished"].as_bool().unwrap_or(false)
-}
 
 impl Render for Threadbear {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_menus(cx);
+        if std::mem::take(&mut self.menus_stale) {
+            self.sync_menus(cx);
+        }
         let open_menu = self.render_open_menu();
+        #[cfg(feature = "frame-stats")]
+        let open_menu = open_menu.into_iter().map(IntoElement::into_any_element).chain(self.frame_rate.clone().map(|f| f.into_any_element()));
         self.render_shell(window, cx).children(open_menu)
     }
 }

@@ -347,8 +347,8 @@ final class TextRowCell: RowCellView {
         phoneMark.target = self
         phoneMark.action = #selector(phoneClicked)
         phoneMark.isHidden = true
-        phoneMark.setTip("Sent from the iPhone app")
-        phoneMark.setAccessibilityLabel("Sent from the iPhone app")
+        phoneMark.setTip("Sent from the phone app")
+        phoneMark.setAccessibilityLabel("Sent from the phone app")
         addSubview(phoneMark)
         footerTip.isHidden = true
         addSubview(footerTip)

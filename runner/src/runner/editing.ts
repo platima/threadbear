@@ -91,8 +91,12 @@ export const editingPart = {
         delete rec.resumeAt;
         if (!rec.handoff && this.saidBefore(rec, seq)) rec.handoff = { fromCwd: rec.cwd, fromAccountId: rec.accountId };
       } else if (cut.resumeAt) rec.resumeAt = cut.resumeAt;
+      // The kept context breakdown counted the turns just cut (Codex review).
+      delete rec.contextUsage;
       // The cut may undo what the session was told about them (Codex review).
       if (!cut.fresh && rec.instructionsTold !== undefined) rec.instructionsTold = INSTRUCTIONS_REWOUND;
+      // And what it was told of reply button presses (Codex review).
+      this.retellPressesFrom(rec, seq, Boolean(cut.fresh));
       (rec.rewinds ??= []).push({ from: seq, to: toSeq });
       const ev = this.emit(st, { type: 'thread.rewound', fromSeq: seq, toSeq, files });
       // What the cut turns left open or found goes with them (pins stay).

@@ -232,3 +232,16 @@ fn testTheOpenCardGoesOnceHisReplyIsOnItsWay() {
     model.set_pending(vec![]);
     assert_eq!(model.open_card().map(|r| r.id.as_str()), Some("ak:1"));
 }
+
+#[test]
+fn an_asks_link_opens_a_page_a_file_or_a_review_and_nothing_else() {
+    use threadbear_core::reducer::AskLink;
+    let link = |url: &str| AskLink { title: "Look".into(), url: url.into() };
+    assert_eq!(link("https://example.com/a").target("/Users/m").as_deref(), Some("https://example.com/a"));
+    assert_eq!(link("~/dev/notes.md").target("/Users/m").as_deref(), Some("/Users/m/dev/notes.md"));
+    assert_eq!(link("/tmp/shot.png").target("").as_deref(), Some("/tmp/shot.png"));
+    assert_eq!(link("review:abc123").target("").as_deref(), Some("review:abc123"));
+    assert_eq!(link("review:").target(""), None);
+    assert_eq!(link("javascript:alert(1)").target(""), None);
+    assert_eq!(link("notes.md").target("/Users/m"), None);
+}

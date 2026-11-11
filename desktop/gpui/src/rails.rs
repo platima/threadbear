@@ -22,6 +22,8 @@ const BUTTON: f32 = 32.;
 pub(crate) struct RailButton {
     pub(crate) id: SharedString,
     pub(crate) symbol: &'static str,
+    /// Drawn instead of `symbol`: a patch panel's own icon and origin badge.
+    pub(crate) face: Option<AnyElement>,
     pub(crate) tip: String,
     pub(crate) badge: Option<usize>,
     pub(crate) dot: bool,
@@ -31,7 +33,7 @@ pub(crate) struct RailButton {
 
 impl RailButton {
     fn new(id: impl Into<SharedString>, symbol: &'static str, title: impl Into<String>, active: bool) -> Self {
-        Self { id: id.into(), symbol, tip: title.into(), badge: None, dot: false, quiet_dot: false, active }
+        Self { id: id.into(), symbol, face: None, tip: title.into(), badge: None, dot: false, quiet_dot: false, active }
     }
 }
 
@@ -63,7 +65,10 @@ fn rail_button(button: RailButton, on_click: impl Fn(&mut Threadbear, &mut Windo
         .aria_label(label)
         .tooltip(move |window, cx| Tooltip::new(tip_for_tooltip.clone()).build(window, cx))
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
-        .child(icons::symbol(button.symbol).with_size(px(15.)));
+        .child(match button.face {
+            Some(face) => face,
+            None => icons::symbol(button.symbol).with_size(px(15.)).into_any_element(),
+        });
     if let Some(badge) = button.badge.filter(|b| *b > 0) {
         // Grey, not accent: a count of what's there, not an alarm.
         let text = if badge > 99 { "99+".to_string() } else { badge.to_string() };
@@ -103,8 +108,13 @@ impl Threadbear {
 
     /// The Inbox's thread count, for the Threads button's badge.
     fn inbox_count(&self, cx: &App) -> usize {
+        if let Some(count) = self.inbox_count_cache.get() {
+            return count;
+        }
         let now = crate::now_ms();
-        self.shown_sections(cx, now).iter().find(|s| s.key == "inbox").map_or(0, |s| s.rows.len())
+        let count = self.shown_sections(cx, now).iter().find(|s| s.key == "inbox").map_or(0, |s| s.rows.len());
+        self.inbox_count_cache.set(Some(count));
+        count
     }
 
     /// `WindowGrip`: the strip under the traffic lights, which moves the
@@ -131,7 +141,7 @@ impl Threadbear {
         if self.schedules_supported {
             let mut button = RailButton::new("rail-scheduled", "clock", "Scheduled", mode == SidebarMode::Scheduled);
             button.tip = self.shortcut_tip("Scheduled", ShortcutCommand::ShowScheduled);
-            button.badge = Some(self.active_schedule_count);
+            button.badge = Some(self.scheduled.active_count());
             views.push(rail_button(button, |this, _, cx| this.set_mode(SidebarMode::Scheduled, cx), cx));
         }
         if self.projects_supported {
@@ -140,6 +150,8 @@ impl Threadbear {
             views.push(rail_button(button, |this, _, cx| this.set_mode(SidebarMode::Projects, cx), cx));
             let mut button = RailButton::new("rail-librarian", "books.vertical", "Librarian", mode == SidebarMode::Librarian);
             button.tip = self.shortcut_tip("Librarian", ShortcutCommand::ShowLibrarian);
+            // The look under way and the ones waiting (`pendingCount`).
+            button.badge = self.librarian.status.as_ref().map(|s| s.pending_count());
             views.push(rail_button(button, |this, _, cx| this.set_mode(SidebarMode::Librarian, cx), cx));
         }
         let usage_shown = self.dock.read(cx).controller.is_showing(shell::USAGE);
@@ -184,28 +196,23 @@ impl Threadbear {
         let patches_shown = showing(shell::PATCHES);
         // The accent dot while the last turn's asks aren't all ticked.
         let open_ask = thread.asks.iter().flatten().any(|a| !a.ticked.unwrap_or(false)) && thread.asks_seq.is_some();
-        let panels: Vec<(String, String, Option<usize>, bool)> = thread
-            .panels
-            .iter()
-            .flatten()
-            .filter_map(|p| {
-                let id = p["id"].as_str()?.to_string();
-                let title = p["title"].as_str()?.to_string();
-                let badge = p["badge"].as_u64().map(|b| b as usize);
-                let shown = dock.controller.is_showing(&id);
-                Some((id, title, badge, shown))
-            })
-            .collect();
+        let panels: Vec<(threadbear_core::highlights::Panel, bool)> = thread.panels().into_iter().map(|p| {
+            let shown = dock.controller.is_showing(&p.id);
+            (p, shown)
+        }).collect();
         let _ = dock;
         let mut column = vec![];
         let mut highlights = RailButton::new("rail-highlights", "pin", "Highlights", highlights_shown);
         highlights.dot = open_ask;
         column.push(rail_button(highlights, |this, _, cx| this.click_rail(shell::HIGHLIGHTS, cx), cx));
-        for (id, title, badge, shown) in panels {
-            let mut b = RailButton::new(SharedString::from(format!("rail-panel-{id}")), panel_symbol_for(&id), title, shown);
-            b.badge = badge;
-            let panel = id.clone();
-            column.push(rail_button(b, move |this, _, cx| this.click_rail(&panel, cx), cx));
+        for (panel, shown) in panels {
+            // Its own icon, with where it came from in the corner and in the
+            // tip ("Convex, from the Threadbear project"), as the Swift rail.
+            let mut b = RailButton::new(SharedString::from(format!("rail-panel-{}", panel.id)), "square.dashed", crate::patch_icons::panel_tip(&panel, &thread), shown);
+            b.face = Some(crate::patch_icons::panel_face(&panel, &thread, &self.sidebar.project_icons, 15., 13., cx));
+            b.badge = panel.badge.map(|n| n.max(0) as usize);
+            let id = panel.id.clone();
+            column.push(rail_button(b, move |this, _, cx| this.click_rail(&id, cx), cx));
         }
         column.push(rail_button(RailButton::new("rail-files", "folder", "Files", files_shown), |this, _, cx| this.click_rail(shell::FILES, cx), cx));
         let patches = thread.patches.as_ref().map_or(0, Vec::len);
@@ -226,11 +233,11 @@ impl Threadbear {
         let mode = self.mode;
         let mut activity = vec![json!({ "title": "Threads", "badge": self.inbox_count(cx), "active": mode == SidebarMode::Inbox })];
         if self.schedules_supported {
-            activity.push(json!({ "title": "Scheduled", "badge": self.active_schedule_count, "active": mode == SidebarMode::Scheduled }));
+            activity.push(json!({ "title": "Scheduled", "badge": self.scheduled.active_count(), "active": mode == SidebarMode::Scheduled }));
         }
         if self.projects_supported {
             activity.push(json!({ "title": "Projects", "active": mode == SidebarMode::Projects }));
-            activity.push(json!({ "title": "Librarian", "active": mode == SidebarMode::Librarian }));
+            activity.push(json!({ "title": "Librarian", "badge": self.librarian.status.as_ref().map(|s| s.pending_count()), "active": mode == SidebarMode::Librarian }));
         }
         let mut right = vec![];
         if let Some(thread) = self.open_thread() {
@@ -252,9 +259,4 @@ impl Threadbear {
     }
 }
 
-/// `PanelIcon.symbol(for:)`, for a thread's own panels. The Swift app reads
-/// the panel's kind; every panel gets the generic mark until they're drawn
-/// here (the panels themselves are Stage 2).
-fn panel_symbol_for(_panel: &str) -> &'static str {
-    "square.dashed"
-}
+

@@ -294,6 +294,12 @@ impl SidePane {
     /// What it's about to show changed: a new selection fetches straight
     /// away, a new event or pin about a second later, as PanelRail does.
     fn app_changed(&mut self, app: &Entity<Threadbear>, cx: &mut Context<Self>) {
+        // It draws from the app's state (the open thread, its title, its
+        // panels) and the dock reuses its last frame until it's told
+        // otherwise (shell.rs, `render_side_section`), so any change to the
+        // app draws it again. Fetching again is only for a new thread or new
+        // events, below.
+        cx.notify();
         let t = app.read(cx);
         let Some(thread) = t.selected.as_ref().and_then(|id| t.threads.get(id)) else { return };
         let key = (thread.id.clone(), thread.last_seq, thread.highlights_at.clone());
@@ -465,7 +471,7 @@ impl SidePane {
                 self.preview_path(path, Some(item.title.clone()), thread, cx);
             }
         } else if let Some(url) = &item.url {
-            self.open_url(url, cx);
+            self.follow_link(url, cx);
         }
     }
 
@@ -473,7 +479,7 @@ impl SidePane {
     /// now). Anything else (a `slack:` link and the like) isn't opened from
     /// here: an agent's links only start other apps once Mike has been
     /// asked, which the app can't do yet (`LinkPolicy.ask`).
-    pub(crate) fn open_url(&mut self, url: &str, cx: &mut Context<Self>) {
+    pub(crate) fn follow_link(&mut self, url: &str, cx: &mut Context<Self>) {
         if let Some(path) = url.strip_prefix("file://") {
             if let Some(thread) = self.thread(cx) {
                 let decoded = crate::files::percent_decode(path);
@@ -490,11 +496,16 @@ impl SidePane {
     /// program never opens from a click here). A thread on another Mac has
     /// no copy here, so its rows don't offer this.
     pub(crate) fn open_externally(&mut self, path: &str, cx: &mut Context<Self>) {
-        if core::runs_code(path) {
-            self.note_error(format!("{} is a program. It doesn't open from here.", core::last_component(path)), cx);
-            return;
+        crate::files::open_file_in_app(path, self.origin(cx), cx);
+    }
+
+    /// Whose files the pane's thread names: with no thread, nobody's, so
+    /// none opens.
+    pub(crate) fn origin(&self, cx: &App) -> crate::open_gate::Origin {
+        match self.thread(cx) {
+            Some(t) if !t.is_remote() => crate::open_gate::Origin::ThisMac,
+            _ => crate::open_gate::Origin::OtherMac,
         }
-        crate::files::open_file_in_app(path, cx);
     }
 
     pub(crate) fn preview_path(&mut self, path: &str, title: Option<String>, thread: &ThreadSummary, cx: &mut Context<Self>) {
@@ -622,7 +633,7 @@ impl SidePane {
                     crate::files::open_web(&url, cx);
                 }
             }
-            MenuAction::Reveal { path } => crate::files::reveal(&path, cx),
+            MenuAction::Reveal { path } => crate::files::reveal(&path, if thread.is_remote() { crate::open_gate::Origin::OtherMac } else { crate::open_gate::Origin::ThisMac }, cx),
             MenuAction::Copy { text } => cx.write_to_clipboard(ClipboardItem::new_string(text)),
             MenuAction::Remove { id, title } => self.remove_highlight(id, title, thread.id.clone(), cx),
             MenuAction::CopyPicture => {
@@ -882,18 +893,18 @@ impl PaneRow {
             .gap(px(6.))
             .min_w_0()
             .when_some(self.lead, |s, lead| s.child(div().flex_none().font_family(cx.theme().mono_font_family.clone()).text_size(px(style::size::DETAIL)).text_color(p.secondary).child(lead)))
-            .child(div().min_w_0().truncate().text_size(px(style::size::LABEL)).line_height(px(17.)).text_color(label_color).child(self.title.clone()))
+            .child(div().min_w_0().truncate().text_size(px(style::size::LABEL)).line_height(px(style::natural_line(style::size::LABEL))).text_color(label_color).child(self.title.clone()))
             .child(div().flex_1().min_w(px(4.)))
-            .when_some(self.trailing, |s, t| s.child(div().flex_none().text_size(px(style::size::SMALL)).text_color(p.faint).child(t)))
+            .when_some(self.trailing, |s, t| s.child(div().flex_none().text_size(px(style::size::SMALL)).line_height(px(style::natural_line(style::size::SMALL))).text_color(p.faint).child(t)))
             .when_some(self.trailing_symbol, |s, symbol| s.child(icon(&symbol, 11., p.secondary)));
         let body = v_flex()
             .flex_1()
             .min_w_0()
             .gap(px(2.))
             .child(title_row)
-            .when_some(self.note.filter(|n| !n.is_empty()), |s, note| s.child(div().text_size(px(style::size::DETAIL)).line_height(px(16.)).text_color(p.secondary).line_clamp(4).overflow_hidden().text_ellipsis().child(note)))
+            .when_some(self.note.filter(|n| !n.is_empty()), |s, note| s.child(div().text_size(px(style::size::DETAIL)).line_height(px(style::natural_line(style::size::DETAIL))).text_color(p.secondary).line_clamp(4).overflow_hidden().text_ellipsis().child(note)))
             .when_some(self.detail.filter(|d| !d.is_empty()), |s, detail| {
-                let mut d = div().text_size(px(style::size::SMALL)).line_height(px(14.)).text_color(p.faint);
+                let mut d = div().text_size(px(style::size::SMALL)).line_height(px(style::natural_line(style::size::SMALL))).text_color(p.faint);
                 d = if self.detail_lines > 1 { d.line_clamp(self.detail_lines).overflow_hidden().text_ellipsis() } else { d.truncate() };
                 s.child(d.child(detail))
             });
@@ -944,7 +955,7 @@ impl SidePane {
         let (fg, secondary, faint, hairline) = (p.fg, p.secondary, p.faint, p.hairline);
         let hover_group = group.clone();
         let chevron_group = group.clone();
-        let title_el = div().flex_none().text_size(px(style::size::LABEL)).line_height(px(16.)).font_semibold().text_color(secondary).group_hover(hover_group, move |s| s.text_color(fg)).child(h.title.clone());
+        let title_el = div().flex_none().text_size(px(style::size::LABEL)).line_height(px(style::natural_line(style::size::LABEL))).font_semibold().text_color(secondary).group_hover(hover_group, move |s| s.text_color(fg)).child(h.title.clone());
         let mut label = h_flex().group(group.clone()).flex_1().min_w_0().gap(px(6.)).pl(px(LEADING)).pt(px(18.)).pb(px(6.)).items_center();
         if let Some(leading) = h.icon {
             label = label.child(leading);
@@ -992,7 +1003,7 @@ impl SidePane {
                 let mut pr = PaneRow::new(SharedString::from(format!("hl-plink-{project_id}-{i}")), link.title.clone())
                     .icon("globe")
                     .tip(format!("Open {address}"))
-                    .on_click(move |this, _window, cx| this.open_url(&url.clone(), cx))
+                    .on_click(move |this, _window, cx| this.follow_link(&url.clone(), cx))
                     .on_menu(move |this, pos, window, cx| this.open_link_row_menu(&menu_url.clone(), pos, window, cx));
                 if address != link.title {
                     pr = pr.detail(Some(address));
@@ -1254,8 +1265,8 @@ impl SidePane {
                     .flex_1()
                     .min_w_0()
                     .gap(px(2.))
-                    .child(div().text_size(px(style::size::LABEL)).line_height(px(17.)).text_color(label_color).when(ticked, |s| s.line_through()).child(action))
-                    .when_some(where_text, |s, place| s.child(div().text_size(px(style::size::SMALL)).text_color(p.faint).line_clamp(2).child(place))),
+                    .child(div().text_size(px(style::size::LABEL)).line_height(px(style::natural_line(style::size::LABEL))).text_color(label_color).when(ticked, |s| s.line_through()).child(action))
+                    .when_some(where_text, |s, place| s.child(div().text_size(px(style::size::SMALL)).line_height(px(style::natural_line(style::size::SMALL))).text_color(p.faint).line_clamp(2).child(place))),
             )
             .into_any_element()
     }
@@ -1331,15 +1342,6 @@ impl SidePane {
         }
     }
 
-    fn section_symbol(&self, thread: &ThreadSummary, section: &str) -> String {
-        match section {
-            HIGHLIGHTS => "pin".to_owned(),
-            PATCHES => "square.dashed".to_owned(),
-            FILES => "folder".to_owned(),
-            id => thread.panels().into_iter().find(|p| p.id == id).map_or("square.dashed".to_owned(), |p| core::panel_symbol(&p).to_owned()),
-        }
-    }
-
     /// The header above the pane's content: a preview's Back and buttons, else
     /// the section's name, with the section icons along the right.
     fn render_header(&mut self, thread: &ThreadSummary, section: &str, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1374,7 +1376,12 @@ impl Render for SidePane {
             return v_flex().size_full().bg(bg).child(crate::files::pane_note("Pick a thread to see its Highlights.", p)).into_any_element();
         };
         let section = self.section_for(&thread);
-        let header = self.render_header(&thread, &section, cx).into_any_element();
+        // Only a preview has a header of its own here, for its Back and its
+        // buttons. Otherwise the dock's bar above already names the section,
+        // and the Swift pane has nothing between the two (PaneHeader is gone
+        // from its panes); a second "Highlights" under the first looked off.
+        let previewing = self.previews.get(&thread.id).is_some_and(|pv| pv.from == section);
+        let header = previewing.then(|| self.render_header(&thread, &section, cx).into_any_element());
         let body = if let Some(preview) = self.previews.get(&thread.id).filter(|pv| pv.from == section).cloned() {
             self.render_preview(&thread, &preview, window, cx)
         } else {
@@ -1416,7 +1423,7 @@ impl Render for SidePane {
             .bg(bg)
             .text_color(p.fg)
             .child(measure)
-            .child(header)
+            .children(header)
             .child(div().flex_1().min_h_0().child(body))
             .when_some(menu, |s, (position, view)| s.child(deferred(anchored().position(position).snap_to_window_with_margin(px(8.)).child(div().occlude().child(view))).with_priority(1)))
             .when_some(popover, |s, card| s.child(card))

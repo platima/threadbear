@@ -1,15 +1,25 @@
 import type { HighlightState } from './highlights.ts';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { WaitingForRoom, Ask, AskAnswer, NeedsWho, DesignReview, ReplyButton, ReviewDraft, EffortLevel, MessageOrigin, PanelRequest, PermissionMode, ThreadShare, PersistedEvent, Provider, ArchivedBy, ArchiveVerdict, Subagent, ThreadProject, ThreadSchedule, ThreadStartedBy, ThreadStatus, ImageRef, LooseEnd } from './protocol.ts';
+import type { WaitingForRoom, Ask, AskAnswer, NeedsWho, DesignReview, ReplyButton, ReviewDraft, EffortLevel, MessageOrigin, PanelRequest, PermissionMode, ThreadShare, PersistedEvent, Provider, ArchivedBy, ArchiveVerdict, Subagent, ThreadProject, ThreadSchedule, ThreadStartedBy, ThreadStatus, ImageRef, LooseEnd, ContextUsage, LabReviewLedger, ReviewFinding } from './protocol.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import { paths } from './config.ts';
 import type { WorktreeRecord } from './worktrees.ts';
 import type { WakeWhen } from './wake-when.ts';
 
-export type QueuedSend = { turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number; recapped?: true };
+// Review by another lab's ledger as the runner keeps it: what goes on the
+// card (LabReviewLedger), plus where it is. delivered: the latest round's
+// findings went to the agent; answered: the round whose answers the
+// agent's turn gave (and the card showed).
+export type LabLedger = LabReviewLedger & { delivered?: number; answered?: number };
+// A reviewer's verdict: its findings, none when nothing holds up.
+export type ReviewVerdict = { findings: Pick<ReviewFinding, 'severity' | 'claim' | 'where' | 'case'>[] };
+
+export type QueuedSend = { turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number };
 
 // What thread.json holds: the public summary fields plus a few internal ones.
+export type PressNote = { id: string; line: string; told?: { seq: number; inFlight?: boolean } };
+
 export type ThreadRecord = {
   id: string;
   title: string;
@@ -22,6 +32,12 @@ export type ThreadRecord = {
   // itself at `until` (an ISO time). Kept here so the wait survives a
   // restart; start() re-arms its timer.
   waitingForRoom?: WaitingForRoom;
+  // Mike turned off carrying on by itself once its login has room again
+  // (the limit box by the composer). Absent: on, the default.
+  carryOnAtReset?: false;
+  // The turn that stopped at its login's limit, until the next turn
+  // starts, so turning carryOnAtReset back on knows it's still stuck there.
+  limitHitTurn?: string;
   // The id of the runner's own carry-on turn after a login ran dry, so a
   // carry-on that runs dry straight away waits rather than move again.
   autoCarryOn?: string;
@@ -86,6 +102,12 @@ export type ThreadRecord = {
   // review of its own; labReviews counts the reviews since Mike last wrote.
   reviewOf?: string;
   labReviews?: number;
+  // The ledger of the review under way (lab-review.ts, LabLedger): its
+  // findings and the agent's answers, until Mike next writes.
+  labReview?: LabLedger;
+  // On a review thread: the verdict its end_turn gave (findings), for the
+  // thread it reviewed.
+  reviewVerdict?: ReviewVerdict;
   // A review a draining, restarting or stopping runner couldn't start (it
   // makes no threads), for the runner that adopts or loads this one to start.
   // `seq`: where that turn's events end, which its diff is read back from.
@@ -108,6 +130,9 @@ export type ThreadRecord = {
   nativeSessionId?: string;
   contextTokens?: number;
   contextWindow?: number; // the model's window, when the CLI reports it
+  // Claude's last breakdown of the context (threads.contextUsage), for when
+  // its CLI has gone: only for the native session it was asked of.
+  contextUsage?: ContextUsage & { sessionId: string };
   costUsd?: number;
   reviews?: DesignReview[];
   reviewDeliveries?: string[]; // review IDs whose reply reached session.send
@@ -127,7 +152,8 @@ export type ThreadRecord = {
   forceUnread?: boolean; // set when a snooze ends
   // What the last completed turn said it needs from Mike, with the seq of
   // its turn.completed and which of its asks he has ticked.
-  needs?: { seq: number; needs: NeedsWho; asks?: Ask[]; ticked?: number[] };
+  // open: what the agent said is still open (experiment looseEnds).
+  needs?: { seq: number; needs: NeedsWho; asks?: Ask[]; ticked?: number[]; open?: string[] };
   // Set when the folder or account changes, or the record had to be
   // rebuilt; the next turn starts a new native session with a note.
   // lost: the session to resume couldn't be found (never saved; only set
@@ -155,13 +181,17 @@ export type ThreadRecord = {
   // told, so it hears each change once; 'cleared' or 'rewound' (instructions.ts).
   // Absent while it has never held any.
   instructionsTold?: string;
+  // Its reply buttons Mike has pressed, for its agent to hear of before his
+  // next message (Runner.takePressNews), so it doesn't send the same job
+  // again itself. Each keeps its own line, as the button can go (MAX_BUTTONS,
+  // a move); `told` once a message carried it, `inFlight` until that turn
+  // completes, and `seq` so an edit back past that message tells it again.
+  presses?: PressNote[];
   // Highlights (highlights.ts): what's been found and pinned, and the
   // event it had read up to. Brought up to date when a client asks.
   highlights?: HighlightState;
   highlightsAt?: string; // a pin, a removal or a new brief
-  // The librarian's note on where the thread is up to, and what it's for
-  // (purpose: since the recap box, so older notes have none).
-  brief?: { text: string; at: string; purpose?: string };
+  brief?: { text: string; at: string }; // the librarian's line on where the thread is up to
   // The thread's own git worktree (worktrees.ts), once it's made.
   worktree?: WorktreeRecord;
   // The done card's loose ends (runner/loose-ends.ts), for the card at seq.
@@ -177,6 +207,10 @@ export type ThreadRecord = {
   startedBy?: ThreadStartedBy;
   // Mike's last message, one line (askedLine in runner.ts).
   asked?: string;
+  // The librarian's search words: what someone might type to find it that
+  // its title doesn't say ("dentist" for a wisdom tooth appointment).
+  // "" once a look or the keyword sweep found none, so the sweep moves on.
+  keywords?: string;
   // show_panel's request, until the app shows it or Mike sends a message.
   panelRequest?: PanelRequest;
   // The seq ranges edits of earlier messages cut out of the conversation

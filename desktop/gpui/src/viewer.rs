@@ -242,13 +242,13 @@ pub(crate) fn viewer_command(side: &Entity<SidePane>, cmd: &Value, cx: &mut App)
 
 /// The thread's action chips, for the thread pane to draw over the composer
 /// (the chips live with the patches, patches.rs).
-pub(crate) fn action_chips(thread: &threadbear_core::inbox::ThreadSummary, cx: &mut App) -> Option<AnyElement> {
+pub(crate) fn action_chips(thread: &threadbear_core::inbox::ThreadSummary, room: f32, project_icons: &std::collections::HashMap<String, crate::sidebar::ProjectIcon>, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     if !SidePane::has_action_chips(thread) {
         return None;
     }
     let handle = cx.try_global::<ViewerHandle>()?.clone();
     let entity = handle.0.upgrade()?;
-    entity.update(cx, |pane, cx| pane.render_action_chips(thread, cx))
+    entity.update(cx, |pane, cx| pane.render_action_chips(thread, room, project_icons, window, cx))
 }
 
 /// The tile's tooltip words on a transcript row (`transcript.images`).

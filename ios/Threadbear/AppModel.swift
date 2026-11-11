@@ -77,11 +77,13 @@ final class AppModel {
     var hasMessagePages: Bool { (apiVersion ?? 0) >= BackendCompatibility.messagePagesAPIVersion }
 
     /// Archived threads past the den's newest 100 with these words in
-    /// (API 16). Empty from an older backend, or when the call fails: the
-    /// search still shows what the phone has, so a failure isn't worth a toast.
+    /// (API 16), and from API 74 any thread with one in any message. Empty
+    /// from an older backend, or when the call fails: the search still
+    /// shows what the phone has, so a failure isn't worth a toast.
     func searchOlderArchived(_ text: String) async -> [PhoneThread] {
         guard let backend, (apiVersion ?? 0) >= BackendCompatibility.searchAPIVersion else { return [] }
-        return (try? await backend.search(text)) ?? []
+        let everywhere = (apiVersion ?? 0) >= BackendCompatibility.searchEverywhereAPIVersion
+        return (try? await backend.search(text, everywhere: everywhere)) ?? []
     }
     /// When this phone is notified, kept on the phone and sent to the backend
     /// with each registration and change (API 3).
@@ -1167,6 +1169,28 @@ final class AppModel {
                 }
             } catch {
                 presses[key] = CommandStatus(state: .failed, note: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            }
+        }
+    }
+
+    /// Run buttons tapped and not yet taken by the Mac: spinning, and no
+    /// more taps. After that the card's own `running` says so.
+    private(set) var pressingRuns: Set<String> = []
+
+    /// Run on an ask card (backend API 71), which runs on the thread's Mac.
+    func pressRun(threadId: String, buttonId: String) {
+        guard let backend, pressingRuns.insert(buttonId).inserted else { return }
+        Task {
+            defer { pressingRuns.remove(buttonId) }
+            do {
+                let command = try await backend.press(threadId: threadId, buttonId: buttonId)
+                for try await status in backend.command(command) {
+                    guard let status, status.state == .done || status.state == .failed else { continue }
+                    if status.state == .failed { report(TransportError.server(status.note ?? "That Mac couldn't run it.")) }
+                    return
+                }
+            } catch {
+                report(error)
             }
         }
     }

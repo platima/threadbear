@@ -32,6 +32,19 @@ Then('the window is where it was', function () {
   return 'pending';
 });
 
+// By hand, or features/tools/window-drag.ts on a desktop nobody's using.
+When('I drag the window by the bar over the thread, by its title and beside it', function () {
+  return 'pending';
+});
+
+Then('the window moves with the pointer each time', function () {
+  return 'pending';
+});
+
+Then('a click on the title starts renaming the thread', function () {
+  return 'pending';
+});
+
 When('the app is quit and opened again', async function (this: ThreadbearWorld) {
   await this.app.relaunch();
   await this.until('the app connected again, with its threads', (d) => d.connection === 'connected' && d.sidebar.sections.some((s) => s.threads.length > 0), 30_000);

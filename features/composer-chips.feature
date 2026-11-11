@@ -34,3 +34,12 @@ Feature: The chips under the message box
   Scenario: The context ring says how full the thread is
     When I open the thread "Make uploads resume after a crash"
     Then the "context" menu says "642k of 1M tokens" and "64%"
+
+  @composer.contextring @gpui-pending
+  Scenario: The context ring's popover says what fills a Claude thread's context
+    When I open the thread "Make uploads resume after a crash"
+    And I open the context ring's popover
+    Then the context popover shows "64% used 642k / 1M"
+    And the context popover shows "Messages 610k 61%"
+    And the context popover shows "MCP tools (deferred) 173k"
+    And the context popover shows "Breakdown from just now"

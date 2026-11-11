@@ -11,7 +11,9 @@ import { sleep, type Driver, type Dump } from './driver.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const exe = process.platform === 'win32' ? 'threadbear-gpui.exe' : 'threadbear-gpui';
-const binary = process.env.TB_GPUI_BIN ?? path.join(process.env.CARGO_TARGET_DIR ?? path.join(root, 'desktop/target'), 'debug', exe);
+// TB_GPUI_PROFILE=release for a release build (the perf tools).
+const profile = process.env.TB_GPUI_PROFILE ?? 'debug';
+const binary = process.env.TB_GPUI_BIN ?? path.join(process.env.CARGO_TARGET_DIR ?? path.join(root, 'desktop/target'), profile, exe);
 
 async function waitForFile(file: string, what: string, ms: number): Promise<void> {
   const until = Date.now() + ms;
@@ -131,6 +133,11 @@ export class GpuiDriver implements Driver {
       await waitForFile(ready, 'The mock runner', 15_000);
     }
     await this.launchApp();
+  }
+
+  /** The app's process, for tools that need to find its window. */
+  get pid(): number | undefined {
+    return this.appProcess?.pid;
   }
 
   private ask(body: Record<string, unknown>, timeoutSeconds: number): Promise<Record<string, unknown>> {

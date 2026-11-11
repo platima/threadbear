@@ -281,6 +281,25 @@ impl AskLink {
         let c = v.as_object()?;
         Some(AskLink { title: c.get("title")?.as_str()?.to_owned(), url: c.get("url")?.as_str()?.to_owned() })
     }
+
+    /// What clicking it opens (`AskLink.target`): a web page, a file with `~`
+    /// expanded against `home`, or a review; None for anything else, which
+    /// isn't drawn.
+    pub fn target(&self, home: &str) -> Option<String> {
+        let url = self.url.trim();
+        if let Some(rest) = url.strip_prefix("~/") {
+            return (!home.is_empty()).then(|| format!("{}/{rest}", home.trim_end_matches('/')));
+        }
+        if url.starts_with('/') {
+            return Some(url.to_owned());
+        }
+        let (scheme, rest) = url.split_once(':')?;
+        match scheme.to_ascii_lowercase().as_str() {
+            "http" | "https" | "file" => Some(url.to_owned()),
+            "review" if !rest.trim().is_empty() => Some(url.to_owned()),
+            _ => None,
+        }
+    }
 }
 
 /// One of the open card's asks a message answered (`AskAnswer`).
@@ -467,7 +486,7 @@ impl ReviewAnswer {
         let (review_id, response) = (review_id?, response?);
         // "Review: <title> (<id>)"
         let head = format!(" ({review_id})");
-        let mut rest = text.strip_prefix("Review: ")?;
+        let mut rest = Self::without_passed_over(text).strip_prefix("Review: ")?;
         let close = rest.find(&head)?;
         let title = rest[..close].to_owned();
         rest = &rest[close + head.len()..];
@@ -514,6 +533,19 @@ impl ReviewAnswer {
             rest = &rest[found + tail.len()..];
         }
         (rest.is_empty() && !lines.is_empty()).then_some(ReviewAnswer { lines })
+    }
+
+    /// The runner's last paragraph names the options he passed over, for the
+    /// agent writing follow-ups (`PASSED_OVER_TAIL` in runner/src/reviews.ts);
+    /// his bubble leaves it out.
+    pub const PASSED_OVER_TAIL: &'static str =
+        "Don't offer one of these later (a next step, a follow-up) as if it were new: say it's one they passed over.";
+
+    fn without_passed_over(text: &str) -> &str {
+        match text.strip_suffix(Self::PASSED_OVER_TAIL).and_then(|_| text.rfind("\n\nPassed over: ")) {
+            Some(start) => &text[..start],
+            None => text,
+        }
     }
 
     // Agents often title options "A: Summary first".

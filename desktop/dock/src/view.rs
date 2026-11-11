@@ -6,6 +6,7 @@
 use crate::content::{DockOptions, SharedContent};
 use crate::model::DockModel;
 use crate::overlay::{self, LandingRun, SpringRun, Tween};
+use crate::platform;
 use crate::theme::{DockTheme, GAP};
 use crate::windows::FloatingWindows;
 use gpui_kit::assets::IconName as Lucide;
@@ -55,6 +56,8 @@ pub(crate) struct Press {
     location: dl::Point,
     pressed_at: Instant,
     mode: PressMode,
+    /// For moving the window by hand if this press turns out to do that.
+    grab: Option<platform::WindowGrab>,
     /// The hold's timer, for a press that starts on a bar.
     _timer: Option<Task<()>>,
 }
@@ -82,6 +85,8 @@ pub struct DockView {
     divider: Option<DividerDrag>,
     /// A tab that was dragged doesn't also select on its mouse-up.
     suppress_click: bool,
+    /// The last press moved the window or picked up a panel: see `press_moved`.
+    press_moved: bool,
     /// Escape while dragging, whatever has focus. Only while dragging, so the
     /// key reaches the app the rest of the time.
     escape_watch: Option<Subscription>,
@@ -121,6 +126,7 @@ impl DockView {
             press: None,
             divider: None,
             suppress_click: false,
+            press_moved: false,
             escape_watch: None,
             split_lengths: Rc::new(RefCell::new(HashMap::new())),
             lift: None,
@@ -130,6 +136,15 @@ impl DockView {
             windows: FloatingWindows::default(),
             _subscriptions: vec![observed],
         }
+    }
+
+    /// Whether the last press on a bar moved the window or picked up a panel.
+    /// Something in a bar that acts on a click (the thread's title renames)
+    /// checks this from its click handler, which runs on the same release,
+    /// after the dock has seen it: with the window following the pointer, the
+    /// release lands on the same spot and looks like a click otherwise.
+    pub fn press_moved(&self) -> bool {
+        self.press_moved
     }
 
     /// Applies new options (the bars' size under the app's zoom, say).
@@ -154,6 +169,7 @@ impl DockView {
         }
         let start = self.dock_point(event.position);
         self.suppress_click = false;
+        self.press_moved = false;
         // On a bar the hold is timed from the press and lifts while you
         // hold, so you can see it's got.
         let timer = kind.from_press.then(|| {
@@ -163,7 +179,7 @@ impl DockView {
                 let _ = this.update(cx, |this, cx| this.hold_fired(&panel, cx));
             })
         });
-        self.press = Some(Press { panel, kind, start, location: start, pressed_at: Instant::now(), mode: PressMode::Waiting, _timer: timer });
+        self.press = Some(Press { panel, kind, start, location: start, pressed_at: Instant::now(), mode: PressMode::Waiting, grab: platform::grab_window(window), _timer: timer });
         cx.notify();
     }
 
@@ -174,6 +190,7 @@ impl DockView {
         }
         p.mode = PressMode::Panel;
         let (start, location) = (p.start, p.location);
+        self.press_moved = true;
         self.drag_changed(panel, start, location, cx);
     }
 
@@ -284,17 +301,18 @@ impl DockView {
                     p.mode = mode;
                     p._timer = None;
                 }
-                if mode == PressMode::Window {
-                    // Moved by hand in Swift (WindowGrip); here the OS's own
-                    // window drag, which is what GPUI offers.
+                self.press_moved = matches!(mode, PressMode::Window | PressMode::Panel);
+                if mode == PressMode::Window && self.press.as_ref().is_some_and(|p| p.grab.is_none()) {
                     window.start_window_move();
                 }
             }
         }
-        let mode = self.press.as_ref().map(|p| p.mode);
+        let (mode, grab) = self.press.as_ref().map_or((None, None), |p| (Some(p.mode), p.grab));
         if mode == Some(PressMode::Panel) {
             self.suppress_click = true;
             self.drag_changed(&panel, start, location, cx);
+        } else if let (Some(PressMode::Window), Some(grab)) = (mode, grab) {
+            platform::move_grabbed_window(window, grab);
         }
     }
 
@@ -307,6 +325,13 @@ impl DockView {
         match p.mode {
             PressMode::Panel => {
                 self.drag_ended(window, cx);
+            }
+            // Once more where it let go: the last move event can be a point
+            // or two short of it.
+            PressMode::Window => {
+                if let Some(grab) = p.grab {
+                    platform::move_grabbed_window(window, grab);
+                }
             }
             PressMode::Waiting if self.drags_window(p.kind, &p.panel, cx) && event.click_count == 2 => {
                 // A double-click that didn't move zooms the window (Swift's

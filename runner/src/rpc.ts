@@ -85,6 +85,7 @@ export const THREAD_METHODS = new Set([
   'threads.markSeen',
   'threads.highlights',
   'threads.commands',
+  'threads.contextUsage',
   'threads.explain',
   'threads.hibernateWhen',
   'threads.removeHighlight',
@@ -616,6 +617,11 @@ export class RpcServer {
           // Only ever narrows (a draining runner passing on a sandboxed
           // agent's create_thread), so any client may ask for it.
           ...(p.confined === true ? { confined: true } : {}),
+          // A thread named in startedBy that's shut in a sandbox shuts this
+          // one in too unless this says the user allowed otherwise (a
+          // draining runner passing on a create_thread card's yes). The
+          // caller gate takes it out of any thread's own call.
+          ...(p.unconfine === true ? { unconfine: true } : {}),
           ...optStartedBy(p),
           ...optProjectIds(p),
         });
@@ -681,6 +687,10 @@ export class RpcServer {
           if (typeof p.starred !== 'boolean') throw bad('starred must be a boolean');
           upd.starred = p.starred;
         }
+        if (p.carryOnAtReset !== undefined) {
+          if (typeof p.carryOnAtReset !== 'boolean') throw bad('carryOnAtReset must be a boolean');
+          upd.carryOnAtReset = p.carryOnAtReset;
+        }
         return r.update(upd);
       }
       case 'threads.retitle': {
@@ -730,6 +740,14 @@ export class RpcServer {
       }
       case 'threads.commands':
         return r.threadCommands(reqString(p, 'threadId'));
+      case 'threads.contextUsage':
+        return r.contextUsage(reqString(p, 'threadId'));
+      case 'folders.commands':
+        return r.folderCommands({
+          cwd: p.cwd === undefined ? undefined : reqString(p, 'cwd'),
+          accountId: p.accountId === undefined ? undefined : reqString(p, 'accountId'),
+          permissionMode: optMode(p),
+        });
       case 'threads.hibernateWhen':
         return r.hibernateWhen({ threadId: reqString(p, 'threadId'), said: reqString(p, 'said') });
       case 'threads.removeHighlight':
@@ -737,7 +755,7 @@ export class RpcServer {
       case 'threads.panelShown':
         return r.panelShown(reqString(p, 'threadId'), reqString(p, 'requestId'));
       case 'threads.showPanel':
-        return r.showPanel(reqString(p, 'threadId'), { panel: reqString(p, 'panel') }).then(result => ({ available: true, ...result }));
+        return r.showPanel(reqString(p, 'threadId'), { panel: reqString(p, 'panel'), ...(p.reload === true ? { reload: true } : {}) }).then(result => ({ available: true, ...result }));
       case 'threads.share': {
         const access = reqString(p, 'access');
         if (access !== 'off' && access !== 'link') throw bad('access is "off" or "link"');

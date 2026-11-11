@@ -7,6 +7,8 @@ import ThreadbearCore
 /// panel's bar (ThreadHeader, ThreadMenuButton).
 struct DetailView: View {
     @Environment(AppModel.self) private var app
+    /// The Projects page has been shown, so it's kept (above).
+    @State private var keepProjectsHome = false
 
     var body: some View {
         let thread = app.selectedThread
@@ -23,6 +25,18 @@ struct DetailView: View {
         let librarianHome = project == nil && app.showsLibrarianHome
         // The Scheduled page, from the activity bar's Scheduled.
         let scheduledHome = project == nil && app.showsScheduledHome
+        ZStack {
+        // The Projects page stays built once it's been shown, hidden while
+        // anything else is up, so coming back to it doesn't build every
+        // card again (SidebarView's lists, 11 Nov).
+        if keepProjectsHome || projectsHome {
+            VStack(spacing: 0) {
+                ConnectionBanner()
+                ErrorBanner()
+                ProjectsHome(shown: projectsHome)
+            }
+            .keptAlive(shown: projectsHome)
+        }
         Group {
         if let project {
             VStack(spacing: 0) {
@@ -31,11 +45,8 @@ struct DetailView: View {
                 ProjectPage(project: project)
             }
         } else if projectsHome {
-            VStack(spacing: 0) {
-                ConnectionBanner()
-                ErrorBanner()
-                ProjectsHome()
-            }
+            // Drawn above, kept.
+            Color.clear
         } else if librarianHome {
             VStack(spacing: 0) {
                 ConnectionBanner()
@@ -55,7 +66,6 @@ struct DetailView: View {
             VStack(spacing: 0) {
             ConnectionBanner()
             ErrorBanner()
-            if let thread { LimitBanner(thread: thread) }
             if let thread { SignInBanner(thread: thread) }
             if let thread, thread.hasPendingReviews, subagentRef == nil {
                 PendingReviewsButton(thread: thread)
@@ -109,6 +119,8 @@ struct DetailView: View {
             .frame(maxWidth: .infinity)
         }
         }
+        }
+        .onChange(of: projectsHome, initial: true) { _, shown in if shown { keepProjectsHome = true } }
         .overlay(alignment: .top) {
             ArchivedToast()
             InboxEndToast()
@@ -939,49 +951,9 @@ struct ConnectionBanner: View {
     }
 }
 
-/// The open thread's account is at its limit (or its last turn failed on
-/// it): says so, with a button to move the thread to the account with the
-/// most room. Here rather than in the transcript's error row, whose drawing
-/// is cached and knows nothing of accounts, so the name and the room it
-/// offers stay current as usage changes.
-struct LimitBanner: View {
-    @Environment(AppModel.self) private var app
-    let thread: ThreadSummary
-
-    var body: some View {
-        if let advice = app.limitAdvice(for: thread) {
-            // A pool thread waiting for room carries on by itself: a quiet
-            // clock rather than the red limit gauge, and the button pins it
-            // to a login outside the pool, so it says so.
-            let waiting = thread.waitingForRoom != nil && app.usesPools
-            HStack(spacing: zoomed(8)) {
-                if waiting {
-                    Image(systemName: "clock").foregroundStyle(.secondary)
-                } else {
-                    Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.red)
-                }
-                Text(advice.text).lineLimit(1).tip(advice.text)
-                Spacer(minLength: zoomed(6))
-                if let target = advice.target {
-                    let title = AccountUsageText.switchTitle(target, accounts: app.accounts)
-                    Button(waiting ? title.replacingOccurrences(of: "Switch to", with: "Pin to") : title) {
-                        app.switchAccount(thread.id, to: target.id)
-                    }
-                    .busy(app.isBusy(BusyKey.moving(thread.id)))
-                    .tip("Carry on this thread on that account, from where it is")
-                }
-            }
-            .font(.system(size: TypeScale.label))
-            .padding(.horizontal, zoomed(14))
-            .padding(.vertical, zoomed(7))
-            .overlay(alignment: .bottom) { Rectangle().fill(Color(nsColor: Theme.hairline)).frame(height: 0.5) }
-        }
-    }
-}
-
 /// The open thread's last turn failed because its login was refused:
 /// says so, with Sign in… (Terminal, on the CLI's own sign-in) and Send
-/// again for once that's done. Like LimitBanner, here rather than in the
+/// again for once that's done. Like LimitBox, here rather than in the
 /// cached error row, which knows nothing of accounts.
 struct SignInBanner: View {
     @Environment(AppModel.self) private var app

@@ -5,7 +5,8 @@
 // per-OS code, and there's nothing to migrate between machines.
 //
 // The field names are the Swift app's UserDefaults keys
-// (AppModel.collapsedSectionsKey "collapsedSections", AppModel.inboxOrderKey
+// (AppModel.collapsedSectionsKey "collapsedSections",
+// AppModel.collapsedScheduleSectionsKey "collapsedScheduleSections", AppModel.inboxOrderKey
 // "inboxOrder", TextZoom.defaultsKey "textZoomPercent", WindowDock.layoutKey
 // "dockLayout"; MainWindowFrame's "Threadbear window frame main" is
 // `windowFrame` here), so a later one-time import from UserDefaults is
@@ -39,8 +40,14 @@ pub struct Saved {
     /// `InboxSection`'s raw value. None means nothing saved yet (Hibernating
     /// and Archived start folded, as `storedCollapsedSections` makes them).
     pub collapsed_sections: Option<Vec<String>>,
+    /// `collapsedScheduleSections`: the Scheduled list's headings folded
+    /// away, by `ScheduleSection`'s raw value. None means nothing saved yet
+    /// (Done starts folded, as `storedCollapsedScheduleSections` makes it).
+    pub collapsed_schedule_sections: Option<Vec<String>>,
     /// `inboxOrder`: `InboxOrder`'s raw value.
     pub inbox_order: Option<String>,
+    /// `appearance`: "system", "light" or "dark" (`AppAppearance`).
+    pub appearance: Option<String>,
     /// `dockLayout`: the Dock's JSON, the same shape Swift's Codable saves.
     pub dock_layout: Option<Value>,
 }

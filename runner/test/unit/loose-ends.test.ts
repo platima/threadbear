@@ -6,10 +6,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeHarness, tmpDir } from '../helpers/fakes.ts';
-import { sh, shPath } from '../helpers/platform.ts';
+import { IS_WINDOWS, sh, shPath } from '../helpers/platform.ts';
+import { linkDir, slashes } from '../../src/platform.ts';
 import { checkSummary } from '../helpers/protocol-check.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
-import { anyOpen, childLooseEnds, scheduleLooseEnds, worktreeLooseEnds } from '../../src/loose-ends.ts';
+import { agentLooseEnds, anyOpen, childLooseEnds, editedLooseEnds, githubRepo, scheduleLooseEnds, worktreeLooseEnds, type Pr, type PrLookup } from '../../src/loose-ends.ts';
+import { needsFromTool } from '../../src/needs.ts';
+import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { EXPERIMENTS } from '../../src/experiments.ts';
 import type { Schedule } from '../../src/protocol.ts';
 import type { WorktreeRecord } from '../../src/worktrees.ts';
@@ -161,4 +164,153 @@ test('looseEnds: not checked when off, when the turn needs Mike, or when it arch
   assert.equal(h.runner.get(b).looseEnds, undefined);
   assert.equal(h.runner.get(c).looseEnds, undefined);
   assert.deepEqual(h.runner.get(d).looseEnds?.ends, []);
+});
+
+// The check-in of 11 Nov: most typed "anything else?" asks came from
+// threads with no worktree of their own (misc, tandem, the video folders),
+// and the answers were things only the agent knew (a reply worth sending,
+// PRs waiting on a decision, an export being redone).
+test('looseEnds: files a thread changed in a shared checkout count, not the rest of its status; unpushed commits too', async () => {
+  const root = fs.realpathSync(tmpDir('tb-loose-shared-'));
+  const remote = shPath(path.join(root, 'remote.git'));
+  sh(root, `git init -q --bare -b main ${remote}`);
+  const repo = path.join(root, 'tandem');
+  fs.mkdirSync(repo);
+  sh(repo, `git init -q -b main && git remote add origin ${remote} && echo one > a.txt && echo one > b.txt && git add -A && git commit -qm init && git push -q -u origin main`);
+  const a = path.join(repo, 'a.txt');
+  // Another thread's work in the same checkout isn't this one's.
+  sh(repo, 'echo theirs > b.txt');
+  assert.deepEqual(await editedLooseEnds([a], []), []);
+  sh(repo, 'echo mine > a.txt && mkdir -p new && echo x > new/c.txt');
+  assert.deepEqual(await editedLooseEnds([a, path.join(repo, 'new', 'c.txt'), '/nowhere/gone.txt', 'relative.txt'], []), [
+    { kind: 'uncommitted', text: "2 files it changed in tandem aren't committed" },
+  ]);
+  sh(repo, 'git add a.txt new && git commit -qm mine');
+  const sha = sh(repo, 'git rev-parse HEAD');
+  assert.deepEqual(await editedLooseEnds([a], [sha, 'f'.repeat(40)]), [{ kind: 'unpushed', text: "1 commit it made in tandem isn't pushed" }]);
+  sh(repo, 'git push -q');
+  assert.deepEqual(await editedLooseEnds([a], [sha]), []);
+  // Its own worktree is worktreeLooseEnds' to say.
+  sh(repo, 'echo again > a.txt');
+  assert.deepEqual(await editedLooseEnds([a], [], repo), []);
+  // No remote: nothing to push to, so no unpushed line.
+  const local = path.join(root, 'local');
+  fs.mkdirSync(local);
+  sh(local, 'git init -q -b main && echo x > x.txt && git add -A && git commit -qm x');
+  assert.deepEqual(await editedLooseEnds([path.join(local, 'x.txt')], [sh(local, 'git rev-parse HEAD')]), []);
+});
+
+// The thread's own worktree is worktreeLooseEnds' to say, however the paths of
+// the files it changed are spelled. Git hands back C:/x/y on Windows, an agent's
+// path can be either kind of slash and in any case, and the folder can be
+// reached through a link.
+test("looseEnds: files changed in the thread's own worktree are skipped whichever way their paths are spelled", async () => {
+  const w = repoWithWorktree();
+  const remote = path.join(path.dirname(w.path), 'remote.git');
+  sh(path.dirname(w.path), `git init -q --bare -b main ${shPath(remote)}`);
+  sh(w.mainCheckout, `git remote add origin ${shPath(remote)} && git push -q -u origin main`);
+  sh(w.path, 'echo changed > a.txt');
+  const file = path.join(w.path, 'a.txt');
+  // Without a skip it is found, so the skips below are doing something.
+  assert.deepEqual(await editedLooseEnds([file], []), [{ kind: 'uncommitted', text: "1 file it changed in slot-1 isn't committed" }]);
+  const link = path.join(path.dirname(w.path), 'slot-link');
+  linkDir(w.path, link);
+  const spellings = [file, slashes(file), path.join(link, 'a.txt'), ...(IS_WINDOWS ? [file.toLowerCase(), file.replace(/^./, (c) => c.toLowerCase())] : [])];
+  for (const spelled of spellings) assert.deepEqual(await editedLooseEnds([spelled], [], w.path), [], spelled);
+  // Its folder, searched for commits it made there, is skipped the same way.
+  sh(w.path, 'git commit -qam mine');
+  const sha = sh(w.path, 'git rev-parse HEAD');
+  assert.deepEqual(await editedLooseEnds([], [sha], undefined, { dirs: [w.path] }), [{ kind: 'unpushed', text: "1 commit it made in slot-1 isn't pushed" }]);
+  for (const spelled of spellings) assert.deepEqual(await editedLooseEnds([], [sha], w.path, { dirs: [path.dirname(spelled)] }), [], spelled);
+  // The main checkout beside it is not its own, so a file changed there counts.
+  sh(w.mainCheckout, 'echo other > a.txt');
+  assert.deepEqual(await editedLooseEnds([path.join(w.mainCheckout, 'a.txt')], [], w.path), [{ kind: 'uncommitted', text: "1 file it changed in proj isn't committed" }]);
+});
+
+// 11 Nov 2026: thread 0222c475 said Done with its work pushed to draft PRs
+// that weren't merged, and the card showed a plain Done.
+test('looseEnds: work pushed to a branch that main lacks is open until its PR is merged or closed', async () => {
+  const root = fs.realpathSync(tmpDir('tb-loose-pr-'));
+  const remote = shPath(path.join(root, 'remote.git'));
+  sh(root, `git init -q --bare -b main ${remote}`);
+  const repo = path.join(root, 'website');
+  fs.mkdirSync(repo);
+  sh(repo, `git init -q -b main && git remote add origin ${remote} && echo one > a.txt && git add -A && git commit -qm init && git push -q -u origin main && git remote set-head origin main`);
+  const a = path.join(repo, 'a.txt');
+  sh(repo, 'git checkout -q -b mike/examples && echo two > a.txt && git commit -qam examples && git push -q -u origin mike/examples');
+  const sha = sh(repo, 'git rev-parse HEAD');
+  const asked: string[] = [];
+  const lookup = (pr: Pr | undefined): PrLookup => async (r, b) => {
+    asked.push(`${r} ${b}`);
+    return pr;
+  };
+  // A local remote isn't GitHub's, so there's no PR to ask about.
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup(undefined) }), [
+    { kind: 'unmerged', text: "Work it pushed to mike/examples in website isn't on main" },
+  ]);
+  assert.deepEqual(asked, []);
+  // On GitHub: an open PR names itself, a draft says so, a merged or closed
+  // one (squashed, so the commit never reaches main) isn't open.
+  sh(repo, `git remote set-url origin https://github.com/convex/website.git && git config remote.origin.pushurl ${remote}`);
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup({ number: 1092, state: 'OPEN', isDraft: true }) }), [
+    { kind: 'unmerged', text: 'PR #1092 in website is still a draft' },
+  ]);
+  assert.deepEqual(asked, ['convex/website mike/examples']);
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup({ number: 1092, state: 'OPEN', isDraft: false }) }), [
+    { kind: 'unmerged', text: "PR #1092 in website isn't merged" },
+  ]);
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup({ number: 1092, state: 'MERGED', isDraft: false, headRefOid: sh(repo, 'git rev-parse origin/mike/examples') }) }), []);
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup({ number: 1092, state: 'CLOSED', isDraft: false, headRefOid: sh(repo, 'git rev-parse origin/mike/examples') }) }), []);
+  // A branch reused after its PR merged: newer pushes aren't covered by it.
+  const merged = { number: 1092, state: 'MERGED' as const, isDraft: false, headRefOid: sh(repo, 'git rev-parse origin/mike/examples') };
+  sh(repo, 'echo three > a.txt && git commit -qam more && git push -q origin mike/examples');
+  const more = sh(repo, 'git rev-parse HEAD');
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha, more], prs: lookup(merged) }), [
+    { kind: 'unmerged', text: "Work it pushed to mike/examples in website isn't on main" },
+  ]);
+  // A thread that changed files only through a shell is found by its folder.
+  assert.deepEqual(await editedLooseEnds([], [], undefined, { pushed: [more], dirs: [repo], prs: lookup(undefined) }), [
+    { kind: 'unmerged', text: "Work it pushed to mike/examples in website isn't on main" },
+  ]);
+  // Once main has it, there's nothing to ask.
+  asked.length = 0;
+  sh(repo, 'git checkout -q main && git merge -q --ff-only mike/examples && git push -q origin main');
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha, more], prs: lookup({ number: 1092, state: 'OPEN', isDraft: false }) }), []);
+  assert.deepEqual(asked, []);
+  assert.equal(githubRepo('git@github.com:convex/website.git'), 'convex/website');
+  assert.equal(githubRepo('https://github.com/mikecann/threadbear'), 'mikecann/threadbear');
+  assert.equal(githubRepo('https://gitlab.com/a/b.git'), undefined);
+});
+
+test("looseEnds: end_turn's open is the agent's word, kept when empty, offered only while on", () => {
+  assert.deepEqual(needsFromTool({ needs: 'nothing', open: [] }), { needs: 'nothing', open: [] });
+  assert.deepEqual(needsFromTool({ needs: 'nothing' }), { needs: 'nothing' });
+  const said = needsFromTool({ needs: 'nothing', open: ['Yuriy asked for this on X: worth a reply', 'Yuriy asked for this on X: worth a reply', '', 'b', 'c', 'd'] });
+  assert.deepEqual(said?.open, ['Yuriy asked for this on X: worth a reply', 'b', 'c']);
+  assert.deepEqual(agentLooseEnds(said?.open).map((e) => e.kind), ['open', 'open', 'open']);
+  assert.equal(anyOpen(agentLooseEnds(['x'])), true);
+  const h = setup();
+  const { thread } = h.runner.create({ text: 'Fix it', accountId: 'claude-main' });
+  const shape = (on: boolean) => (buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { oneReply: () => true, looseEnds: () => on }).find((x) => x.name === 'end_turn')!.inputSchema as unknown as { shape: Record<string, unknown> }).shape;
+  assert.ok('open' in shape(true));
+  assert.ok(!('open' in shape(false)));
+});
+
+test('looseEnds: what the agent said is open, and files it changed outside a worktree, go on the card', async () => {
+  const h = setup();
+  const repo = fs.realpathSync(tmpDir('tb-loose-misc-'));
+  sh(repo, 'git init -q -b main && echo one > notes.md && git add -A && git commit -qm init');
+  const { thread } = h.runner.create({ text: 'Fix it', accountId: 'claude-main', cwd: repo });
+  const id = thread.id;
+  const s = h.adapter.sessions.filter((x) => x.opts.threadId === id).at(-1)!;
+  s.init();
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'w1', name: 'Edit', kind: 'edit', title: 'Edit notes.md', input: { file_path: path.join(repo, 'notes.md') } } });
+  sh(repo, 'echo two > notes.md');
+  finish(h, id, { needs: 'nothing', open: ['Yuriy asked for this on X: worth a reply'] });
+  await until(() => Boolean(h.runner.get(id).looseEnds), 'the check');
+  const ends = h.runner.get(id).looseEnds!.ends;
+  assert.deepEqual(ends.map((e) => e.kind), ['uncommitted', 'open']);
+  assert.match(ends[0].text, /1 file it changed in .* isn't committed/);
+  assert.equal(ends[1].text, 'Yuriy asked for this on X: worth a reply');
+  assert.deepEqual(checkSummary(h.runner.get(id)), []);
 });

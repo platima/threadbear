@@ -20,10 +20,14 @@ the Swift Mac app does, done in the GPUI app and proved to be the same.
    Swift app's names, so a scenario works unchanged on both. If you need a new
    command, read how the Swift one behaves (`app/README.md`) and match it.
 5. **Pass it on the GPUI app**, on Linux (`cloud`) and on a real Mac (Tinker Desk).
-6. **Compare the pictures.** `features/tools/shot.ts` saves either app's window.
-   Put them side by side and match the layout: spacing, sizes, colours (from
-   `desktop/gpui/src/style.rs`, which holds the Swift values; add to it rather than
-   typing numbers). A GPUI row that only reads the same isn't done.
+6. **Compare the pictures.** `features/tools/shot.ts` saves either app's window,
+   and `features/tools/compare.ts` takes the same threads in both apps and puts
+   them side by side on one page (`TB_APPEARANCE=dark` or `light`). Match the
+   layout: spacing, sizes, colours (from `desktop/gpui/src/style.rs`, which holds
+   the Swift values; add to it rather than typing numbers). A GPUI row that only
+   reads the same isn't done. Read colours with care: the Swift pictures carry the
+   display's colour profile and the GPUI ones none, so the same colour reads a few
+   steps apart, and the GPUI shot has no traffic lights (it's drawn in-process).
 7. **Log it** in `PARITY.md`: what changed, files, what's left, and a
    `Verification:` line that names a spec run or a screenshot. A slice with no
    runtime check doesn't count.

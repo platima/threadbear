@@ -23,6 +23,59 @@ const EVENTS_PAGE: u64 = 500;
 /// often, as ThreadSession does (30 Hz).
 const FLUSH_EVERY: Duration = Duration::from_millis(33);
 
+/// The app's windows that are in front, by id: a thread is read only while
+/// one is (AppModel.isLooking is the app being active). Each window says so
+/// from its own activation, as the app's "active window" isn't the question:
+/// on the Mac it's NSApp.mainWindow, which stays set once the app is behind
+/// another, and on X11 it moves after the callback. The main window, Settings
+/// and each panel's window of its own; `SCRIPTED` is a script's `focus`.
+static LOOKING: std::sync::Mutex<std::collections::BTreeSet<u64>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+pub(crate) const SCRIPTED: u64 = u64::MAX;
+
+pub(crate) fn set_looking(window: u64, active: bool) {
+    if let Ok(mut windows) = LOOKING.lock() {
+        if active {
+            windows.insert(window);
+        } else {
+            windows.remove(&window);
+        }
+    }
+}
+
+pub(crate) fn is_looking() -> bool {
+    LOOKING.lock().map(|w| !w.is_empty()).unwrap_or(true)
+}
+
+/// While a script's command runs (automation's `step`), whose clicks and
+/// keys go through the window but aren't Mike at it: a scripted Swift app
+/// never counts as in front. A count, so a command inside another keeps it,
+/// and put back by a guard, so a panic doesn't leave it set.
+static SCRIPTED_INPUT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct ScriptedInput;
+
+impl Drop for ScriptedInput {
+    fn drop(&mut self) {
+        SCRIPTED_INPUT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn scripted_input<R>(f: impl FnOnce() -> R) -> R {
+    SCRIPTED_INPUT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let _scripted = ScriptedInput;
+    f()
+}
+
+pub(crate) fn input_is_scripted() -> bool {
+    SCRIPTED_INPUT.load(std::sync::atomic::Ordering::Relaxed) > 0
+}
+
+/// A window's id for `set_looking`.
+pub(crate) fn window_key(window: &Window) -> u64 {
+    window.window_handle().window_id().as_u64()
+}
+
 pub struct ThreadPane {
     client: Arc<Client>,
     pub(crate) summary: ThreadSummary,
@@ -75,6 +128,7 @@ impl ThreadPane {
             _subs: vec![scrolled],
         };
         pane.load(cx);
+        pane.load_buttons(cx);
         pane
     }
 
@@ -130,6 +184,7 @@ impl ThreadPane {
                 .update(cx, |this, cx| {
                     // Where the view was reading, if this is a reload.
                     let memory = this.loaded.then(|| this.capture_memory(cx));
+                    crate::reply_buttons::fold(&page.events, &this.summary.id);
                     let mut model = TranscriptModel::new(Some(root));
                     model.load(page.events, &page.in_progress);
                     model.known_start = page.at_start;
@@ -165,9 +220,10 @@ impl ThreadPane {
         .detach();
     }
 
-    // Opening it reads it, as on the Mac.
-    fn mark_seen(&self) {
-        if self.summary.unread() {
+    // Opening it reads it, as on the Mac, while the window's in front: one
+    // opened behind other windows stays unread until he comes back to it.
+    pub(crate) fn mark_seen(&self) {
+        if self.summary.unread() && is_looking() {
             let client = self.client.clone();
             let params = json!({ "threadId": self.summary.id, "seq": self.summary.last_seq });
             RT.spawn(async move { client.call("threads.markSeen", params).await });
@@ -197,9 +253,26 @@ impl ThreadPane {
             return;
         }
         if let Some(event) = Event::decode(&params["event"]) {
+            if crate::reply_buttons::fold(std::slice::from_ref(&event), &self.summary.id) {
+                cx.notify();
+            }
             let action = self.feed.receive(event);
             self.handle(action, cx);
         }
+    }
+
+    /// Every button the thread has (`buttons.list`): replies older than the
+    /// loaded page link buttons whose events aren't loaded.
+    fn load_buttons(&self, cx: &mut Context<Self>) {
+        let (client, id) = (self.client.clone(), self.summary.id.clone());
+        cx.spawn(async move |this, cx| {
+            let Ok(v) = call(client, "buttons.list", json!({ "threadId": id })).await else { return };
+            let list: Vec<threadbear_core::reply_buttons::ReplyButton> = v["buttons"].as_array().into_iter().flatten().filter_map(threadbear_core::reply_buttons::ReplyButton::decode).collect();
+            if crate::reply_buttons::receive(list, &id) {
+                this.update(cx, |_, cx| cx.notify()).ok();
+            }
+        })
+        .detach();
     }
 
     fn handle(&mut self, action: FeedAction, cx: &mut Context<Self>) {
@@ -324,13 +397,21 @@ impl ThreadPane {
     pub(crate) fn allow_sole_approval(&mut self, cx: &mut Context<Self>) -> bool {
         let pending = self.feed.model().pending_approval_ids();
         let [id] = pending.as_slice() else { return false };
-        if let Some(Row { content: RowContent::Approval(item), .. }) = self.feed.model().item(&format!("ap:{id}")) {
-            if item.is_start_request() {
-                return false;
-            }
+        let id = id.clone();
+        let stacked = match self.feed.model().item(&format!("ap:{id}")) {
+            Some(Row { content: RowContent::Approval(item), .. }) if item.is_start_request() => return false,
+            Some(Row { content: RowContent::Approval(item), .. }) => !item.queued().is_empty(),
+            _ => false,
+        };
+        // A stacked card's Return is its "Allow N": the ticked calls only,
+        // the crossed ones refused (Codex review, 10 Nov 2026: a bare allow
+        // here ran a call Mike had crossed out). Either way the card spins
+        // until the answer lands.
+        if stacked {
+            self.respond_queued(&id, "allow", cx);
+        } else {
+            self.respond_approval(&id, "allow", None, None, cx);
         }
-        let params = json!({ "threadId": self.summary.id, "approvalId": id, "decision": "allow" });
-        self.request("approvals.respond", params, cx);
         true
     }
 
@@ -691,10 +772,25 @@ impl ThreadPane {
                 if matches!(row.content, RowContent::Group(_) | RowContent::Tool(_) | RowContent::Reasoning(_)) || row.kind() == threadbear_core::reducer::RowKind::Diff {
                     out["expanded"] = json!(self.row_open(row));
                 }
+                #[cfg(feature = "automation")]
+                if let RowContent::Assistant(item) = &row.content {
+                    if let Some(labels) = crate::reply_buttons::dump_labels(&item.text) {
+                        out["buttons"] = json!(labels);
+                    }
+                }
                 out
             })
             .collect();
         json!({ "threadId": self.summary.id, "state": if self.loaded { "loaded" } else { "loading" }, "atBottom": scroller.at_bottom(), "hasMoreAbove": self.has_more_above(), "rows": rows })
+    }
+
+    /// The reply buttons the thread's replies link, oldest first.
+    #[cfg(feature = "automation")]
+    pub(crate) fn linked_buttons(&self) -> Vec<String> {
+        self.feed.model().rows().iter().flat_map(|row| match &row.content {
+            RowContent::Assistant(item) => threadbear_core::reply_buttons::ids_in(&item.text),
+            _ => Vec::new(),
+        }).collect()
     }
 
     pub fn set_row_open(&mut self, row: &str, open: bool, cx: &mut Context<Self>) -> Result<(), String> {
@@ -809,7 +905,6 @@ impl Render for ThreadPane {
             .when_some(self.error.clone(), |s, e| s.child(div().px_7().py_1().text_sm().text_color(danger).child(e)))
             .when(!self.loaded && self.error.is_none(), |s| s.child(div().p_4().text_sm().text_center().text_color(muted).child("Loading…")))
             .child(div().flex_1().min_h_0().child(transcript_list(&self.scroller, bg, cx.processor(|this, ix: usize, window, cx| this.render_item(ix, window, cx)), cx)))
-            .when_some(crate::viewer::action_chips(&self.summary, cx), |s, chips| s.child(chips))
             .child(self.composer.clone())
             .children(drop_layer)
     }

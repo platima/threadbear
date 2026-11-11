@@ -63,7 +63,12 @@ final class BackgroundLayoutManager: NSLayoutManager {
             path.stroke()
             if let command = storage.attribute(.tbShellBlock, at: effective.location, effectiveRange: nil) as? String {
                 let hovered = self.hoveredShellIcon?.location == effective.location ? self.hoveredShellIcon?.icon : nil
-                MainActor.assumeIsolated { ShellBlockIcons.draw(command: command, box: rect, hovered: hovered) }
+                MainActor.assumeIsolated {
+                    // Drawn for the thread whose transcript this is, never
+                    // the selection's (ShellBlockIcons.shown(in:)).
+                    let threadId = self.textContainers.first?.textView.flatMap { TranscriptTextView.threadId(around: $0) }
+                    ShellBlockIcons.draw(command: command, box: rect, hovered: hovered, threadId: threadId)
+                }
             }
             // The lines between answer rows, across the box.
             storage.enumerateAttribute(.tbRowRule, in: effective) { rule, ruleRange, _ in
@@ -685,7 +690,7 @@ final class TranscriptTextView: NSTextView {
         var effective = NSRange()
         guard let command = storage.attribute(.tbShellBlock, at: index, longestEffectiveRange: &effective, in: NSRange(location: 0, length: storage.length)) as? String,
               let box = manager.blockBox(effective, in: storage, width: textContainer.size.width) else { return nil }
-        for icon in ShellBlockIcons.shown {
+        for icon in ShellBlockIcons.shown(in: transcriptThreadId) {
             let rect = ShellBlockIcons.rect(icon, in: box)
             if rect.contains(local) { return ShellIconHit(command: command, icon: icon, rect: rect.offsetBy(dx: origin.x, dy: origin.y), location: effective.location) }
         }
@@ -701,7 +706,9 @@ final class TranscriptTextView: NSTextView {
             ShellBlockIcons.copy(hit.command)
             CopiedBubble.show(above: hit.rect, in: self)
         case .put:
-            AppModel.shared.putInTerminal(ShellBlock(command: hit.command)) { [weak self] outcome in
+            // The thread this transcript is, so the command only ever goes to
+            // that thread's own shell (AppModel.putInTerminal(_:from:)).
+            AppModel.shared.putInTerminal(ShellBlock(command: hit.command), from: transcriptThreadId) { [weak self] outcome in
                 guard outcome == .busy, let self else { return }
                 // Nothing typed over a running program or someone's own
                 // half-typed line, and the command isn't lost.
@@ -789,7 +796,7 @@ final class TranscriptTextView: NSTextView {
         let origin = textContainerOrigin
         for range in boxes {
             guard let box = manager.blockBox(range, in: storage, width: textContainer.size.width) else { continue }
-            for icon in ShellBlockIcons.shown {
+            for icon in ShellBlockIcons.shown(in: transcriptThreadId) {
                 let anchor = RichTipAnchor(frame: ShellBlockIcons.rect(icon, in: box).offsetBy(dx: origin.x, dy: origin.y))
                 anchor.text = icon.tip
                 addSubview(anchor)
@@ -801,6 +808,33 @@ final class TranscriptTextView: NSTextView {
         let changed = newSize.width != frame.width
         super.setFrameSize(newSize)
         if changed { placeRichTips() }
+    }
+
+    /// The kind of card button under a click, for the activity log
+    /// (ActivityRecorder): "archive", "next", "explain". Only the name
+    /// before any ":", never what follows, which can be an answer's index
+    /// or a page; and only a plain word, so no text of a card gets out.
+    func activityAction(atWindow windowPoint: NSPoint) -> String? {
+        let point = convert(windowPoint, from: nil)
+        guard let action = row(at: point)?.action ?? character(at: point).flatMap({ textStorage?.attribute(.tbAction, at: $0, effectiveRange: nil) as? String }) else { return nil }
+        let name = action.split(separator: ":", maxSplits: 1).first.map(String.init) ?? ""
+        return name.range(of: "^[a-z][a-z-]{0,30}$", options: .regularExpression) != nil ? name : nil
+    }
+
+    /// Where the first run with this `.tbAction` is drawn, in window
+    /// coordinates (scripted runs only: Automation's activity command).
+    func windowPoint(ofAction action: String) -> NSPoint? {
+        guard let storage = textStorage, let layoutManager, let textContainer else { return nil }
+        var found: NSRange?
+        storage.enumerateAttribute(.tbAction, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            if value as? String == action { found = range; stop.pointee = true }
+        }
+        guard let found else { return nil }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: found, actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+        rect.origin.x += textContainerOrigin.x
+        rect.origin.y += textContainerOrigin.y
+        return convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
     }
 
     private func character(at point: NSPoint) -> Int? {

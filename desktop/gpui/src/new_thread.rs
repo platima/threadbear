@@ -104,6 +104,7 @@ impl Threadbear {
         let app = cx.entity().downgrade();
         let composer = cx.new(|cx| Composer::new(None, client, app, window, cx));
         self.new_thread.composer = Some(composer.clone());
+        self.restore_saved_draft(crate::drafts::NEW_THREAD, &composer, cx);
         composer
     }
 
@@ -315,7 +316,7 @@ impl Threadbear {
     fn remote_folders(&self, runner: &str) -> Vec<String> {
         let default_folder = self.remote.logins.get(runner).map_or_else(String::new, |l| l.defaults.cwd.clone());
         let mut threads: Vec<&ThreadSummary> = self.threads.values().filter(|t| t.runner_id.as_deref() == Some(runner)).collect();
-        threads.sort_by_key(|t| std::cmp::Reverse(t.activity_ms()));
+        threads.sort_by_cached_key(|t| std::cmp::Reverse(t.activity_ms()));
         let mut out = Vec::new();
         for folder in std::iter::once(default_folder).chain(threads.into_iter().map(|t| t.cwd.clone())) {
             if !folder.is_empty() && !out.contains(&folder) {

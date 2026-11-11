@@ -350,10 +350,26 @@ impl Composer {
         row
     }
 
-    /// Open file: until the file previews land, the system's own app for
-    /// that file; a thread's file on another runner has no button at all.
+    /// Open file: the skill in the pane beside the thread, read through the
+    /// runner, as the Swift app previews it. Its path is the catalog's, which
+    /// a cloned repo chooses (`Inspect.app#help/SKILL.md` beside an
+    /// `Inspect.app`, Daybreak 9 Nov 2026), so it's never handed to the
+    /// system as it is: with no thread to show it beside (the new-thread
+    /// page), it goes through the open gate, which opens the real file and
+    /// asks before anything that would run. Another runner's thread has no
+    /// button at all.
     fn palette_open_file(&mut self, path: String, cx: &mut Context<Self>) {
-        cx.open_url(&format!("file://{}", path.replace(' ', "%20")));
+        let data = self.chip_data(cx);
+        if data.away.is_none() {
+            let thread = data.summary.filter(|_| self.thread_id.is_some());
+            match (self.app.upgrade(), thread) {
+                (Some(app), Some(thread)) => {
+                    let side = app.read(cx).side.clone();
+                    side.update(cx, |side, cx| side.preview_path(&path, None, &thread, cx));
+                }
+                _ => crate::open_gate::open_file(&path, crate::open_gate::Origin::ThisMac, cx),
+            }
+        }
         self.palette.closed_at = Some(self.input.read(cx).value().to_string());
         cx.notify();
     }

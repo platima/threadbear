@@ -3,7 +3,9 @@
 // app's, and sends links where they should go.
 use super::metrics::CODE_PAD;
 use crate::style::{self, size};
+use crate::open_gate::{self, Origin};
 use crate::thread::ThreadPane;
+use threadbear_core::open_policy::{self, LinkKind};
 use gpui_kit::base::{TextViewState, TextViewStyle};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::*;
@@ -13,6 +15,9 @@ use crate::style::px;
 
 /// How far a list's text sits in from the text around it (listIndent).
 const LIST_INDENT: f32 = 30.;
+/// How far short of a list item's text its marker ends: the Swift bullet
+/// (6.8 wide at 15 pt) starts 18 before the text, so ends 11.2 before it.
+const MARKER_END: f32 = 11.2;
 /// The gap between paragraphs (paragraphGap).
 const PARAGRAPH_GAP: f32 = 10.;
 
@@ -69,7 +74,11 @@ pub(crate) fn reading_style(cx: &App) -> TextViewStyle {
         .with_code_block(code_block)
         .with_inline_code(HighlightStyle { background_color: Some(inline_bg), ..Default::default() })
         .with_inline_code_style(inline_code)
-        .with_list_style(StyleRefinement::default().text_color(label).min_w(px(LIST_INDENT)).pr(px(LIST_INDENT - 22.)))
+        // The kit right-aligns a marker in the indent. Swift starts a bullet
+        // 18 before the text and a number 22 before (markerStart): ending
+        // them 11.2 short of the text puts the bullet and "1." where the
+        // Swift ones are (a two-figure number sits a little further out).
+        .with_list_style(StyleRefinement::default().text_color(label).min_w(px(LIST_INDENT)).pr(px(MARKER_END)))
         .with_blockquote_style(StyleRefinement::default().border_l(px(0.)).pl(px(14.)).text_color(muted))
         .with_table(table)
         .with_table_head(table_head)
@@ -77,12 +86,19 @@ pub(crate) fn reading_style(cx: &App) -> TextViewStyle {
         .with_dark(cx.theme().is_dark())
 }
 
+/// Whether markdown text opens with a heading ("# " to "###### ").
+pub(crate) fn starts_with_heading(text: &str) -> bool {
+    let text = text.trim_start_matches([' ', '\n']);
+    let hashes = text.chars().take_while(|c| *c == '#').count();
+    (1..=6).contains(&hashes) && text[hashes..].starts_with([' ', '\t'])
+}
+
 /// `WorkLinks.escapeDestinations` and the "↑" after a work link: a space ends a
 /// link's destination for the parser, and agents write `[tests pass](work:npm
 /// test)`. The arrow says the link goes up the thread, not out of it, and goes
 /// in the link's own words so it's coloured and selected with them.
 pub(crate) fn prepare(text: &str) -> String {
-    link_code_paths(&escape_work_links(text))
+    link_code_paths(&escape_work_links(&crate::reply_buttons::unknown_as_words(text)))
 }
 
 fn escape_work_links(text: &str) -> String {
@@ -324,60 +340,57 @@ impl ThreadPane {
         state
     }
 
-    /// Where a link goes. A web address or file opens outside the app (the
-    /// `OpenGate` trust rules come with file previews); `work:`, `thread:` and
-    /// `review:` links act here.
+    /// Where a link goes. `work:`, `thread:` and `review:` links act here;
+    /// everything else goes through the open gate (open_gate.rs), which
+    /// opens a web page, asks before a program or another app, and never
+    /// opens another Mac's file here: that one shows in the pane, read
+    /// through its runner.
     pub(crate) fn link_clicked(&mut self, url: &str, row_id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let (scheme, rest) = match url.split_once(':') {
-            Some((s, r)) if s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')) && !s.is_empty() => (s.to_ascii_lowercase(), r),
-            _ => {
-                self.open_file_url(url, window, cx);
-                return;
-            }
-        };
-        match scheme.as_str() {
-            "work" => self.open_work_link(&percent_decode(rest), row_id, window, cx),
-            "thread" => self.open_thread_link(&percent_decode(rest), window, cx),
-            "review" => {}
-            "http" | "https" | "mailto" | "file" => cx.open_url(url),
-            "tbpath" => {
+        let scheme = url.split_once(':').map(|(s, _)| s).filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))).map(str::to_ascii_lowercase);
+        let rest = scheme.as_ref().map_or(url, |s| &url[s.len() + 1..]);
+        match scheme.as_deref() {
+            Some("work") => self.open_work_link(&percent_decode(rest), row_id, window, cx),
+            Some("thread") => self.open_thread_link(&percent_decode(rest), window, cx),
+            Some("review") => {}
+            Some("tbpath") => {
                 let text = percent_decode(rest.strip_prefix("?p=").unwrap_or(rest));
-                self.open_path_ref(&text, cx);
+                self.open_thread_file(strip_line(split_query(&text).0), cx);
             }
-            _ => {}
+            // `Foo.swift:12` reads as a scheme, but it's a file and a line.
+            Some(s) if s.contains('.') && strip_line(url) != url => self.open_thread_file(strip_line(url), cx),
+            _ => match open_policy::link_kind(url) {
+                LinkKind::File(path) => self.open_thread_file(strip_line(&path), cx),
+                _ => open_gate::open_link(url, self.origin(), &self.summary.cwd, cx),
+            },
         }
     }
 
-    /// A path written in inline code: the thread's folder is where a
-    /// relative one is from (`FilePathRefs.resolve`, without its search of
-    /// the files the thread's tools touched, which comes with the file
-    /// links' menus).
-    fn open_path_ref(&mut self, text: &str, cx: &mut Context<Self>) {
-        let path = strip_line(split_query(text).0);
-        let home = threadbear_core::reducer::text::home_directory();
-        let absolute = if let Some(rest) = path.strip_prefix("~/") {
-            format!("{}/{rest}", home.trim_end_matches('/'))
-        } else if path.starts_with('/') {
-            path.to_owned()
-        } else if !self.summary.cwd.is_empty() {
-            format!("{}/{path}", self.summary.cwd.trim_end_matches('/'))
+    pub(crate) fn origin(&self) -> Origin {
+        if self.summary.is_remote() {
+            Origin::OtherMac
         } else {
-            return;
-        };
-        cx.open_url(&format!("file://{}", encode_component(&absolute)));
+            Origin::ThisMac
+        }
     }
 
-    fn open_file_url(&mut self, path: &str, _window: &mut Window, cx: &mut Context<Self>) {
-        let decoded = percent_decode(path);
-        let path = decoded.strip_prefix("~/").map(|p| format!("{}/{}", threadbear_core::reducer::text::home_directory(), p)).unwrap_or(decoded);
-        let absolute = if path.starts_with('/') {
-            path
-        } else if !self.summary.cwd.is_empty() {
-            format!("{}/{}", self.summary.cwd.trim_end_matches('/'), path)
-        } else {
+    /// A file a reply names, by a link or in inline code: the thread's
+    /// folder is where a relative one is from (`FilePathRefs.resolve`,
+    /// without its search of the files the thread's tools touched, which
+    /// comes with the file links' menus). This runner's opens in its app
+    /// through the gate; another runner's shows in the pane, read through
+    /// that runner, as nothing of it is on this Mac.
+    pub(crate) fn open_thread_file(&mut self, path: &str, cx: &mut Context<Self>) {
+        let home = threadbear_core::reducer::text::home_directory();
+        let Some(absolute) = open_policy::absolute(path, &self.summary.cwd, &home) else { return };
+        if self.summary.is_remote() {
+            let side = self.composer.read(cx).app.upgrade().map(|app| app.read(cx).side.clone());
+            let thread = self.summary.clone();
+            if let Some(side) = side {
+                side.update(cx, |side, cx| side.preview_path(&absolute, None, &thread, cx));
+            }
             return;
-        };
-        cx.open_url(&format!("file://{absolute}"));
+        }
+        open_gate::open_file(&absolute, Origin::ThisMac, cx);
     }
 }
 
