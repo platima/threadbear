@@ -14,7 +14,7 @@ import { go, threadPath, useRoute } from './route';
 import { useToken } from './token';
 import { isApp } from './deployment';
 import { PairScreen } from './pair';
-import { lastWorkedOn, recapDue, recapParts, runnerWords } from './view-logic';
+import { isAtEnd, lastWorkedOn, recapDue, recapParts, runnerWords } from './view-logic';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { ReplyButton } from './reply-button';
 import { CommandState } from './command-state';
@@ -180,6 +180,24 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
     el.scrollTop = el.scrollHeight - keepFromBottom.current;
     keepFromBottom.current = null;
   }, [shown?.messages.length]);
+
+  // In the Android app the page is shrunk to fit above the keyboard (ImeInsets.kt in
+  // android/plugins/push), which makes this box shorter, as a growing reply box does.
+  // If its end was in view, keep it in view, rather than leaving the newest message
+  // under the composer. Only in the app, so the website and the iPhone page work as before.
+  const loaded = !!shown && !!t;
+  useEffect(() => {
+    const el = list.current;
+    if (!isApp || !el || typeof ResizeObserver === 'undefined') return;
+    let height = el.clientHeight;
+    const watch = new ResizeObserver(() => {
+      // Shorter now, and its end was in view at the old height
+      if (el.clientHeight < height && isAtEnd(el.scrollHeight, el.scrollTop, height)) el.scrollTop = el.scrollHeight;
+      height = el.clientHeight;
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [loaded]);
 
   // Opening a thread here counts as reading it, like opening it on the Mac.
   useEffect(() => {

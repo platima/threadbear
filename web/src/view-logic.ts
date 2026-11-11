@@ -116,6 +116,11 @@ export function recapParts(recap: string): { purpose?: string; points: string[] 
   return { ...(purpose !== undefined ? { purpose } : {}), points };
 }
 
+// True when a scroll box is at its end, give or take a few pixels, so that a box
+// which gets shorter (the Android app's keyboard opening under it) can stay there.
+// A box too short to scroll is at its end.
+export const isAtEnd = (scrollHeight: number, scrollTop: number, clientHeight: number, slack = 48): boolean => scrollHeight - scrollTop - clientHeight <= slack;
+
 export function lastWorkedOn(at: string, now: number): string {
   const hours = Math.round((now - Date.parse(at)) / 3600_000);
   return `Last worked on ${hours < 48 ? `${hours} hours ago` : `${Math.round(hours / 24)} days ago`}`;
