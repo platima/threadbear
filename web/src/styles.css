@@ -73,6 +73,14 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* The Android app is drawn edge to edge, behind the status bar and any display
+   cutout, and its WebView (version 140 or newer) tells the page how much they
+   cover as env(safe-area-inset-*), which index.html opts in to with
+   viewport-fit=cover. Every screen sits in #root, so it keeps clear of the top
+   and the sides here, once. The bottom is the tab bar's and the composer's own,
+   in the narrow-screen block below. Where nothing covers the page (a browser, an
+   older WebView) the insets are 0 and this changes nothing. */
+#root { padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px); }
 body { background: var(--bg); color: var(--text); font: 15px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -490,6 +498,9 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
   .search input { font-size: 16px; }
   .shell.has-thread .sidebar { display: none; }
   .shell:not(.has-thread) .main { display: none; }
+  /* The strip #root leaves behind the status bar is the body's. Over the list,
+     which is --side and not --bg, take the list's colour so there is no band. */
+  body:has(.shell:not(.has-thread)) { background: var(--side); }
   .back { display: inline-grid; margin-left: -8px; }
   .thread-head { padding: 8px 10px 8px 14px; }
   .crumbs .folder, .crumbs .sep { display: none; }
