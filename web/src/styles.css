@@ -180,7 +180,7 @@ code, pre { font-family: var(--mono); font-size: 13px; }
 .doc-top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; padding: 12px 24px; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); }
 .doc-top .spacer { flex: 1; }
 .doc-top .doc-top-title { display: none; font-weight: 600; font-size: 14px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.doc-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 720px) minmax(0, 1fr); column-gap: 48px; padding: 8px 24px 64px; }
+.doc-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 720px) minmax(0, 1fr); column-gap: 48px; padding: 8px 24px calc(64px + env(safe-area-inset-bottom, 0px)); }
 .outline { grid-column: 1; justify-self: end; width: 230px; position: sticky; top: 72px; align-self: start; max-height: calc(100vh - 96px); display: flex; flex-direction: column; }
 .outline h2 { font-size: 13px; font-weight: 500; color: var(--faint); margin: 0 0 10px 12px; }
 .outline ol { list-style: none; margin: 0; padding: 0; overflow-y: auto; border-left: 1px solid var(--line); }
@@ -218,7 +218,7 @@ code, pre { font-family: var(--mono); font-size: 13px; }
 .turns-list .took { grid-column: 2; color: var(--faint); font-size: 12.5px; }
 
 @media (max-width: 1100px) {
-  .doc-grid { grid-template-columns: minmax(0, 1fr); padding: 4px 20px 48px; }
+  .doc-grid { grid-template-columns: minmax(0, 1fr); padding: 4px 20px calc(48px + env(safe-area-inset-bottom, 0px)); }
   .outline { display: none; }
   .doc { grid-column: 1; justify-self: center; width: 100%; max-width: 720px; }
   .turns-menu { display: block; }
@@ -226,7 +226,7 @@ code, pre { font-family: var(--mono); font-size: 13px; }
 }
 @media (max-width: 600px) {
   .doc-top { padding: 10px 16px; }
-  .doc-grid { padding: 0 16px 40px; }
+  .doc-grid { padding: 0 16px calc(40px + env(safe-area-inset-bottom, 0px)); }
   .doc h1 { font-size: 28px; margin-top: 12px; }
   .turn .asked { font-size: 17px; padding-left: 14px; }
   .turn + .turn { margin-top: 36px; }
@@ -283,7 +283,7 @@ html.resizing, html.resizing * { cursor: col-resize !important; user-select: non
 .search .clear { display: grid; place-items: center; width: 18px; height: 18px; flex: none; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--faint); }
 .search .clear:hover { background: var(--hover); color: var(--text); }
 .search .clear svg { width: 10px; height: 10px; }
-.lists { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 12px; outline: none; }
+.lists { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px calc(12px + env(safe-area-inset-bottom, 0px)); outline: none; }
 /* Headings as the Mac's: quiet grey with a hairline out to the edge, the
    number after it, the chevron only while folded or under the pointer. */
 .section-head { display: flex; align-items: center; gap: 2px; margin-top: 8px; }
@@ -496,6 +496,8 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
   .rail .pop-panel { left: auto; right: 8px; bottom: calc(100% + 7px); max-height: calc(100vh - 100% - 16px); overflow-y: auto; overscroll-behavior: contain; }
   .menu .phone-only { display: flex; }
   .page-body { padding: 16px 14px calc(24px + env(safe-area-inset-bottom, 0px)); }
+  /* The tab bar under the list pads the inset, so the list does not. */
+  .lists { padding-bottom: 12px; }
   .state-line { display: none; }
   .resize-handle { display: none; }
   .sidebar .pop-panel { max-width: calc(100vw - 16px); }
@@ -518,10 +520,6 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
      keyboard"). max(10px, inset) made it flush on the bar whenever the inset was 10px
      or more, and 10px clear only above the keyboard. */
   .dock { padding: 6px 10px calc(10px + env(safe-area-inset-bottom, 0px)); }
-}
-/* Above that there is no tab bar to take the inset, so the list does. */
-@media (min-width: 761px) {
-  .lists { padding: 0 8px calc(12px + env(safe-area-inset-bottom, 0px)); }
 }
 /* A short screen: a phone on its side, or with the keyboard up. */
 @media (max-height: 520px) {

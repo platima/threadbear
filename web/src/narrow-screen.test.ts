@@ -58,7 +58,6 @@ function rule(scope: string, selector: string): Map<string, string> {
 }
 
 const phone = mediaBlock('(max-width: 760px)');
-const wide = mediaBlock('(min-width: 761px)');
 const short = mediaBlock('(max-height: 520px)');
 const anywhere = everywhere();
 
@@ -127,14 +126,22 @@ test('the wide layout clears a bar under the page as well, by the same gap it ha
 test('the rest of the wide layout clears a bar under the page, and the phone does not pad twice', () => {
   // On a phone the tab bar under the list pads the inset, so the list must not.
   assert.equal(rule(anywhere, '.rail').get('padding'), '10px 0 calc(10px + env(safe-area-inset-bottom, 0px))');
-  assert.equal(rule(anywhere, '.lists').get('padding'), '0 8px 12px');
-  assert.equal(rule(wide, '.lists').get('padding'), '0 8px calc(12px + env(safe-area-inset-bottom, 0px))');
+  // The base rule takes the inset, so no width falls between the two layouts (a phone's
+  // width can be fractional); the phone block gives it back.
+  assert.equal(rule(anywhere, '.lists').get('padding'), '0 8px calc(12px + env(safe-area-inset-bottom, 0px))');
+  assert.equal(rule(phone, '.lists').get('padding-bottom'), '12px');
   assert.equal(rule(anywhere, '.page-body').get('padding'), '22px 24px calc(32px + env(safe-area-inset-bottom, 0px))');
 });
 
 test('the pages that fill a phone end clear of the bar, and so does the pairing screen', () => {
   assert.equal(rule(phone, '.page-body').get('padding'), '16px 14px calc(24px + env(safe-area-inset-bottom, 0px))');
   assert.match(rule(anywhere, '.signin').get('padding') ?? '', /calc\(24px \+ env\(safe-area-inset-bottom, 0px\)\)$/);
+});
+
+test('the shared page ends clear of the bar at every width', () => {
+  assert.equal(rule(anywhere, '.doc-grid').get('padding'), '8px 24px calc(64px + env(safe-area-inset-bottom, 0px))');
+  assert.equal(rule(mediaBlock('(max-width: 1100px)'), '.doc-grid').get('padding'), '4px 20px calc(48px + env(safe-area-inset-bottom, 0px))');
+  assert.equal(rule(mediaBlock('(max-width: 600px)'), '.doc-grid').get('padding'), '0 16px calc(40px + env(safe-area-inset-bottom, 0px))');
 });
 
 test('the tab bar and the composer still take the bottom inset, and #root still does not', () => {
