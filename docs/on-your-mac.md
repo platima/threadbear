@@ -609,7 +609,52 @@ said otherwise.
   the app to quit (`Threadbear.exe --quit`) and ends the runner's task
   (`--runner --stop`), and starts the task again afterwards (`--runner
   --start`) if it is registered; uninstalling does the same quit and stop, then
-  runs `--runner --uninstall`. Each installer refuses while a copy from the
+  runs `--runner --uninstall`. The setup exe runs the quit and the stop as the
+  person who started Setup (the task is theirs, and is named for them), and
+  starts the task again the same way if it stops without installing. When Setup
+  is running as an administrator it does that only for a copy whose folder the
+  machine's own records (`HKLM`) name: a `Threadbear.exe` found only through the
+  current user's registry, or only because it sits in the folder chosen, is one
+  a standard user could have put there, and it cannot be run unelevated for
+  certain, so it is not run (nor asked to quit), and what is running from it is
+  dealt with as below. To learn who started Setup when it runs as an
+  administrator (it may be another account than theirs), it starts one hidden
+  PowerShell as that person, which does nothing and ends itself after 20
+  seconds, and finds it in the process list by a marker in its command line;
+  nothing is written for it. Setup does not install into a folder that other
+  programs share (Program Files itself, a drive root, Windows, ProgramData, a
+  profile or its Desktop, Documents or Downloads, or any folder named like
+  those), and ends nothing in one. It then waits up to 20 seconds for
+  `node\node.exe` and `Threadbear.exe` in the folder to be free, with a
+  PowerShell script it carries (`installer/release-folder.ps1`, unpacked to
+  Setup's own temporary folder and gone when Setup exits, run with Windows
+  PowerShell). The script opens those two files for writing without changing
+  them, and reads the list of programs running on the PC (through WMI) to find
+  any whose program file is inside the install folder; one running from the
+  `node`, `runner`, `desktop` or `docs` folder is in the way even when those two
+  files are free, including a program Setup was started from. To tell which
+  folders are shared it reads a few environment variables and Windows' own folder
+  paths (Program Files, Windows, ProgramData, the profile and its Desktop,
+  Documents and Downloads). If one is still in the way, Setup names it (as the
+  app, the runner, a helper of the app, or something else started with its Node)
+  and asks. A `/VERYSILENT` install has nobody to ask and ends nothing unless it
+  was run with `/ENDRUNNING=1`. Once it may, it asks Task Scheduler to end the
+  runner's task once more, then ends the program: only one that belongs to the
+  person who started Setup, is `Threadbear.exe` or sits in the `node`, `runner`,
+  `desktop` or `docs` folder of an install folder (one that has `Threadbear.exe`
+  in it and is not a shared one), and is the same process that was listed (the
+  script opens a handle to it first, which keeps its process number from passing
+  to another program, and reads its start time through that handle just before
+  ending it through the same handle). It does not end what that program
+  started. Where
+  PowerShell cannot hold a process handle (Constrained Language Mode), nothing
+  is ended. Anything else it names and stops, before a file is changed. The
+  list, with each program's command line, is written only to Setup's own log,
+  which exists only when Setup is run with `/LOG`; nothing is sent anywhere.
+  Where PowerShell is missing or blocked Setup carries on without the script. To
+  find the folder of a copy that is already installed it reads the `App Paths`
+  entry and its own uninstall entry, in `HKCU` and `HKLM`. Each installer refuses
+  while a copy from the
   other kind is installed (it reads `HKLM` registry keys and looks for the setup
   exe's uninstaller in `%LOCALAPPDATA%\Programs\Threadbear`; the MSI also reads
   `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion` for the Windows build and

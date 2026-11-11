@@ -143,7 +143,19 @@
     <!-- The app has no window to close and the runner keeps its files open, so
          both are asked to stop through their own routes (the quit and stop
          switches) before files change. Return="ignore": on a first install
-         there is nothing to run. -->
+         there is nothing to run.
+
+         These two do not wait for the files to be free or check that they are,
+         as the setup exe now does (threadbear.iss PrepareToInstall, with
+         release-folder.ps1): an app or runner that outlives its stop makes the
+         file copy fail half way. The helper takes the folder and gives exit
+         codes and a report for that (its header says how), so a custom action
+         could run it after StopRunner with Return="check", only when the folder
+         already exists. What is left for that: getting the script to a place
+         the action can run it from before any file is installed (a Binary
+         written out by another action), a message for the person (an exe
+         action shows none; the install log is the only channel), and a test
+         that installs the MSI on a hosted runner. -->
     <CustomAction Id="QuitApp" Directory="INSTALLFOLDER"
                   ExeCommand="&quot;[INSTALLFOLDER]Threadbear.exe&quot; --quit"
                   Execute="immediate" Return="ignore" />
