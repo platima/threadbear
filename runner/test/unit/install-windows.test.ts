@@ -183,6 +183,8 @@ function fake(key: string, tasks: string[] = []): Fake {
         throw new Error(`unexpected end of pid ${pid}`);
       },
     },
+    // Where the supervisor notes its pid (windows-run.mjs). Nothing is there until a test says so.
+    supervisorPidFile: path.join(tmpDir(), 'Logs', 'runner-supervisor.pid'),
     stopWaitMs: 300,
     pollMs: 10,
     schtasks: (...a: string[]) => {
@@ -630,6 +632,41 @@ test('--stop does not end a process whose start time or program it cannot read',
   }
 });
 
+// A runner that was hard-killed never deletes run/runner.pid, so a stale one is the usual state
+// while the runner is stopped, and its pid can be a service or an elevated program by now, one
+// Get-Process will not give a start time or program for. setup-sync.mjs reads the exit code of
+// --stop and will not restart the runner when it is 1, so nothing of ours running is the only
+// thing that may make it 1. System (pid 4) is such a process, and always there; it is only ever
+// looked at, and the stand-in for endTree throws if anything tries to end it.
+test('--stop says the runner is not running, and exits 0, when runner.pid is stale and its pid is now a program whose path cannot be read', WINDOWS_ONLY, () => {
+  // Whatever it is, its start time is not the one recorded.
+  const stub = fake('unused', [TASK]);
+  mayEnd(stub);
+  (stub.d.procs as Record<string, unknown>).processImage = () => ({ lstart: '2', path: '' });
+  recordRunner(stub, { pid: 4 }, '1');
+  assert.equal(inst.runInstaller(['--stop'], stub.d), 0, stub.lines.join('\n'));
+  assert.equal(stub.lines[1], 'The runner is not running (pid 4 belongs to another program now, so it was left alone).');
+
+  // And with the runner's own tools reading the real thing.
+  const real = fake('unused', [TASK]);
+  real.d.procs = { ...realProcs, endTree: (pid: number): boolean => assert.fail(`pid ${pid} must not be ended`) };
+  const system = processImage(4);
+  assert.ok(system, 'the system process shows a start time');
+  recordRunner(real, { pid: 4 }, String(BigInt(system.lstart) - 36_000_000_000n));
+  assert.equal(inst.runInstaller(['--stop'], real.d), 0, real.lines.join('\n'));
+  assert.equal(real.lines[1], 'The runner is not running (pid 4 belongs to another program now, so it was left alone).');
+});
+
+test('--stop still exits 1 when the process is the one recorded and its program cannot be read, as nothing then says it is not our runner', WINDOWS_ONLY, () => {
+  const f = fake('unused', [TASK]);
+  f.d.procs = { ...realProcs, endTree: (pid: number): boolean => assert.fail(`pid ${pid} must not be ended`) };
+  const system = processImage(4);
+  assert.ok(system);
+  recordRunner(f, { pid: 4 }, system.lstart); // what a runner's own record of itself would say
+  assert.equal(inst.runInstaller(['--stop'], f.d), 1);
+  assert.equal(f.lines[1], 'Could not tell what program pid 4 is, so it was left running.');
+});
+
 test('--stop with no runner recorded, or a record of one that has gone, ends nothing and says it is not running', WINDOWS_ONLY, async () => {
   const none = fake('unused', [TASK]);
   mayEnd(none);
@@ -695,6 +732,166 @@ test('--uninstall ends the task and the runner it left, and only then deletes th
   }
 });
 
+// A stand-in for the runner that notes each start, so a runner started again shows.
+const startsBody = (): string => `
+import fs from 'node:fs';
+import path from 'node:path';
+fs.appendFileSync(path.join(import.meta.dirname, 'starts.txt'), process.pid + '\\n');
+setInterval(() => {}, 1000);
+`;
+
+// The premise the stop rests on is that Task Scheduler's End may leave the task's processes
+// behind (the fake schtasks /End does nothing, as above). The supervisor is one of them: it sees
+// its runner end, waits, and starts another on the same node.exe, so ending only the runner
+// would leave a new one on its way while --stop says it is done.
+test('--stop ends the supervisor the task left behind, so it does not start the runner again, and the runner with it', WINDOWS_ONLY, async () => {
+  const { sv, dir } = startSupervisor(startsBody());
+  const starts = path.join(dir, 'starts.txt');
+  const startedPids = (): number[] => (fs.existsSync(starts) ? fs.readFileSync(starts, 'utf8').split('\n').filter(Boolean).map(Number) : []);
+  // The runners this test's supervisor started, with their start times, so that what is cleaned
+  // up below is only ever one of them and never a pid something else has taken since.
+  const mine = new Map<number, string>();
+  const note = () => {
+    for (const pid of startedPids()) if (!mine.has(pid)) mine.set(pid, processInfo(pid)?.lstart ?? '');
+  };
+  try {
+    const f = fake('unused', [TASK]);
+    const pidFile = inst.supervisorPidFileFor({ LOCALAPPDATA: dir });
+    f.d.supervisorPidFile = pidFile;
+    mayEnd(f);
+    await until('the supervisor to note its pid and start the runner', () => readHolder(pidFile) !== null && startedPids().length === 1);
+    note();
+    const runnerPid = startedPids()[0];
+    recordRunner(f, { pid: runnerPid });
+    assert.equal(readHolder(pidFile)?.pid, sv.pid, 'the file names the supervisor');
+
+    assert.equal(inst.runInstaller(['--stop'], f.d), 0, f.lines.join('\n'));
+    assert.equal(f.lines[1], `Ended the supervisor (pid ${sv.pid}), which the task had not stopped.`);
+    assert.ok(f.events.includes(`end ${sv.pid}`), f.events.join(', '));
+    assert.equal(await exits(sv), true, 'the supervisor is gone');
+    await until('the runner to be gone', () => !pidExists(runnerPid));
+
+    // Longer than the supervisor waits before it starts a runner again (100 ms here).
+    await new Promise((r) => setTimeout(r, 1500));
+    note();
+    assert.deepEqual(startedPids(), [runnerPid], 'no runner was started again');
+    assert.equal(pidExists(runnerPid), false);
+  } finally {
+    sv.kill(); // the supervisor this test started
+    note();
+    for (const [pid, lstart] of mine) if (pidExists(pid) && processInfo(pid)?.lstart === lstart) process.kill(pid);
+  }
+});
+
+test('--stop ends the supervisor even when its runner has just ended and is being waited for, and says nothing of a supervisor that is not there', WINDOWS_ONLY, async () => {
+  // The supervisor's wait between one runner and the next is when nothing is recorded as running.
+  const { sv, dir } = startSupervisor(`process.exit(3);\n`);
+  try {
+    const pidFile = inst.supervisorPidFileFor({ LOCALAPPDATA: dir });
+    const f = fake('unused', [TASK]);
+    f.d.supervisorPidFile = pidFile;
+    mayEnd(f);
+    await until('the supervisor to note its pid', () => readHolder(pidFile) !== null);
+    assert.equal(inst.runInstaller(['--stop'], f.d), 0, f.lines.join('\n'));
+    assert.equal(f.lines[1], `Ended the supervisor (pid ${sv.pid}), which the task had not stopped.`);
+    assert.equal(f.lines[2], 'The runner is not running.');
+    assert.equal(await exits(sv), true);
+
+    // Its note is still there, for a pid that is gone: nothing to end, nothing to say.
+    const again = fake('unused', [TASK]);
+    again.d.supervisorPidFile = pidFile;
+    mayEnd(again);
+    assert.equal(inst.runInstaller(['--stop'], again.d), 0);
+    assert.equal(again.lines.length, 2, again.lines.join('\n'));
+    assert.ok(!again.events.some((e) => e.startsWith('end ')));
+  } finally {
+    sv.kill();
+  }
+});
+
+test('--stop leaves a supervisor on another node alone and reports it, and does not mistake a pid something else has now for one', WINDOWS_ONLY, async () => {
+  const install = startStandIn(path.join(tmpDir(), 'Programs', 'Threadbear'));
+  const other = startStandIn(path.join(tmpDir(), 'Other'));
+  try {
+    const noteSupervisor = (f: Fake, who: { pid: number }, lstart = processInfo(who.pid)!.lstart) => {
+      const file = f.d.supervisorPidFile as string;
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({ pid: who.pid, lstart }) + '\n');
+    };
+
+    // Right pid and start time, but it runs from some other node.exe than the one this script runs on.
+    const foreign = fake('unused', [TASK]);
+    foreign.d.node = install.exe;
+    mayEnd(foreign);
+    noteSupervisor(foreign, other);
+    assert.equal(inst.runInstaller(['--stop'], foreign.d), 1, foreign.lines.join('\n'));
+    assert.match(foreign.lines[1], new RegExp(`^The supervisor \\(pid ${other.pid}\\) is running from .*Other.node.node\\.exe, not from this install's Node \\(.*Programs.Threadbear.node.node\\.exe\\), so it was left running\\.$`));
+
+    // A note left by a supervisor that ended long ago, whose pid this stand-in has now.
+    const reused = fake('unused', [TASK]);
+    reused.d.node = other.exe;
+    mayEnd(reused);
+    noteSupervisor(reused, other, String(BigInt(processInfo(other.pid)!.lstart) - 36_000_000_000n));
+    assert.equal(inst.runInstaller(['--stop'], reused.d), 0, reused.lines.join('\n'));
+    assert.equal(reused.lines.length, 2, 'nothing is said of it');
+    assert.ok(!reused.events.some((e) => e.startsWith('end ')));
+
+    // A pid whose start time or program cannot be read at all.
+    const unreadable = fake('unused', [TASK]);
+    unreadable.d.node = other.exe;
+    mayEnd(unreadable);
+    (unreadable.d.procs as Record<string, unknown>).processImage = () => null;
+    noteSupervisor(unreadable, other);
+    assert.equal(inst.runInstaller(['--stop'], unreadable.d), 1);
+    assert.equal(unreadable.lines[1], `Could not tell what program pid ${other.pid} is, so it was left running.`);
+    assert.ok(!unreadable.events.some((e) => e.startsWith('end ')));
+
+    assert.equal(pidExists(other.pid), true);
+    assert.equal(pidExists(install.pid), true);
+  } finally {
+    await ended(install, other);
+  }
+});
+
+test('the supervisor notes its pid and start time beside its log, and takes the note away when it ends itself because another runner has the folder', WINDOWS_ONLY, async () => {
+  // The stand-in runner looks for the note when it starts, then says another runner is in charge.
+  const body = `
+import fs from 'node:fs';
+import path from 'node:path';
+const note = path.join(process.env.LOCALAPPDATA, 'Threadbear', 'Logs', 'runner-supervisor.pid');
+fs.writeFileSync(path.join(import.meta.dirname, 'seen.txt'), fs.existsSync(note) ? fs.readFileSync(note, 'utf8') : 'none');
+process.stderr.write('Another runner (pid 4242) is already using C:\\\\data; not starting.\\n');
+process.exit(1);
+`;
+  const { sv, dir } = startSupervisor(body);
+  try {
+    const file = inst.supervisorPidFileFor({ LOCALAPPDATA: dir });
+    assert.equal(await exits(sv), true, 'the supervisor ended itself');
+    const seen = fs.readFileSync(path.join(dir, 'seen.txt'), 'utf8');
+    const note = JSON.parse(seen) as { pid: number; lstart: string };
+    assert.equal(note.pid, sv.pid, 'it was there before the runner started, naming the supervisor');
+    assert.match(note.lstart, /^~\d+$/, 'with a start time worked out in-process, as the supervisor does not run PowerShell');
+    assert.equal(fs.existsSync(file), false, 'and it is gone now');
+  } finally {
+    sv.kill();
+  }
+});
+
+test('the note the supervisor writes is one --stop reads: its start time matches the system\'s for that process', WINDOWS_ONLY, async () => {
+  const { sv, dir } = startSupervisor(startsBody());
+  try {
+    const file = inst.supervisorPidFileFor({ LOCALAPPDATA: dir });
+    await until('the supervisor to note its pid', () => readHolder(file) !== null);
+    const note = readHolder(file)!;
+    assert.equal(note.pid, sv.pid);
+    assert.ok(note.lstart);
+    assert.equal(sameStartTime(note.lstart!, processInfo(sv.pid!)!.lstart), true, 'so a live supervisor is recognised, and a reused pid is not');
+    assert.equal(sameStartTime(note.lstart!, String(BigInt(processInfo(sv.pid!)!.lstart) + 36_000_000_000n)), false);
+  } finally {
+    sv.kill();
+  }
+});
+
 test('--stop --dry-run and the other flags do not look at the runner, let alone end it', WINDOWS_ONLY, async () => {
   const runner = startStandIn(path.join(tmpDir(), 'Programs', 'Threadbear'));
   try {
@@ -721,6 +918,93 @@ test('loadRunnerTools hands the script the runner\'s own process functions and f
   assert.equal(tools.readHolder, readHolder);
   assert.equal(tools.endTree, killTreeWindows);
   assert.equal(tools.dataDirFor(), dataDirFor());
+});
+
+// How the script is really used: a node that has loaded none of the runner's files, as the one the
+// installers run is. The test above runs inside a process that has proc.ts and the rest already.
+test('loadRunnerTools, in a fresh node that has loaded nothing of the runner, finds all the tools and puts out no notice on stderr', () => {
+  const url = pathToFileURL(path.join(SCRIPTS, 'install-windows.mjs')).href;
+  const code = `const m = await import(${JSON.stringify(url)});\nconst tools = await m.loadRunnerTools();\nconsole.log(Object.keys(tools).sort().join(','));\n`;
+  // Only the functions are loaded: nothing here reads Task Scheduler or the real install.
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, THREADBEAR_INSTALL_NO_RUN: '1' }, encoding: 'utf8', windowsHide: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), 'dataDirFor,endTree,pidExists,processImage,readHolder,sameStartTime');
+  // The desktop app takes stderr for part of the answer, and Node 24 says it is stripping types.
+  assert.equal(r.stderr, '');
+});
+
+test('quietly holds back a warning raised while it works, however late, and puts the listeners back, also when the work fails', async () => {
+  const before = process.listeners('warning');
+  const seen: string[] = [];
+  const spy = (w: Error) => seen.push(w.message);
+  process.on('warning', spy);
+  try {
+    // Files that take a while to load: the notice comes long after the first turn of the event loop,
+    // which is when the listeners used to be put back.
+    await inst.quietly(async () => {
+      await new Promise((r) => setTimeout(r, 40));
+      process.emitWarning('a late notice', 'ExperimentalWarning');
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(seen, [], 'it went to nobody');
+    assert.deepEqual(process.listeners('warning'), [...before, spy], 'and the listeners are back, in order');
+    await assert.rejects(
+      inst.quietly(async () => {
+        throw new Error('no such file');
+      }),
+      /no such file/,
+    );
+    assert.deepEqual(process.listeners('warning'), [...before, spy], 'the same after a failure');
+    assert.equal(await inst.quietly(async () => 42), 42, 'and it gives what the work gave');
+  } finally {
+    process.off('warning', spy);
+  }
+});
+
+test('the program loads the runner tools for --stop and --uninstall only, hands the dependencies what went wrong, and gives the exit code of what ran', async () => {
+  const calls: string[] = [];
+  const io = {
+    load: async () => {
+      calls.push('load');
+      return { marker: 'tools' };
+    },
+    deps: (tools?: unknown, error?: string) => ({ tools, error }),
+    run: (argv: string[], d: { tools?: unknown; error?: string }) => {
+      calls.push(`run ${argv.join(' ')} tools=${JSON.stringify(d.tools)} error=${d.error}`);
+      return d.error ? 1 : 3;
+    },
+    err: (s: string) => calls.push(`err ${s}`),
+  };
+  assert.equal(await inst.cli(['--stop'], io), 3, 'what the run gave');
+  assert.deepEqual(calls, ['load', 'run --stop tools={"marker":"tools"} error=undefined']);
+
+  calls.length = 0;
+  const failing = {
+    ...io,
+    load: async () => {
+      calls.push('load');
+      throw new Error('Cannot find module\nat somewhere');
+    },
+  };
+  assert.equal(await inst.cli(['--uninstall'], failing), 1);
+  assert.deepEqual(calls, ['load', 'run --uninstall tools=undefined error=Cannot find module at somewhere']);
+
+  // Everything else, and any dry run, never loads TypeScript: the desktop app reads their output.
+  for (const argv of [['--stop', '--dry-run'], ['--uninstall', '--dry-run'], ['--status'], ['--mode'], ['--start'], ['--installed'], ['--on-demand'], []]) {
+    calls.length = 0;
+    await inst.cli(argv, io);
+    assert.ok(!calls.includes('load'), argv.join(' '));
+  }
+
+  calls.length = 0;
+  const throwing = {
+    ...io,
+    run: () => {
+      throw new Error('line one\nline two');
+    },
+  };
+  assert.equal(await inst.cli(['--start'], throwing), 1);
+  assert.deepEqual(calls, ['err line one line two']);
 });
 
 test('the script\'s own dependencies carry the tools, this Node, and the data folder THREADBEAR_HOME or the default names; and without the tools --stop still ends the task, says it could not check, and exits 1', WINDOWS_ONLY, async () => {
@@ -792,6 +1076,11 @@ test('the supervisor gives the runner a pipe and the variable, the runner takes 
     assert.equal(info.hadPipe, true, 'the supervisor gave it a pipe and the variable');
     assert.equal(info.varLeft, null, 'the variable is taken out of its environment, so nothing it starts inherits it');
     assert.equal(pidExists(runnerPid), true);
+    // The supervisor holds its end of the pipe open for as long as it lives: a runner that was told
+    // to stop at once, or by a pipe that came closed, would have left its note by now.
+    await new Promise((r) => setTimeout(r, 1000));
+    assert.equal(fs.existsSync(path.join(dir, 'stopped.txt')), false, 'the pipe was not closed early');
+    assert.equal(pidExists(runnerPid), true, 'and the runner is still there');
     sv.kill(); // the supervisor this test started: a hard end, as an installer's is
     assert.equal(await exits(sv), true);
     await until('the runner to be gone', () => !pidExists(runnerPid!), 10_000);

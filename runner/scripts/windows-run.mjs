@@ -6,7 +6,9 @@
 // supervisor). Ending the task should end this, the runner and the CLIs, as
 // Task Scheduler runs a task's processes in one job. That has not been checked
 // against a real task, so the runner also stops by itself when this ends
-// (runnerLink), and `install-windows.mjs --stop` ends one that is still there.
+// (runnerLink), and `install-windows.mjs --stop` ends what is still there: this
+// first, so that it cannot start the runner again, found by the pid it notes in
+// runner-supervisor.pid beside its log (supervisorNote), and then the runner.
 //
 // A runner that keeps failing is tried again after longer and longer waits (5 s,
 // 10 s, 20 s, up to 5 minutes), and a runner that ran for a minute starts the
@@ -49,6 +51,18 @@ export function runnerLink(platform = process.platform) {
   return platform === 'win32' ? { stdin: 'pipe', env: { THREADBEAR_RUNNER_WATCH_STDIN: '1' } } : { stdin: 'ignore', env: {} };
 }
 
+// What this notes about itself in runner-supervisor.pid, for install-windows.mjs
+// (supervisorPidFileFor): its pid and its start time, in the form run/runner.pid
+// has them (lock.ts), so the same check can tell it from a process that has its
+// pid later. The start time is worked out here, the way proc.ts ownStartTime
+// does, so that this long-running process never needs PowerShell: a "~" in front
+// says it is an estimate, and sameStartTime allows for that.
+const FILETIME_AT_UNIX_EPOCH_MS = 11_644_473_600_000n;
+export function supervisorNote(pid = process.pid, startedMs = Date.now() - process.uptime() * 1000) {
+  const lstart = '~' + ((BigInt(Math.round(startedMs)) + FILETIME_AT_UNIX_EPOCH_MS) * 10_000n).toString();
+  return JSON.stringify({ pid, lstart }) + '\n';
+}
+
 // What main.ts writes before it exits 1 because another runner holds the lock.
 export const ALREADY_RUNNING = /Another runner \(pid \d+\) is already using/;
 export const FIRST_WAIT_MS = 5000;
@@ -80,6 +94,25 @@ function run() {
   // Which process this is and which node it runs on, so a node.exe that holds
   // an install's files can be told from the log which it is.
   note(`supervisor pid ${process.pid}, node ${process.execPath}`);
+  // Where `install-windows.mjs --stop` finds this process if Task Scheduler's End
+  // leaves it running. Windows only, as nothing else reads it. A folder that can't
+  // be written to must not stop the runner from running, so failing is no matter.
+  const pidFile = process.platform === 'win32' ? path.join(logDir, 'runner-supervisor.pid') : undefined;
+  if (pidFile) {
+    try {
+      fs.writeFileSync(pidFile, supervisorNote());
+    } catch {
+      // not noted: --stop then ends the runner, as it did before
+    }
+  }
+  // Taken away when this ends itself, if it is still this one's.
+  const forget = () => {
+    try {
+      if (pidFile && JSON.parse(fs.readFileSync(pidFile, 'utf8')).pid === process.pid) fs.rmSync(pidFile, { force: true });
+    } catch {
+      // gone, or someone else's
+    }
+  };
 
   // The log is cut to a second file when it gets big, between runs, when
   // nothing has it open.
@@ -121,6 +154,7 @@ function run() {
       ended = true;
       if (ALREADY_RUNNING.test(said)) {
         note('another runner is already using the data folder, so this one stops');
+        forget();
         process.exit(0);
       }
       wait = nextWait(wait, Date.now() - startedAt, waits);

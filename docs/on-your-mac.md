@@ -457,15 +457,27 @@ said otherwise.
   `--stop` ends the task but leaves it registered; `--start` runs it if it is
   registered and not already running; `--installed` says whether it is. `--stop`
   (and `--uninstall`, before it removes the task) then waits up to 10 seconds
-  for Task Scheduler to say the task has stopped, and reads
-  `run\runner.pid` in the data folder. If the process it names is still
-  running, started at the time recorded there, and running from the same
-  `node.exe` the script itself is running on, it ends that process and the
-  ones it started (`taskkill /PID <pid> /T /F`) and prints one line saying so;
-  a runner from some other `node.exe`, or a process whose start time or program
-  it can't read, is left running and reported, and the exit code is 1. To read
-  those it runs `powershell.exe` (`Get-Process`) for that one process id.
-  Nothing is ever ended by name. The runner is also started with a pipe for its
+  for Task Scheduler to say the task has stopped, and reads two small files:
+  `runner-supervisor.pid` beside the supervisor's log, which `windows-run.mjs`
+  writes with its own process id and start time, and `run\runner.pid` in the
+  data folder. For each, if the process it names is still running, started at
+  the time recorded there, and running from the same `node.exe` the script
+  itself is running on, it ends that process and the ones it started (`taskkill
+  /PID <pid> /T /F`) and prints one line saying so. The supervisor comes first,
+  as it would otherwise start the runner again a few seconds after the runner
+  was ended. A process from some other `node.exe`, or one that is the process
+  recorded but whose program can't be read, is left running and reported, and
+  the exit code is 1. A file left behind by a process that was ended hard,
+  whose number some other program has now, is not reported at all: its start
+  time is read for any process (from `Get-Process`, or from the system's
+  process table, WMI, which can be read for a service or an elevated program
+  too) and found not to be the one recorded. To read those it runs
+  `powershell.exe` for that one process id. Nothing is ever ended by name. The
+  exit code is 1 as well if the task is still running after the 10 seconds, or
+  if the runner's files could not be loaded to look. The installers and the
+  desktop app's quit ignore the exit code; `scripts/setup-sync.mjs` reads it,
+  and when it is 1 does not restart the runner and says so. The runner is also
+  started with a pipe for its
   standard input that `windows-run.mjs` holds open and a variable
   (`THREADBEAR_RUNNER_WATCH_STDIN`) that makes it stop when the pipe closes,
   which is what happens when the supervisor ends; the runner removes the
@@ -476,7 +488,9 @@ said otherwise.
   layout inside it), the runner's log is
   `%LOCALAPPDATA%\Threadbear\Logs\threadbear-runner.log`, and the supervisor's
   is `runner-supervisor.log` beside it, with `runner-supervisor.log.1` once it
-  has passed 2 MB. `%APPDATA%` is the roaming folder: on a PC with a roaming
+  has passed 2 MB and `runner-supervisor.pid` (its process id and start time, a
+  line of JSON, removed when it stops itself because another runner has the
+  folder). `%APPDATA%` is the roaming folder: on a PC with a roaming
   profile or folder redirection it may be copied to a server, and the runner's
   token and secrets are in it. NTFS gives these files the profile's own
   permissions, so the 0600 and 0700 modes are not set; when `THREADBEAR_HOME`

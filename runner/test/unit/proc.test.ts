@@ -206,6 +206,31 @@ test('processImage gives the start time and full program path of a process, with
   assert.equal(processImage(child.pid!), null, 'a process that has exited has no image');
 });
 
+test('processImage still gives a start time for a process Get-Process cannot read (System, pid 4), from the system\'s own process table, so a reused pid can be told from the runner', READS_START_TIMES, () => {
+  // Get-Process gives no StartTime for System, as for a service or an elevated program
+  // from a normal session, so this used to be null: "could not tell", with nothing of ours running.
+  const image = processImage(4);
+  assert.ok(image, 'a start time was found another way');
+  assert.match(image.lstart, /^\d+$/);
+  assert.equal(typeof image.path, 'string', 'the program may be unreadable, which is "" and no answer');
+  assert.ok(BigInt(image.lstart) < BigInt(ownStartTime().slice(1)), 'the system started before this test did');
+  assert.ok(image.slack && image.slack > 0n, 'and it is said to be to the microsecond only');
+  // A process Get-Process reads in full is exact.
+  assert.equal(processImage(process.pid)?.slack ?? 0n, 0n);
+});
+
+test('a start time read to the microsecond matches the exact one it came from, and nothing that is further apart', () => {
+  const exact = '134388297558306157';
+  const coarse = '134388297558306150'; // what the process table gives for the same process: cut to the microsecond
+  assert.equal(sameStartTime(exact, coarse), false, 'exactly, they differ');
+  assert.equal(sameStartTime(exact, coarse, 10_000n), true, 'to the slack given, they are one process');
+  assert.equal(sameStartTime(coarse, exact, 10_000n), true);
+  assert.equal(sameStartTime(exact, String(BigInt(coarse) + 20_000n), 10_000n), false, 'a process a few milliseconds off is another');
+  assert.equal(sameStartTime(exact, String(BigInt(coarse) - 36_000_000_000n), 10_000n), false, 'an hour off certainly is');
+  assert.equal(sameStartTime('~12abc', coarse, 10_000n), false);
+  assert.equal(sameStartTime('', coarse, 10_000n), false);
+});
+
 test('pidExists says whether a process is there without touching it', () => {
   assert.equal(pidExists(process.pid), true);
   const gone = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });

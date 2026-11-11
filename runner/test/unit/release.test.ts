@@ -437,3 +437,21 @@ test('a runner on Windows stops when the pipe from its supervisor ends, and one 
     await Promise.all([watched, byHand, noInput].map((c) => c.exited));
   }
 });
+
+// main() wires live services, so it is not run here: its source is read, as default-mode.test.ts
+// does, so that taking either call out (which would leave the pipe doing nothing, with every other
+// test still green) or moving the first one fails.
+test('main.ts takes the supervisor pipe before it reads its config, and stops the runner when the pipe ends', () => {
+  const src = fs.readFileSync(path.join(RUNNER_DIR, 'src', 'main.ts'), 'utf8');
+  const start = src.indexOf('async function main()');
+  assert.ok(start > 0, 'main() is where it was looked for');
+  const main = src.slice(start);
+  const take = main.indexOf('takeSupervisorPipe()');
+  assert.ok(take > 0, 'main() takes the pipe');
+  assert.ok(take < main.indexOf('loadConfig()'), 'before loadConfig, and so before anything can start a thread that would inherit the variable');
+  assert.match(main, /const watchSupervisorPipe = takeSupervisorPipe\(\);/);
+  const watch = main.indexOf('watchSupervisorPipe?.(');
+  assert.ok(watch > 0, 'main() watches the pipe');
+  assert.ok(watch > main.indexOf('const stop = '), 'it is wired once stop exists');
+  assert.match(main.slice(watch), /^watchSupervisorPipe\?\.\(\(\) => void stop\('supervisor gone'\)\);/, 'and stops the runner, as for a supervisor that has gone');
+});
