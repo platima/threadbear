@@ -17,18 +17,23 @@
 ; as the MSI does.
 ;
 ; An upgrade over a copy that is still running first asks the app to quit and
-; ends the runner's task (as the user who started Setup, whose they are), then
-; waits (up to 20 seconds) until node\node.exe and Threadbear.exe can be written
-; to and nothing is running from the parts of the install it replaces. If
-; something still holds them, the setup log says what and the person is asked
-; whether to end it. A very silent install cannot be asked, and ends nothing
-; unless it was run with /ENDRUNNING=1: what is left may be the person's own (a
-; runner started in a terminal, a dev server on Threadbear's Node). If anything
-; still holds the folder after that, Setup stops in PrepareToInstall, before
-; [InstallDelete] has removed a file: exit code 7 when silent, the old install's
-; files untouched, and the runner started again. release-folder.ps1 does the
-; looking and the ending (see PrepareToInstall below). With no PowerShell it
-; carries on as it always did.
+; ends the runner's task (as the user who started Setup, whose they are, and never
+; by running a Threadbear.exe that a standard user could have changed with
+; administrator rights: see MayRunCopy), then waits (up to 20 seconds) until
+; node\node.exe and Threadbear.exe can be written to and nothing is running from
+; the parts of the install it replaces. If something still holds them, the setup
+; log says what and the person is asked whether to end it. A very silent install
+; cannot be asked, and ends nothing unless it was run with /ENDRUNNING=1: what is
+; left may be the person's own (a runner started in a terminal, a dev server on
+; Threadbear's Node). If anything still holds the folder after that, Setup stops
+; in PrepareToInstall, before [InstallDelete] has removed a file: exit code 7 when
+; silent, the old install's files untouched, and the runner started again.
+; release-folder.ps1 does the looking and the ending (see PrepareToInstall below).
+; With no PowerShell it carries on as it always did.
+;
+; Setup does not install into a folder that other programs share (Program Files
+; itself, a drive root, a profile...): [InstallDelete] would clear the node,
+; runner, desktop and docs folders in it, and the helper ends nothing in one.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -205,9 +210,23 @@ const
   // have been asked to stop, and how long again after ending what was left.
   WaitSeconds = 20;
   AfterEndSeconds = 10;
+  // Folders that hold other programs' files (see IsSharedFolder). These names are
+  // shared wherever they are, and ProfileShared are the folders in a profile that
+  // are, whose ever it is. Each between bars. Keep in step with $script:SharedNames
+  // and $script:ProfileShared in release-folder.ps1 (a test checks it).
+  SharedNames = '|Program Files|Program Files (x86)|Program Files (Arm)|Common Files|Windows|WindowsApps|ProgramData|Users|';
+  ProfileShared = '|Desktop|Documents|Downloads|AppData|';
 
 var
   HelperExtracted: Boolean;
+  // The SID of the user who started Setup, when it is known and may not be the
+  // account Setup runs as; the helper treats that user's programs as the ones it
+  // may end. '' is whoever runs the helper.
+  OwnerSid: String;
+  // Whether Setup has asked a copy to quit or its runner to stop, or ended
+  // anything, so that a refusal can say the app and the runner were stopped (and
+  // not say so when nothing was asked of them).
+  CopiesAsked: Boolean;
 
 // Dir, when it holds Threadbear.exe, without a trailing backslash; else ''.
 function FolderWithApp(const Dir: String): String;
@@ -254,6 +273,49 @@ begin
     Result := FolderWithApp(Value);
 end;
 
+// True when the folder Dir is the one that a record in the machine's registry
+// names as Threadbear's: the App Paths entry, or Setup's own uninstall entry, in
+// either view. Those are written by an administrator, and the file at the path is
+// the one an administrator installed.
+function MachineRecord(const Dir: String): Boolean;
+var
+  Value: String;
+begin
+  Result := False;
+  if Dir = '' then Exit;
+  Value := '';
+  if RegQueryStringValue(HKLM64, AppPathsKey, '', Value) then
+    if SameText(RemoveBackslash(ExtractFileDir(Value)), RemoveBackslash(Dir)) then Result := True;
+  if RegQueryStringValue(HKLM32, AppPathsKey, '', Value) then
+    if SameText(RemoveBackslash(ExtractFileDir(Value)), RemoveBackslash(Dir)) then Result := True;
+  if RegQueryStringValue(HKLM64, InnoUninstallKey, 'Inno Setup: App Path', Value) then
+    if SameText(RemoveBackslash(Value), RemoveBackslash(Dir)) then Result := True;
+  if RegQueryStringValue(HKLM32, InnoUninstallKey, 'Inno Setup: App Path', Value) then
+    if SameText(RemoveBackslash(Value), RemoveBackslash(Dir)) then Result := True;
+end;
+
+// Whether Setup may run the Threadbear.exe in Dir. Not elevated, any copy: it is
+// the person's own account whichever way it is run. Elevated, only a copy that
+// the machine's records name (MachineRecord). One found only through the current
+// user's registry, or only because it sits in the folder being installed to, is a
+// file that a standard user could have put there, and running it with an
+// administrator's rights hands them those. ExecAsOriginalUser does not make it
+// safe: when Setup was started with "Run as administrator" there is no unelevated
+// copy of Setup to ask, and it runs the program elevated, as Exec does. So that
+// copy is not asked to quit or its runner to stop; the helper finds what is
+// running by looking at the process table, and ends it only after a yes.
+// The uninstaller (not AsOriginalUser) runs the copy it is removing as itself, as
+// it always did.
+function MayRunCopy(const Dir: String; const AsOriginalUser: Boolean): Boolean;
+begin
+  Result := True;
+  if not AsOriginalUser then Exit;
+  if not IsAdmin then Exit;
+  Result := MachineRecord(Dir);
+  if not Result then
+    Log('release-folder: ' + Dir + '\{#AppExe} is not run: Setup is elevated, and no record that only an administrator can write names that folder, so it could be a program a standard user put there and it could not be run unelevated for certain. What is running from it is dealt with from the process list instead.');
+end;
+
 // Runs a program and says in the log how it ended. What it was asked to do is
 // not checked here (neither of these says anything of use); the folder is.
 //
@@ -262,7 +324,8 @@ end;
 // administrator's name, and the runner's task is named for, and belongs to, the
 // first of them: stopped as the administrator it finds no task. It is the same
 // as Exec when Setup is not elevated, and falls back to Exec if it cannot be
-// done. The uninstaller does not use it.
+// done, which RunCopy only lets happen for a copy that may be run as Setup
+// (MayRunCopy). The uninstaller does not use it.
 procedure RunAndLog(const Exe, Params, WorkDir: String; const AsOriginalUser: Boolean);
 var
   Code: Integer;
@@ -283,19 +346,32 @@ begin
     Log(Exe + ' ' + Params + ' could not be run: ' + SysErrorMessage(Code) + ' (' + IntToStr(Code) + ')');
 end;
 
+// Runs the Threadbear.exe in Dir, if there is one and Setup may (MayRunCopy), and
+// says whether it did. The only way the install runs a copy: so that a copy found
+// through the current user's registry is never run elevated, by this or by the
+// fall back to Exec. A copy that was run has been asked something, which the
+// message of a refusal says (CopiesAsked).
+function RunCopy(const Dir, Params: String; const AsOriginalUser: Boolean): Boolean;
+begin
+  Result := False;
+  if Dir = '' then Exit;
+  if not FileExists(Dir + '\{#AppExe}') then Exit;
+  if not MayRunCopy(Dir, AsOriginalUser) then Exit;
+  RunAndLog(Dir + '\{#AppExe}', Params, Dir, AsOriginalUser);
+  CopiesAsked := True;
+  Result := True;
+end;
+
 // Asks the copy in Dir to quit and its runner to stop. With Settle, gives both a
 // moment to let go of their files (the uninstaller, which has no helper, does
 // that; an install waits on the files themselves instead). Does nothing when
 // there is no copy to ask.
 procedure StopCopyIn(const Dir: String; const Settle, AsOriginalUser: Boolean);
-var
-  Exe: String;
 begin
   if Dir = '' then Exit;
-  Exe := Dir + '\{#AppExe}';
-  if not FileExists(Exe) then Exit;
-  RunAndLog(Exe, '--quit', Dir, AsOriginalUser);
-  RunAndLog(Exe, '--runner --stop', Dir, AsOriginalUser);
+  if not FileExists(Dir + '\{#AppExe}') then Exit;
+  RunCopy(Dir, '--quit', AsOriginalUser);
+  RunCopy(Dir, '--runner --stop', AsOriginalUser);
   if Settle then Sleep(1500);
 end;
 
@@ -306,12 +382,8 @@ end;
 // is not restarted. So this comes before anything is ended by number, or the
 // supervisor could come back while the files are being replaced.
 procedure StopRunnerIn(const Dir: String);
-var
-  Exe: String;
 begin
-  Exe := Dir + '\{#AppExe}';
-  if FileExists(Exe) then
-    RunAndLog(Exe, '--runner --stop', Dir, True);
+  RunCopy(Dir, '--runner --stop', True);
 end;
 
 // Starts the runner's task again when Setup stops without installing. The old
@@ -319,15 +391,115 @@ end;
 // and nothing else starts the runner: the [Run] entry that does it only runs
 // after an install that finishes. Does nothing when no task is registered (the
 // command says so and exits). The app is not opened again; that is for the
-// person to do.
-procedure StartRunnerAgain(const Previous, Dir: String);
+// person to do. Says whether it was asked: not for a copy that Setup may not run
+// (MayRunCopy), which was not stopped either.
+function StartRunnerAgain(const Previous, Dir: String): Boolean;
 var
   Folder: String;
 begin
+  Result := False;
   Folder := FolderWithApp(Previous);
   if Folder = '' then Folder := FolderWithApp(Dir);
   if Folder = '' then Exit;
-  RunAndLog(Folder + '\{#AppExe}', '--runner --start', Folder, True);
+  Result := RunCopy(Folder, '--runner --start', True);
+end;
+
+// ------------------------------------------------------------ shared folders
+
+// What the constant (like '{commonpf64}') comes to, or '' where this Windows has
+// none.
+function ConstantOrEmpty(const Constant: String): String;
+begin
+  try
+    Result := ExpandConstant(Constant);
+  except
+    Result := '';
+  end;
+end;
+
+// Adds a folder to a list of folders, each ending in a bar, to be looked up with
+// IsListed. Nothing for an empty one.
+procedure AddShared(var List: String; const Folder: String);
+begin
+  if Folder <> '' then
+    List := List + Lowercase(RemoveBackslash(ExpandFileName(Folder))) + '|';
+end;
+
+// True when Name is between the bars of List (SharedNames, ProfileShared), whatever
+// the case.
+function InNames(const List, Name: String): Boolean;
+begin
+  Result := Pos('|' + Lowercase(Name) + '|', Lowercase(List)) > 0;
+end;
+
+// True for a folder that other programs share, which Setup will not install into:
+// a drive root or share, Program Files (each of them), Windows, ProgramData, a
+// profile and its Desktop, Documents and Downloads, the folder the profiles are
+// in, the per-user Programs folder, and any folder named like one of those
+// wherever it is (D:\Program Files). [InstallDelete] clears the node, runner,
+// desktop and docs folders in the folder it is given, which in one of these
+// belong to other programs, and the helper ends nothing in one. The helper has the
+// same rule (Test-SharedFolder in release-folder.ps1), as it may be run by hand.
+function IsSharedFolder(const Dir: String): Boolean;
+var
+  Folder, Bases, Profile, Users, Parent: String;
+begin
+  Result := True;
+  Folder := RemoveBackslash(ExpandFileName(Dir));
+  // C:\ (as C:) or \\server\share: everything on it would be in the folder.
+  if SameText(Folder, ExtractFileDrive(Folder)) then Exit;
+  if InNames(SharedNames, ExtractFileName(Folder)) then Exit;
+
+  Bases := '|';
+  AddShared(Bases, GetEnv('ProgramFiles'));
+  AddShared(Bases, GetEnv('ProgramFiles(x86)'));
+  AddShared(Bases, GetEnv('ProgramW6432'));
+  AddShared(Bases, GetEnv('ProgramFiles(Arm)'));
+  AddShared(Bases, GetEnv('CommonProgramFiles'));
+  AddShared(Bases, GetEnv('CommonProgramFiles(x86)'));
+  AddShared(Bases, GetEnv('CommonProgramW6432'));
+  AddShared(Bases, GetEnv('SystemRoot'));
+  AddShared(Bases, GetEnv('windir'));
+  AddShared(Bases, GetEnv('ProgramData'));
+  AddShared(Bases, GetEnv('ALLUSERSPROFILE'));
+  AddShared(Bases, GetEnv('PUBLIC'));
+  AddShared(Bases, GetEnv('LOCALAPPDATA'));
+  AddShared(Bases, GetEnv('APPDATA'));
+  AddShared(Bases, ConstantOrEmpty('{autopf}'));
+  AddShared(Bases, ConstantOrEmpty('{commonpf}'));
+  AddShared(Bases, ConstantOrEmpty('{commonpf32}'));
+  AddShared(Bases, ConstantOrEmpty('{commonpf64}'));
+  AddShared(Bases, ConstantOrEmpty('{win}'));
+  AddShared(Bases, ConstantOrEmpty('{commonappdata}'));
+  AddShared(Bases, ConstantOrEmpty('{commondesktop}'));
+  AddShared(Bases, ConstantOrEmpty('{commondocs}'));
+  AddShared(Bases, ConstantOrEmpty('{userdesktop}'));
+  AddShared(Bases, ConstantOrEmpty('{userdocs}'));
+  AddShared(Bases, ConstantOrEmpty('{localappdata}\Programs'));
+  AddShared(Bases, ConstantOrEmpty('{commonpf}\WindowsApps'));
+  Profile := GetEnv('USERPROFILE');
+  if Profile <> '' then
+  begin
+    AddShared(Bases, Profile);
+    AddShared(Bases, Profile + '\Downloads');
+    AddShared(Bases, ExtractFileDir(RemoveBackslash(ExpandFileName(Profile))));
+  end;
+  if Pos('|' + Lowercase(Folder) + '|', Bases) > 0 then Exit;
+
+  // A profile in the folder that profiles are in, anyone's, and its Desktop,
+  // Documents, Downloads and AppData; and AppData's Local, LocalLow and Roaming.
+  // Not when profiles sit in a drive root, where it would be every folder on it.
+  Users := '';
+  if Profile <> '' then Users := ExtractFileDir(RemoveBackslash(ExpandFileName(Profile)));
+  if (Users <> '') and not SameText(Users, ExtractFileDrive(Users)) then
+  begin
+    Parent := ExtractFileDir(Folder);
+    if SameText(Parent, Users) then Exit;
+    if SameText(ExtractFileDir(Parent), Users) and InNames(ProfileShared, ExtractFileName(Folder)) then Exit;
+    if SameText(ExtractFileDir(ExtractFileDir(Parent)), Users) and SameText(ExtractFileName(Parent), 'AppData') and
+       (SameText(ExtractFileName(Folder), 'Local') or SameText(ExtractFileName(Folder), 'LocalLow') or SameText(ExtractFileName(Folder), 'Roaming')) then Exit;
+  end;
+  Result := False;
 end;
 
 // ------------------------------------------------------------------ the helper
@@ -343,15 +515,18 @@ begin
   if not FileExists(Result) then Result := '';
 end;
 
-// Runs the helper with a verb (Wait, End) for Dir and loads its report. False
-// when it could not be run or left no report: PowerShell missing or stopped by
-// policy or AppLocker, the script not unpacked, anything at all. Setup carries
-// on without the helper then; it never fails an install.
+// Runs the helper with a verb (Wait, End, Owner) for Dir and loads its report.
+// False when it could not be run or left no report: PowerShell missing or stopped
+// by policy or AppLocker, the script not unpacked, anything at all. Setup carries
+// on without the helper then; it never fails an install. Tells it who started
+// Setup (OwnerSid) when that is known, for every verb but the one that asks.
 function RunHelper(const Verb, Dir, Extra: String; var Report: TArrayOfString): Boolean;
 var
-  PowerShell, Script, ReportFile: String;
+  PowerShell, Script, ReportFile, WhoArg: String;
   Code: Integer;
 begin
+  WhoArg := '';
+  if (OwnerSid <> '') and (Verb <> 'Owner') then WhoArg := ' -OwnerSid "' + OwnerSid + '"';
   Result := False;
   SetArrayLength(Report, 0);
   PowerShell := PowerShellExe();
@@ -375,7 +550,7 @@ begin
   DeleteFile(ReportFile);
   if not Exec(PowerShell,
        '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + Script + '" -Action ' + Verb +
-       ' -Folder "' + RemoveBackslashUnlessRoot(Dir) + '" -OutFile "' + ReportFile + '"' + Extra,
+       ' -Folder "' + RemoveBackslashUnlessRoot(Dir) + '" -OutFile "' + ReportFile + '"' + WhoArg + Extra,
        ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, Code) then
   begin
     Log('release-folder: PowerShell could not be run: ' + SysErrorMessage(Code) + ' (' + IntToStr(Code) + ')');
@@ -444,6 +619,8 @@ begin
     Result := 'it is what Setup was started from'
   else if Verdict = 'keep:start-time-unreadable' then
     Result := 'Windows would not say when it started'
+  else if Verdict = 'keep:not-an-install' then
+    Result := 'there is no {#AppExe} in that folder, so it is not clearly a {#AppName} install'
   else
     Result := 'it is not clearly part of {#AppName}';
 end;
@@ -587,6 +764,50 @@ begin
     mbConfirmation, MB_YESNO, IDNO) = IDYES;
 end;
 
+// The SID of the user who started Setup, or '' when that is the account Setup
+// runs as, which is what the helper takes when it is not told. It matters when a
+// standard user chose "all users" and typed an administrator's name: Setup (and
+// so the helper) runs as the administrator, and what the person left running is
+// theirs, so every program of theirs would be "another user's" and none could be
+// ended. ExecAsOriginalUser starts a program as the user who started Setup, which
+// is the account the runner's task belongs to; a program it starts with a marker
+// in its command line is found by the helper in the process table (the Owner
+// action), and its owner is that user. (A file written by that program would need a
+// folder both accounts can write to; Setup's temporary folder is the
+// administrator's own.) The program stops itself after a while. If it cannot be
+// started, or is not found, nothing is known and Setup goes on as before: only
+// what the account Setup runs as owns can be ended.
+function InitiatingUserSid(): String;
+var
+  PowerShell, Token: String;
+  Code: Integer;
+  Report: TArrayOfString;
+begin
+  Result := '';
+  // Not elevated: the account Setup runs as is the one that started it.
+  if not IsAdmin then Exit;
+  PowerShell := PowerShellExe();
+  if PowerShell = '' then Exit;
+  // Setup's temporary folder has a name of its own (is-XXXXX.tmp), so no other Setup's marker is this one.
+  Token := 'tb-owner-' + ExtractFileName(RemoveBackslash(ExpandConstant('{tmp}')));
+  if not ExecAsOriginalUser(PowerShell,
+       '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 20 # ' + Token + '"',
+       ExpandConstant('{sys}'), SW_HIDE, ewNoWait, Code) then
+  begin
+    Log('release-folder: it could not be started as the user who started Setup (' + SysErrorMessage(Code) + '), so what is ended is what ' + GetUserNameString + ' owns');
+    Exit;
+  end;
+  if RunHelper('Owner', ExpandConstant('{tmp}'), ' -Marker "' + Token + '" -Seconds 8', Report) then
+  begin
+    LogReport(Report);
+    Result := ReportValue(Report, 'OWNER');
+  end;
+  if Result = '' then
+    Log('release-folder: the user who started Setup could not be found out, so what is ended is what ' + GetUserNameString + ' owns')
+  else
+    Log('release-folder: Setup was started by ' + Result);
+end;
+
 // Waits for the files this setup replaces to be free. Returns '' when they are
 // (or when that could not be found out: Setup then does what it always did,
 // which is to give the app a moment and go on). Returns a message when they are
@@ -600,16 +821,13 @@ var
 begin
   Result := '';
 
-  // A fresh install has nothing to hold. A drive root is left to Setup: the
-  // helper will not work on one, as every program on the drive is inside it.
-  if not (FileExists(Dir + '\node\node.exe') or FileExists(Dir + '\{#AppExe}')) then Exit;
-  if Length(Dir) <= 3 then
-  begin
-    Log('release-folder: ' + Dir + ' is a drive root, so Setup carries on without the helper');
-    Sleep(1500);
-    Exit;
-  end;
+  // A fresh install has nothing to hold: a folder that is not there. One that is
+  // there is looked at whatever is in it (a partly installed copy may have no
+  // node.exe or Threadbear.exe left and still have a program running from its
+  // desktop folder). A drive root and the like were refused before this.
+  if not DirExists(Dir) then Exit;
 
+  OwnerSid := InitiatingUserSid();
   Condition := '';
   if RunHelper('Wait', Dir, ' -Seconds ' + IntToStr(WaitSeconds), Report) then
   begin
@@ -633,6 +851,7 @@ begin
       Log('release-folder: ending ' + Pairs);
       // Through Task Scheduler once more first (see StopRunnerIn), then by number.
       StopRunnerIn(Dir);
+      CopiesAsked := True;
       if RunHelper('End', Dir, ' -Expect "' + Pairs + '"', Ended) then LogReport(Ended);
       if RunHelper('Wait', Dir, ' -Seconds ' + IntToStr(AfterEndSeconds), After) then
       begin
@@ -779,12 +998,22 @@ end;
 // installed to (it may not be on record: a zip, or the other registry hive), both
 // as the user who started Setup, then the files that copy would replace are
 // waited for (FreeTheFolder). A refusal starts the runner again and says that
-// the app and the runner were stopped.
+// the app and the runner were stopped, when they were (a copy that Setup may not
+// run is not asked to do either: MayRunCopy). A folder that other programs share
+// is refused first of all, before anything is asked of anything.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Dir, Previous: String;
+  Restarted: Boolean;
 begin
   Dir := ExpandConstant('{app}');
+  if IsSharedFolder(Dir) then
+  begin
+    Result := 'Setup will not install into ' + Dir + ', because other programs share that folder. Installing there would clear the node, runner, desktop and docs folders in it, which may belong to another program. Go back and choose a folder of its own, such as ' + ExpandConstant('{autopf}\{#AppName}') + '. Nothing has been changed.';
+    Log('Setup stopped before changing anything: ' + Result);
+    Exit;
+  end;
+  CopiesAsked := False;
   Previous := PreviousInstall();
   Log('Installing to ' + Dir + '; an earlier copy is on record at "' + Previous + '"; Setup is running as ' + GetUserNameString());
   StopCopyIn(Previous, False, True);
@@ -793,10 +1022,18 @@ begin
   Result := FreeTheFolder(Dir);
   if Result <> '' then
   begin
-    StartRunnerAgain(Previous, Dir);
-    Log('Setup asked the runner to start again');
-    Result := Result + #13#10#13#10 +
-      'To make room, Setup asked {#AppName} to close and stopped its runner, so anything either was part way through has ended. Setup has asked the runner to start again. Open {#AppName} from the Start menu to carry on.';
+    if CopiesAsked then
+    begin
+      Restarted := StartRunnerAgain(Previous, Dir);
+      Result := Result + #13#10#13#10 +
+        'To make room, Setup asked {#AppName} to close and stopped its runner, so anything either was part way through has ended.';
+      if Restarted then
+      begin
+        Log('Setup asked the runner to start again');
+        Result := Result + ' Setup has asked the runner to start again.';
+      end;
+      Result := Result + ' Open {#AppName} from the Start menu to carry on.';
+    end;
   end;
 end;
 

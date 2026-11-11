@@ -5,10 +5,12 @@
 //
 // Nothing here touches a real install, the registry, Task Scheduler or any
 // program that is not started by the test. The programs are stand-ins: copies of
-// this Node, put at <tmp>\Threadbear\node\node.exe (the "install"), at
-// <tmp>\Other\node\node.exe and at <tmp>\Threadbear2\node\node.exe (controls
-// that must never be reported or ended), each started here with its handle kept
-// and ended through that handle in a finally. The helper is run with Windows
+// this Node, put at <tmp>\Threadbear\node\node.exe (the "install", which has a
+// Threadbear.exe beside it that is only a file), at <tmp>\Other\node\node.exe and
+// at <tmp>\Threadbear2\node\node.exe (controls that must never be reported or
+// ended, and that are not installs), and at <tmp>\Program Files\node\node.exe (a
+// temp folder that is only named like a shared one), each started here with its
+// handle kept and ended through that handle in a finally. The helper is run with Windows
 // PowerShell 5.1, as the setup runs it. The setup exe itself is not run: it
 // shares its AppId, its registry keys and its Task Scheduler task with a real
 // install, so its end-to-end run is a job in installers.yml, on a runner that is
@@ -85,6 +87,16 @@ test('the setup keeps its own fallback: it never fails because the helper could 
   assert.ok(!/taskkill|Stop-Process|\/IM\b/i.test(code), 'the setup itself ends nothing: the helper does, by process number');
 });
 
+test('the helper ends a program through a handle it opened and kept, never by looking its number up again', () => {
+  // taskkill and Stop-Process both take a number and find the program afresh, by when a number may be another program's.
+  assert.ok(!/taskkill|Stop-Process|\/IM\b|Start-Process/i.test(helperText.replace(/^\s*#.*$/gm, '')), 'no command that takes a number');
+  assert.match(helperText, /GetProcessById/);
+  assert.match(helperText, /\$null = \$proc\.Handle/, 'the handle is opened at once');
+  assert.match(helperText, /\$proc\.Kill\(\)/, 'and the program is ended through it');
+  assert.ok(helperText.indexOf('$proc.Handle') < helperText.indexOf('Get-CimInstance -ClassName Win32_Process -Filter'), 'the handle is open before the program is read again');
+  assert.ok(!/Add-Type/.test(helperText.replace(/^\s*#.*$/gm, '')), 'Add-Type is refused in Constrained Language Mode, where nothing is ended instead');
+});
+
 test('a program is ended only after a yes: from a box that is answered no when boxes are suppressed, or from /ENDRUNNING=1', () => {
   const code = section(issText, 'Code');
   assert.match(pascal(code, 'EndSwitchGiven'), /\{param:ENDRUNNING\|0\}'\) = '1'/, 'the switch that says yes ahead of time');
@@ -114,8 +126,8 @@ test('an install asks the app to quit and ends the runner\'s task as the user wh
   const code = section(issText, 'Code');
   assert.ok(/ExecAsOriginalUser\(/.test(pascal(code, 'RunAndLog')), 'Exec runs as the account Setup was elevated to, whose task name is another');
   const stop = pascal(code, 'StopCopyIn');
-  assert.match(stop, /RunAndLog\(Exe, '--quit', Dir, AsOriginalUser\)/);
-  assert.match(stop, /RunAndLog\(Exe, '--runner --stop', Dir, AsOriginalUser\)/);
+  assert.match(stop, /RunCopy\(Dir, '--quit', AsOriginalUser\)/);
+  assert.match(stop, /RunCopy\(Dir, '--runner --stop', AsOriginalUser\)/);
   const prepare = pascal(code, 'PrepareToInstall');
   assert.match(prepare, /StopCopyIn\(Previous, False, True\)/);
   assert.match(prepare, /StopCopyIn\(Dir, False, True\)/);
@@ -128,7 +140,33 @@ test('what is left is first asked of Task Scheduler again, so that ending it by 
   const again = free.indexOf('StopRunnerIn(Dir)');
   const end = free.indexOf("RunHelper('End'");
   assert.ok(again > 0 && end > again, 'the task is stopped through the scheduler before anything is ended by number');
-  assert.match(pascal(section(issText, 'Code'), 'StopRunnerIn'), /RunAndLog\(Exe, '--runner --stop', Dir, True\)/);
+  assert.match(pascal(section(issText, 'Code'), 'StopRunnerIn'), /RunCopy\(Dir, '--runner --stop', True\)/);
+});
+
+test('an elevated Setup runs only a copy that an administrator recorded: one found through HKCU, or only by its folder, is never run as Setup', () => {
+  const code = section(issText, 'Code');
+  // Every launch of a copy's Threadbear.exe by the install goes through RunCopy, which asks first.
+  const calls = [...code.matchAll(/\bRunAndLog\(/g)].length;
+  assert.equal(calls, 2, 'RunAndLog is defined and called once: from RunCopy');
+  const run = pascal(code, 'RunCopy');
+  assert.match(run, /RunAndLog\(/);
+  assert.ok(run.indexOf('MayRunCopy') >= 0 && run.indexOf('MayRunCopy') < run.indexOf('RunAndLog('), 'and only after MayRunCopy says yes');
+  assert.match(run, /Exit;/, 'a no is not run another way');
+  for (const [name, call] of [
+    ['StopCopyIn', "RunCopy(Dir, '--quit', AsOriginalUser)"],
+    ['StopCopyIn', "RunCopy(Dir, '--runner --stop', AsOriginalUser)"],
+    ['StopRunnerIn', "RunCopy(Dir, '--runner --stop', True)"],
+    ['StartRunnerAgain', "RunCopy(Folder, '--runner --start', True)"],
+  ] as const) assert.ok(pascal(code, name).includes(call), `${name} runs it through RunCopy`);
+
+  const may = pascal(code, 'MayRunCopy');
+  assert.match(may, /not AsOriginalUser/, 'the uninstaller, which runs the copy it is removing as itself, is as it was');
+  assert.match(may, /not IsAdmin/, 'not elevated: the same unelevated account whichever way it is run');
+  assert.match(may, /MachineRecord\(Dir\)/, 'elevated: only what the machine-wide records name');
+  assert.ok(!/HKCU|HKA\b/.test(may), 'never decided by a record a standard user could have written');
+  const record = pascal(code, 'MachineRecord');
+  assert.ok(/HKLM64/.test(record) && /HKLM32/.test(record) && !/HKCU|HKA\b/.test(record), 'the machine-wide records and no others');
+  assert.match(may, /Log\(/, 'and a copy that is not run is said so in the log, with why');
 });
 
 test('when Setup stops, the runner it ended is started again and the message says the app and the runner were stopped', () => {
@@ -140,6 +178,42 @@ test('when Setup stops, the runner it ended is started again and the message say
   assert.match(pascal(section(issText, 'Code'), 'StartRunnerAgain'), /'--runner --start'/);
 });
 
+test('Setup refuses a folder that other programs share before it asks anything to quit, ends anything or lets [InstallDelete] clear a folder in it', () => {
+  const code = section(issText, 'Code');
+  const prepare = pascal(code, 'PrepareToInstall');
+  const refuse = prepare.indexOf('IsSharedFolder(Dir)');
+  assert.ok(refuse > 0, 'PrepareToInstall asks');
+  assert.ok(refuse < prepare.indexOf('StopCopyIn('), 'before the app is asked to quit or the runner stopped, so there is nothing to put back');
+  assert.ok(refuse < prepare.indexOf('FreeTheFolder('), 'and before anything is waited for or ended');
+  assert.match(prepare.slice(refuse, prepare.indexOf('StopCopyIn(')), /Exit;/, 'it stops there, with a message');
+  // A drive root is one of them too: [InstallDelete] would clear D:\node and D:\docs.
+  assert.match(pascal(code, 'IsSharedFolder'), /ExtractFileDrive\(Folder\)/);
+  // The names that are shared wherever they are (D:\Program Files as much as C:\), the same in both.
+  const setupNames = (/SharedNames = '([^']*)'/.exec(code)?.[1] ?? '').split('|').filter(Boolean).map((s) => s.toLowerCase()).sort();
+  const helperNames = [...(/\$script:SharedNames = @\((.*)\)\s*$/m.exec(helperText)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]!.toLowerCase()).sort();
+  assert.ok(helperNames.length >= 7, 'the helper has a list');
+  assert.deepEqual(setupNames, helperNames, 'the setup and the helper agree on which names are shared');
+  const profileNames = (/ProfileShared = '([^']*)'/.exec(code)?.[1] ?? '').split('|').filter(Boolean).map((s) => s.toLowerCase()).sort();
+  const helperProfile = [...(/\$script:ProfileShared = @\((.*)\)\s*$/m.exec(helperText)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]!.toLowerCase()).sort();
+  assert.deepEqual(profileNames, helperProfile, 'and on the folders in a profile');
+});
+
+test('the helper is told who started Setup, and Setup finds that out through the original user\'s own context', () => {
+  const code = section(issText, 'Code');
+  assert.match(pascal(code, 'RunHelper'), /-OwnerSid/, 'it is passed to the helper for listing and for ending');
+  const who = pascal(code, 'InitiatingUserSid');
+  assert.match(who, /IsAdmin/, 'only when elevated: otherwise Setup is that user');
+  assert.match(who, /ExecAsOriginalUser\(/, 'a program started as the original user, which the helper finds by its command line');
+  assert.match(who, /RunHelper\('Owner'/);
+  assert.ok(pascal(code, 'FreeTheFolder').indexOf('InitiatingUserSid()') > 0, 'before the helper looks at the folder');
+});
+
+test('Setup looks at what runs from an existing folder even when node.exe and Threadbear.exe are not there; only a folder that does not exist is skipped', () => {
+  const free = pascal(section(issText, 'Code'), 'FreeTheFolder');
+  assert.match(free, /if not DirExists\(Dir\) then Exit;/);
+  assert.ok(!/FileExists\(Dir \+ '\\node\\node\.exe'\)|FileExists\(Dir \+ '\\\{#AppExe\}'\)/.test(free), 'a partial install with a running desktop\\...\\OpenConsole.exe still reaches the helper');
+});
+
 // ---------------------------------------------------------------- running the helper
 
 const POWERSHELL = 'powershell.exe';
@@ -147,14 +221,20 @@ const root = WINDOWS_ONLY.skip ? '' : tmpDir('tb-folder-');
 const install = path.join(root, 'Threadbear');
 const other = path.join(root, 'Other');
 const lookalike = path.join(root, 'Threadbear2');
+// Only named like a shared folder: the real C:\Program Files is never touched. The helper
+// goes by the name as well as by the path (D:\Program Files is as shared as C:\).
+const shared = path.join(root, 'Program Files');
 const exeIn = (folder: string): string => path.join(folder, 'node', 'node.exe');
+// What marks a folder as a Threadbear install. A file is enough: nothing runs it.
+const shellIn = (folder: string): string => path.join(folder, 'Threadbear.exe');
 
 before(() => {
   if (WINDOWS_ONLY.skip) return;
-  for (const folder of [install, other, lookalike]) {
+  for (const folder of [install, other, lookalike, shared]) {
     fs.mkdirSync(path.dirname(exeIn(folder)), { recursive: true });
     fs.copyFileSync(process.execPath, exeIn(folder));
   }
+  fs.writeFileSync(shellIn(install), 'stands in for the app, which is not run');
 });
 
 const live = new Set<ChildProcess>();
@@ -262,6 +342,22 @@ function procs(lines: string[]): Proc[] {
 const state = (lines: string[]): string | undefined => lines.find((l) => l.startsWith('STATE|'))?.split('|')[1];
 const files = (lines: string[]): string[] => lines.filter((l) => l.startsWith('FILE|'));
 const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+const outcomes = (lines: string[]): string[] => lines.filter((l) => /^(ENDED|SKIPPED|GONE|FAILED)\|/.test(l));
+
+// The SID of the account running the tests, as Windows says it.
+let sidOfMe: string | undefined;
+function mySid(): string {
+  sidOfMe ??= spawnSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value'], { encoding: 'utf8', windowsHide: true }).stdout.trim();
+  assert.match(sidOfMe, /^S-1-\d+(-\d+)+$/);
+  return sidOfMe;
+}
+// When a program started, as a Windows file time: what the helper lists, to within a microsecond.
+function startOf(pid: number | undefined): string {
+  assert.ok(pid, 'the program has a process number');
+  const r = spawnSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`], { encoding: 'utf8', windowsHide: true });
+  assert.match(r.stdout.trim(), /^\d+$/, r.stderr);
+  return r.stdout.trim();
+}
 
 // Evaluates PowerShell with the helper's functions defined (the script dot-sourced with no action) and
 // gives back what it wrote to the pipeline as JSON.
@@ -341,13 +437,92 @@ ConvertTo-Json -InputObject @{ own = @($own.Keys | Sort-Object); loop = @($loop.
   assert.deepEqual(got.loop, [10, 11]);
 });
 
+test('a folder that other programs share is recognised wherever it is, and a folder of its own inside one is not', WINDOWS_ONLY, () => {
+  const got = powershell<Record<string, boolean | string>>(`
+$profileDir = $env:USERPROFILE
+$users = Split-Path -Parent $profileDir
+$x86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+ConvertTo-Json -InputObject ([ordered]@{
+  programFiles = (Test-SharedFolder $env:ProgramFiles)
+  programFilesSlash = (Test-SharedFolder ($env:ProgramFiles + '\\'))
+  programFilesLower = (Test-SharedFolder $env:ProgramFiles.ToLowerInvariant())
+  programFilesX86 = (Test-SharedFolder $x86)
+  windows = (Test-SharedFolder $env:SystemRoot)
+  programData = (Test-SharedFolder $env:ProgramData)
+  windowsApps = (Test-SharedFolder (Join-Path $env:ProgramFiles 'WindowsApps'))
+  otherDrive = (Test-SharedFolder 'D:\\Program Files')
+  otherDriveX86 = (Test-SharedFolder 'E:\\Program Files (x86)')
+  profileRoot = (Test-SharedFolder $profileDir)
+  desktop = (Test-SharedFolder (Join-Path $profileDir 'Desktop'))
+  documents = (Test-SharedFolder (Join-Path $profileDir 'Documents'))
+  downloads = (Test-SharedFolder (Join-Path $profileDir 'Downloads'))
+  usersRoot = (Test-SharedFolder $users)
+  someoneElse = (Test-SharedFolder (Join-Path $users 'Somebody Else'))
+  someoneElseDownloads = (Test-SharedFolder (Join-Path $users 'Somebody Else\\Downloads'))
+  someoneElseAppData = (Test-SharedFolder (Join-Path $users 'Somebody Else\\AppData\\Local'))
+  perUserPrograms = (Test-SharedFolder (Join-Path $env:LOCALAPPDATA 'Programs'))
+  ownInProgramFiles = (Test-SharedFolder (Join-Path $env:ProgramFiles 'Threadbear'))
+  ownInPrograms = (Test-SharedFolder (Join-Path $env:LOCALAPPDATA 'Programs\\Threadbear'))
+  ownOnAnotherDrive = (Test-SharedFolder 'D:\\Apps\\Threadbear')
+  ownInDocuments = (Test-SharedFolder (Join-Path $profileDir 'Documents\\Threadbear'))
+  ownInProfile = (Test-SharedFolder (Join-Path $profileDir 'tools'))
+  refusalRoot = (Get-FolderRefusal 'D:\\')
+  refusalShare = (Get-FolderRefusal '\\\\server\\share')
+  refusalShared = (Get-FolderRefusal $env:ProgramFiles)
+  refusalNone = (Get-FolderRefusal 'D:\\Apps\\Threadbear')
+})`);
+  assert.deepEqual(got, {
+    programFiles: true,
+    programFilesSlash: true,
+    programFilesLower: true,
+    programFilesX86: true,
+    windows: true,
+    programData: true,
+    windowsApps: true,
+    otherDrive: true,
+    otherDriveX86: true,
+    profileRoot: true,
+    desktop: true,
+    documents: true,
+    downloads: true,
+    usersRoot: true,
+    someoneElse: true,
+    someoneElseDownloads: true,
+    someoneElseAppData: true,
+    perUserPrograms: true,
+    ownInProgramFiles: false,
+    ownInPrograms: false,
+    ownOnAnotherDrive: false,
+    ownInDocuments: false,
+    ownInProfile: false,
+    refusalRoot: 'root-folder',
+    refusalShare: 'root-folder',
+    refusalShared: 'shared-folder',
+    refusalNone: '',
+  });
+});
+
+test('a base that Windows names in the environment is shared wherever it points, even one the helper has no name for', WINDOWS_ONLY, () => {
+  const got = powershell<boolean[]>(`
+$env:ProgramData = 'Z:\\Odd Place\\Common Stuff'
+$env:PUBLIC = 'Y:\\Everyone'
+ConvertTo-Json -InputObject @(
+  (Test-SharedFolder 'Z:\\Odd Place\\Common Stuff'),
+  (Test-SharedFolder 'y:\\everyone\\'),
+  (Test-SharedFolder 'Z:\\Odd Place\\Common Stuff\\Threadbear')
+)`);
+  assert.deepEqual(got, [true, true, false]);
+});
+
 test('a program is ended only when it passes every check, and an unreadable start time or owner means leave it', WINDOWS_ONLY, () => {
   const got = powershell<Record<string, string>>(`
 $me = 'S-1-5-21-1-2-3-1000'
-$ctx = @{ Prefix = 'C:\\Apps\\Threadbear\\'; RootFolder = $false; Me = $me; Own = @{ 100 = $true } }
+$ctx = @{ Prefix = 'C:\\Apps\\Threadbear\\'; Refusal = ''; Installed = $true; Me = $me; Own = @{ 100 = $true } }
 function P($id, $path, $start, $owner) { [pscustomobject]@{ Pid = $id; Path = $path; Start = $start; Owner = $owner } }
 $ok = 'C:\\Apps\\Threadbear\\node\\node.exe'
-$rootCtx = @{ Prefix = 'D:\\'; RootFolder = $true; Me = $me; Own = @{} }
+$rootCtx = @{ Prefix = 'D:\\'; Refusal = 'root-folder'; Installed = $false; Me = $me; Own = @{} }
+$sharedCtx = @{ Prefix = 'C:\\Program Files\\'; Refusal = 'shared-folder'; Installed = $true; Me = $me; Own = @{} }
+$bareCtx = @{ Prefix = 'C:\\Apps\\Threadbear\\'; Refusal = ''; Installed = $false; Me = $me; Own = @{} }
 ConvertTo-Json -InputObject ([ordered]@{
   ok = (Get-Verdict (P 200 $ok '134000000000000000' $me) $ctx)
   mixedCase = (Get-Verdict (P 200 'c:\\APPS\\threadbear\\NODE\\node.exe' '1' $me) $ctx)
@@ -360,6 +535,8 @@ ConvertTo-Json -InputObject ([ordered]@{
   otherUser = (Get-Verdict (P 200 $ok '1' 'S-1-5-21-1-2-3-1001') $ctx)
   noOwner = (Get-Verdict (P 200 $ok '1' $null) $ctx)
   root = (Get-Verdict (P 200 'D:\\node\\node.exe' '1' $me) $rootCtx)
+  shared = (Get-Verdict (P 200 'C:\\Program Files\\node\\node.exe' '1' $me) $sharedCtx)
+  notAnInstall = (Get-Verdict (P 200 $ok '1' $me) $bareCtx)
 })`);
   assert.deepEqual(got, {
     ok: 'end',
@@ -373,7 +550,25 @@ ConvertTo-Json -InputObject ([ordered]@{
     otherUser: 'keep:other-owner',
     noOwner: 'keep:other-owner',
     root: 'keep:root-folder',
+    shared: 'keep:shared-folder',
+    notAnInstall: 'keep:not-an-install',
   });
+});
+
+test('two start times are the same program\'s when they agree to the millisecond: the process table keeps microseconds and a handle 100 ns', WINDOWS_ONLY, () => {
+  const got = powershell<boolean[]>(`
+ConvertTo-Json -InputObject @(
+  (Test-SameStart '134000000000000000' '134000000000000000'),
+  (Test-SameStart '134000000000000009' '134000000000000000'),
+  (Test-SameStart '134000000000009999' '134000000000000000'),
+  (Test-SameStart '134000000000010000' '134000000000000000'),
+  (Test-SameStart '134000000010000000' '134000000000000000'),
+  (Test-SameStart '133999999990000000' '134000000000000000'),
+  (Test-SameStart '' '134000000000000000'),
+  (Test-SameStart $null '134000000000000000'),
+  (Test-SameStart '134000000000000000' 'not a number')
+)`);
+  assert.deepEqual(got, [true, true, true, false, false, false, false, false, false]);
 });
 
 // ---------------------------------------------------------------- with stand-ins
@@ -388,7 +583,7 @@ test('a held node.exe is reported with its process number and start time; the co
     assert.equal(state(r.lines), 'held');
     const fileLines = files(r.lines);
     assert.ok(fileLines.some((l) => l.startsWith('FILE|held|') && same(l.slice('FILE|held|'.length), exeIn(install))), `node.exe is held: ${fileLines.join(' ; ')}`);
-    assert.ok(fileLines.some((l) => l.startsWith('FILE|absent|') && l.endsWith('Threadbear.exe')), 'a file that is not there is not a lock');
+    assert.ok(fileLines.some((l) => l.startsWith('FILE|free|') && l.endsWith('Threadbear.exe')), 'a file that nothing has open is not a lock');
 
     const listed = procs(r.lines);
     assert.deepEqual(listed.map((p) => p.pid), [held.pid], 'the one under the folder, and neither control');
@@ -510,10 +705,24 @@ test('End leaves a program whose start time is not the one that was listed: the 
   const held = await standIn(install);
   try {
     const target = procs(helper('List', install).lines)[0]!;
-    const later = (BigInt(target.start) + 1n).toString();
-    const r = helper('End', install, ['-Expect', `${target.pid}:${later},${target.pid}:`]);
-    assert.deepEqual(r.lines.filter((l) => /^(ENDED|SKIPPED|GONE|FAILED)\|/.test(l)), [`SKIPPED|${held.pid}|keep:start-time-changed`]);
+    // A second either way: a number that is reused is another program, which started a good deal further from it than the
+    // millisecond that the table and the handle may differ by. (An empty start is not a pair at all, and is dropped.)
+    const later = (BigInt(target.start) + 10_000_000n).toString();
+    const earlier = (BigInt(target.start) - 10_000_000n).toString();
+    const r = helper('End', install, ['-Expect', `${target.pid}:${later},${target.pid}:${earlier},${target.pid}:`]);
+    assert.deepEqual(outcomes(r.lines), [`SKIPPED|${held.pid}|keep:start-time-changed`, `SKIPPED|${held.pid}|keep:start-time-changed`]);
     assert.ok(isAlive(held));
+    // What a reused number looks like: this number, with the start of the program that had it when it was listed.
+    const earlierProgram = await standIn(other);
+    try {
+      const reused = helper('End', install, ['-Expect', `${held.pid}:${startOf(earlierProgram.pid)}`]);
+      assert.deepEqual(outcomes(reused.lines), [`SKIPPED|${held.pid}|keep:start-time-changed`]);
+      assert.ok(isAlive(held) && isAlive(earlierProgram));
+    } finally {
+      await endStandIn(earlierProgram);
+    }
+    // Told the start the handle itself gives, which differs from the table's by under a microsecond, it is the same program.
+    assert.ok(Math.abs(Number(BigInt(startOf(held.pid)) - BigInt(target.start))) < 10_000, 'the two ways of reading it agree to the millisecond');
   } finally {
     await endStandIn(held);
   }
@@ -588,6 +797,7 @@ const hostImage = path.join(bare, 'desktop', 'node_modules', '@lydell', 'node-pt
 
 test('a program from another part of the install holds the folder, though node.exe and Threadbear.exe can be written to', WITH_PROGRAMS, async () => {
   copyNodeTo(hostImage);
+  fs.writeFileSync(shellIn(bare), 'stands in for the app, which is not run');
   const host = await launch(hostImage, ['-e', STAND_IN]);
   try {
     // The two files are the probe's whole business, and neither is held.
@@ -696,6 +906,181 @@ setTimeout(() => process.exit(0), 150000);
         }
       }
     }
+  }
+});
+
+// ---------------------------------------------------------------- a folder that is shared, or is not an install
+
+test('nothing is ended in a folder that other programs share, whoever owns it and whatever was agreed: it is not even listed', WITH_PROGRAMS, async () => {
+  // A temp folder named like Program Files, with a program in it at node\node.exe as another application's might be.
+  const stranger = await standIn(shared);
+  try {
+    const start = startOf(stranger.pid);
+    const listed = helper('List', shared);
+    assert.deepEqual(procs(listed.lines), [], 'what runs from a shared folder is not listed as in the way');
+    assert.ok(listed.lines.some((l) => /^NOTE\|.*shared/.test(l)), listed.lines.join(' ; '));
+    // Setup's yes (the question, or /ENDRUNNING=1) ends what the list names, and the list names none of it. But if it were asked by number:
+    for (const extra of [[], ['-OwnerSid', mySid()]]) {
+      const r = helper('End', shared, ['-Expect', `${stranger.pid}:${start}`, ...extra]);
+      assert.equal(r.code, 0, r.stderr);
+      assert.deepEqual(outcomes(r.lines), [`SKIPPED|${stranger.pid}|keep:shared-folder`]);
+      assert.ok(isAlive(stranger));
+    }
+    // And it is not waited for as part of an install it is not part of: only the two files can be said to be held.
+    const waited = helper('Wait', shared, ['-Seconds', '1']);
+    assert.deepEqual(procs(waited.lines), []);
+  } finally {
+    await endStandIn(stranger);
+  }
+});
+
+test('a folder with no Threadbear.exe is not an install: what runs from its node folder is listed, and not ended', WITH_PROGRAMS, async () => {
+  const stranger = await standIn(lookalike);
+  try {
+    const listed = procs(helper('List', lookalike).lines);
+    assert.deepEqual(listed.map((p) => [p.pid, p.verdict]), [[stranger.pid, 'keep:not-an-install']]);
+    const r = helper('End', lookalike, ['-Expect', `${stranger.pid}:${listed[0]!.start}`]);
+    assert.deepEqual(outcomes(r.lines), [`SKIPPED|${stranger.pid}|keep:not-an-install`]);
+    assert.ok(isAlive(stranger));
+    // It is still in the way of a replacement, which is what a person is told.
+    assert.equal(helper('Wait', lookalike, ['-Seconds', '1']).code, 11);
+  } finally {
+    await endStandIn(stranger);
+  }
+});
+
+// ---------------------------------------------------------------- who owns it
+
+test('the owner that counts is the one the helper is told, for listing and for ending alike', WITH_PROGRAMS, async () => {
+  const held = await standIn(install);
+  try {
+    const someoneElse = 'S-1-5-21-1111111111-2222222222-3333333333-1000';
+    // Run by this account, its program is another user's when Setup says it was started by someone else.
+    assert.equal(procs(helper('List', install, ['-OwnerSid', someoneElse]).lines)[0]!.verdict, 'keep:other-owner');
+    assert.equal(procs(helper('List', install, ['-OwnerSid', mySid()]).lines)[0]!.verdict, 'end');
+    assert.equal(procs(helper('List', install).lines)[0]!.verdict, 'end', 'with none given it is whoever runs the helper');
+    const start = procs(helper('List', install).lines)[0]!.start;
+    const refused = helper('End', install, ['-Expect', `${held.pid}:${start}`, '-OwnerSid', someoneElse]);
+    assert.deepEqual(outcomes(refused.lines), [`SKIPPED|${held.pid}|keep:other-owner`]);
+    assert.ok(isAlive(held));
+    const ended = helper('End', install, ['-Expect', `${held.pid}:${start}`, '-OwnerSid', mySid()]);
+    assert.deepEqual(outcomes(ended.lines), [`ENDED|${held.pid}`]);
+    assert.ok(await exited(held), 'and the program of the user it was told of is ended');
+  } finally {
+    await endStandIn(held);
+  }
+});
+
+test('an -OwnerSid that is not a SID ends nothing and is reported, so that setup falls back', WITH_PROGRAMS, async () => {
+  const held = await standIn(install);
+  try {
+    const start = procs(helper('List', install).lines)[0]!.start;
+    for (const bad of ['Everyone', 'S-1-5-21-abc', "S-1-5-21-1-2-3-1000' ; exit 0 ; '", 'S-1']) {
+      const r = helper('End', install, ['-Expect', `${held.pid}:${start}`, '-OwnerSid', bad]);
+      assert.equal(r.code, 12, `${bad}: ${r.lines.join(' ; ')}`);
+      assert.equal(state(r.lines), 'unknown');
+      assert.ok(r.lines.some((l) => /^ERROR\|.*OwnerSid/.test(l)), r.lines.join(' ; '));
+      assert.deepEqual(outcomes(r.lines), []);
+    }
+    assert.equal(helper('Wait', install, ['-Seconds', '1', '-OwnerSid', 'Everyone']).code, 12);
+    assert.ok(isAlive(held));
+  } finally {
+    await endStandIn(held);
+  }
+});
+
+test('the Owner action says who runs the one program that carries the marker, and says nothing when it is none or more than one', WITH_PROGRAMS, async () => {
+  const token = `tb-owner-test-${process.pid}-${reports}`;
+  const bystander = await standIn(other, ` // ${token}`);
+  try {
+    const r = helper('Owner', '', ['-Marker', token, '-Seconds', '5']);
+    assert.equal(r.code, 0, `${r.lines.join(' ; ')} ${r.stderr}`);
+    assert.deepEqual(r.lines.filter((l) => l.startsWith('OWNER|')), [`OWNER|${mySid()}`]);
+
+    // Two of them: which is the user's own is not known.
+    const twin = await standIn(lookalike, ` // ${token}`);
+    try {
+      const twice = helper('Owner', '', ['-Marker', token, '-Seconds', '1']);
+      assert.deepEqual(twice.lines.filter((l) => l.startsWith('OWNER|')), []);
+      assert.ok(twice.lines.some((l) => l.startsWith('NOTE|')));
+    } finally {
+      await endStandIn(twin);
+    }
+  } finally {
+    await endStandIn(bystander);
+  }
+  // None: the helper's own command line carries the marker too, and is not counted.
+  const none = helper('Owner', '', ['-Marker', `${token}-nobody`, '-Seconds', '1']);
+  assert.equal(none.code, 0);
+  assert.deepEqual(none.lines.filter((l) => l.startsWith('OWNER|')), []);
+  // A marker too short to mean anything is refused, so it cannot match whatever has a short word in its command line.
+  const short = helper('Owner', '', ['-Marker', 'node', '-Seconds', '1']);
+  assert.equal(short.code, 12);
+  assert.deepEqual(short.lines.filter((l) => l.startsWith('OWNER|')), []);
+});
+
+// ---------------------------------------------------------------- ending through a handle
+
+test('where a process handle cannot be held (Constrained Language Mode) nothing is ended, and the report says why', WITH_PROGRAMS, async () => {
+  const held = await standIn(install);
+  try {
+    const start = startOf(held.pid);
+    const out = path.join(root, 'constrained.txt');
+    fs.rmSync(out, { force: true });
+    const command = `$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; & '${HELPER}' -Action End -Folder '${install}' -OutFile '${out}' -Expect '${held.pid}:${start}'; exit $LASTEXITCODE`;
+    const r = spawnSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 50_000 });
+    const lines = readReport(out);
+    assert.equal(r.status, 12, `${lines.join(' ; ')} ${r.stdout}${r.stderr}`);
+    assert.ok(lines.some((l) => /^ERROR\|.*(language mode|ConstrainedLanguage)/i.test(l)), lines.join(' ; '));
+    assert.deepEqual(outcomes(lines), [], 'it does not fall back to ending it another way');
+    assert.ok(isAlive(held));
+  } finally {
+    await endStandIn(held);
+  }
+});
+
+test('End ends the program it opened and checked, and names a process number that is no longer anything as gone', WITH_PROGRAMS, async () => {
+  const held = await standIn(install);
+  const start = startOf(held.pid);
+  try {
+    const r = helper('End', install, ['-Expect', `${held.pid}:${start}`]);
+    assert.deepEqual(outcomes(r.lines), [`ENDED|${held.pid}`]);
+    assert.ok(await exited(held));
+    // A number that nothing has now: the program that was listed has gone, and nothing else is looked at.
+    const gone = helper('End', install, ['-Expect', `${held.pid}:${start}`]);
+    assert.deepEqual(outcomes(gone.lines), [`GONE|${held.pid}`]);
+  } finally {
+    await endStandIn(held);
+  }
+});
+
+// ---------------------------------------------------------------- what Setup was started from
+
+test('a program that Setup was started from, running from a part setup replaces, still holds the folder: it is not ended, but Wait does not call the folder free', WITH_PROGRAMS, async () => {
+  if (!fs.existsSync(hostImage)) copyNodeTo(hostImage);
+  fs.writeFileSync(shellIn(bare), 'stands in for the app, which is not run');
+  const out = path.join(root, 'ancestor-wait.txt');
+  const script = path.join(root, 'ancestor.cjs');
+  fs.rmSync(out, { force: true });
+  fs.writeFileSync(
+    script,
+    `const { spawnSync } = require('node:child_process');
+const { helper, folder, out } = JSON.parse(process.argv[2]);
+const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', helper, '-Action', 'Wait', '-Folder', folder, '-OutFile', out, '-Seconds', '1'], { windowsHide: true });
+console.log('code ' + r.status);
+`,
+  );
+  // The helper is run by a program that is itself desktop\...\host.exe: setup downloaded into, or started from, the install.
+  const child = await launch(hostImage, [script, JSON.stringify({ helper: HELPER, folder: bare, out })]);
+  try {
+    assert.ok(await exited(child, 50_000), 'the parent finished by itself');
+    const lines = readReport(out);
+    assert.equal(state(lines), 'held', lines.join(' ; '));
+    const mine = procs(lines).filter((p) => p.pid === child.pid);
+    assert.equal(mine.length, 1, 'it is listed');
+    assert.equal(mine[0]!.verdict, 'keep:setup-itself', 'and is not one that is ended');
+  } finally {
+    await endStandIn(child);
   }
 });
 
