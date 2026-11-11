@@ -13,6 +13,7 @@ pub mod navigation;
 pub mod shortcuts;
 pub mod new_thread;
 pub mod open_policy;
+pub mod pools;
 pub mod remote;
 pub mod runner_settings;
 pub mod schedules;

@@ -12,9 +12,15 @@ struct ProjectsList: View {
     @State private var showArchived = false
     /// How many archived threads each unfolded project shows.
     @State private var archivedShown: [String: Int] = [:]
+    /// Kept built while another view's up (SidebarView), and then drawn
+    /// from the sections as they were when it was hidden, so a thread
+    /// changing in the inbox doesn't build them again for a list nobody
+    /// sees. Shown again, it reads them afresh.
+    var shown = true
+    @State private var frozen: ProjectSections?
 
     var body: some View {
-        let built = app.projectSections
+        let built = !shown ? frozen ?? app.projectSections : app.projectSections
         let archived = app.projects.filter(\.archived)
         // With the projectDecisions experiment on, each project is one row,
         // folded until its chevron opens it (ProjectFolds); otherwise every
@@ -76,6 +82,7 @@ struct ProjectsList: View {
                 }
             }
         }
+        .onChange(of: shown) { _, now in frozen = now ? nil : app.projectSections }
     }
 
     /// A project's open threads, then its archived ones folded away.

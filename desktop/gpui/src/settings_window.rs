@@ -29,6 +29,8 @@ use std::time::Duration;
 use threadbear_core::new_thread::abbreviate_home;
 use threadbear_core::runner_settings::{experiment_about, BringIn, RunnerSettings, StandingInstructions};
 
+mod pools;
+
 /// The sections down the sidebar (`SettingsTab`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tab {
@@ -181,6 +183,8 @@ pub(crate) struct SettingsWindow {
     reviewed: Option<String>,
     resolving: bool,
     resolve_error: Option<String>,
+    /// Pools, as edited (`settings_window/pools.rs`).
+    pools: pools::PoolsDraft,
     scroll: ScrollHandle,
     _subs: Vec<Subscription>,
 }
@@ -233,6 +237,7 @@ impl SettingsWindow {
             reviewed: None,
             resolving: false,
             resolve_error: None,
+            pools: Default::default(),
             scroll: ScrollHandle::new(),
             _subs: subs,
         };
@@ -701,6 +706,24 @@ impl SettingsWindow {
             .into_any_element()
     }
 
+    fn button_owned(&self, id: &'static str, label: &'static str, tip: String, cx: &mut Context<Self>, action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static) -> AnyElement {
+        div()
+            .id(SharedString::from(format!("{id}-holder")))
+            .test_support()
+            .aria_label(tip.clone())
+            .flex_none()
+            .child(Button::new(id).label(label).small().secondary().tooltip(tip).on_click(cx.listener(move |this, _, window, cx| action(this, window, cx))))
+            .into_any_element()
+    }
+
+    fn icon_button_owned(&self, id: String, symbol: &'static str, tip: String, cx: &mut Context<Self>, action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static) -> AnyElement {
+        let (hover, secondary, fg) = (style::primary_opacity(cx, 0.08), style::secondary_text(cx), cx.theme().foreground);
+        crate::highlights::tipped(div().id(SharedString::from(id)).flex_none().size(px(22.)).rounded(px(5.)).flex().items_center().justify_center().cursor_pointer().text_color(secondary).hover(move |s| s.bg(hover).text_color(fg)), tip)
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| action(this, window, cx)))
+            .child(icons::symbol(symbol).with_size(px(13.)))
+            .into_any_element()
+    }
+
     fn icon_button(&self, id: String, symbol: &'static str, tip: &'static str, cx: &mut Context<Self>, action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static) -> AnyElement {
         let (hover, secondary, fg) = (style::primary_opacity(cx, 0.08), style::secondary_text(cx), cx.theme().foreground);
         crate::highlights::tipped(div().id(SharedString::from(id)).flex_none().size(px(22.)).rounded(px(5.)).flex().items_center().justify_center().cursor_pointer().text_color(secondary).hover(move |s| s.bg(hover).text_color(fg)), tip)
@@ -773,7 +796,7 @@ fn waiting_text(app: &WeakEntity<Threadbear>, cx: &App) -> String {
 
 /// `SettingsSection`: its title, with what it is and what to ask your agent
 /// behind the ⓘ, over its rows in a rounded group.
-fn section(id: &'static str, title: &'static str, about: &str, ask: &str, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
+fn section(id: &'static str, title: &str, about: &str, ask: &str, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
     let hairline = style::hairline(cx);
     let mut group = v_flex();
     let count = rows.len();
@@ -786,12 +809,12 @@ fn section(id: &'static str, title: &'static str, about: &str, ask: &str, rows: 
     section_with_body(id, title, about, ask, group.into_any_element(), cx)
 }
 
-fn section_with_body(id: &'static str, title: &'static str, about: &str, ask: &str, body: AnyElement, cx: &App) -> AnyElement {
+fn section_with_body(id: &'static str, title: &str, about: &str, ask: &str, body: AnyElement, cx: &App) -> AnyElement {
     let info = format!("{about}\n\nAsk your agent to {ask}");
     v_flex()
         .id(id)
         .gap(px(6.))
-        .child(h_flex().gap(px(6.)).items_center().px(px(4.)).child(div().text_size(px(13.)).line_height(px(16.)).font_semibold().child(title)).child(info_tip(SharedString::from(format!("{id}-info")), info, cx)))
+        .child(h_flex().gap(px(6.)).items_center().px(px(4.)).child(div().text_size(px(13.)).line_height(px(16.)).font_semibold().child(title.to_owned())).child(info_tip(SharedString::from(format!("{id}-info")), info, cx)))
         .child(div().rounded(px(8.)).bg(style::primary_opacity(cx, 0.04)).border_1().border_color(style::hairline(cx)).child(body))
         .into_any_element()
 }
@@ -832,6 +855,7 @@ impl Render for SettingsWindow {
         let mut sections = match self.tab {
             Tab::General => self.render_general(settings.as_ref(), window, cx),
             Tab::Models => self.render_models(settings.as_ref(), cx),
+            Tab::Pools => self.render_pools(window, cx),
             other => vec![plain_note(&format!("{} isn't in this app yet. The Swift app's Settings has it for now.", other.title()), cx)],
         };
         // The last change that didn't take, under the form (`SettingsErrorRow`).

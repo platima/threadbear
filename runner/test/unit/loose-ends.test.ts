@@ -9,7 +9,7 @@ import { makeHarness, tmpDir } from '../helpers/fakes.ts';
 import { sh, shPath } from '../helpers/platform.ts';
 import { checkSummary } from '../helpers/protocol-check.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
-import { agentLooseEnds, anyOpen, childLooseEnds, editedLooseEnds, scheduleLooseEnds, worktreeLooseEnds } from '../../src/loose-ends.ts';
+import { agentLooseEnds, anyOpen, childLooseEnds, editedLooseEnds, githubRepo, scheduleLooseEnds, worktreeLooseEnds, type Pr, type PrLookup } from '../../src/loose-ends.ts';
 import { needsFromTool } from '../../src/needs.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { EXPERIMENTS } from '../../src/experiments.ts';
@@ -197,6 +197,61 @@ test('looseEnds: files a thread changed in a shared checkout count, not the rest
   fs.mkdirSync(local);
   sh(local, 'git init -q -b main && echo x > x.txt && git add -A && git commit -qm x');
   assert.deepEqual(await editedLooseEnds([path.join(local, 'x.txt')], [sh(local, 'git rev-parse HEAD')]), []);
+});
+
+// 11 Nov 2026: thread 0222c475 said Done with its work pushed to draft PRs
+// that weren't merged, and the card showed a plain Done.
+test('looseEnds: work pushed to a branch that main lacks is open until its PR is merged or closed', async () => {
+  const root = fs.realpathSync(tmpDir('tb-loose-pr-'));
+  const remote = path.join(root, 'remote.git');
+  sh(root, `git init -q --bare -b main ${remote}`);
+  const repo = path.join(root, 'website');
+  fs.mkdirSync(repo);
+  sh(repo, `git init -q -b main && git remote add origin ${remote} && echo one > a.txt && git add -A && git commit -qm init && git push -q -u origin main && git remote set-head origin main`);
+  const a = path.join(repo, 'a.txt');
+  sh(repo, 'git checkout -q -b mike/examples && echo two > a.txt && git commit -qam examples && git push -q -u origin mike/examples');
+  const sha = sh(repo, 'git rev-parse HEAD');
+  const asked: string[] = [];
+  const lookup = (pr: Pr | undefined): PrLookup => async (r, b) => {
+    asked.push(`${r} ${b}`);
+    return pr;
+  };
+  // A local remote isn't GitHub's, so there's no PR to ask about.
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup(undefined) }), [
+    { kind: 'unmerged', text: "Work it pushed to mike/examples in website isn't on main" },
+  ]);
+  assert.deepEqual(asked, []);
+  // On GitHub: an open PR names itself, a draft says so, a merged or closed
+  // one (squashed, so the commit never reaches main) isn't open.
+  sh(repo, `git remote set-url origin https://github.com/convex/website.git && git config remote.origin.pushurl ${remote}`);
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup({ number: 1092, state: 'OPEN', isDraft: true }) }), [
+    { kind: 'unmerged', text: 'PR #1092 in website is still a draft' },
+  ]);
+  assert.deepEqual(asked, ['convex/website mike/examples']);
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup({ number: 1092, state: 'OPEN', isDraft: false }) }), [
+    { kind: 'unmerged', text: "PR #1092 in website isn't merged" },
+  ]);
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup({ number: 1092, state: 'MERGED', isDraft: false, headRefOid: sh(repo, 'git rev-parse origin/mike/examples') }) }), []);
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha], prs: lookup({ number: 1092, state: 'CLOSED', isDraft: false, headRefOid: sh(repo, 'git rev-parse origin/mike/examples') }) }), []);
+  // A branch reused after its PR merged: newer pushes aren't covered by it.
+  const merged = { number: 1092, state: 'MERGED' as const, isDraft: false, headRefOid: sh(repo, 'git rev-parse origin/mike/examples') };
+  sh(repo, 'echo three > a.txt && git commit -qam more && git push -q origin mike/examples');
+  const more = sh(repo, 'git rev-parse HEAD');
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha, more], prs: lookup(merged) }), [
+    { kind: 'unmerged', text: "Work it pushed to mike/examples in website isn't on main" },
+  ]);
+  // A thread that changed files only through a shell is found by its folder.
+  assert.deepEqual(await editedLooseEnds([], [], undefined, { pushed: [more], dirs: [repo], prs: lookup(undefined) }), [
+    { kind: 'unmerged', text: "Work it pushed to mike/examples in website isn't on main" },
+  ]);
+  // Once main has it, there's nothing to ask.
+  asked.length = 0;
+  sh(repo, 'git checkout -q main && git merge -q --ff-only mike/examples && git push -q origin main');
+  assert.deepEqual(await editedLooseEnds([a], [], undefined, { pushed: [sha, more], prs: lookup({ number: 1092, state: 'OPEN', isDraft: false }) }), []);
+  assert.deepEqual(asked, []);
+  assert.equal(githubRepo('git@github.com:convex/website.git'), 'convex/website');
+  assert.equal(githubRepo('https://github.com/mikecann/threadbear'), 'mikecann/threadbear');
+  assert.equal(githubRepo('https://gitlab.com/a/b.git'), undefined);
 });
 
 test("looseEnds: end_turn's open is the agent's word, kept when empty, offered only while on", () => {

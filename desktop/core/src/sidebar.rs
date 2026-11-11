@@ -512,8 +512,9 @@ pub struct Trailing {
     pub tip: Option<String>,
 }
 
-/// `ThreadRowView.trailing(_:)`. `section` is the heading's key.
-pub fn trailing<Tz: TimeZone>(t: &ThreadSummary, look: &RowLook, mode: RowMode, now: &DateTime<Tz>) -> Trailing {
+/// `ThreadRowView.trailing(_:)`. `wake` is when a schedule next messages a
+/// thread under Hibernating that isn't snoozed (`app.wakes`).
+pub fn trailing<Tz: TimeZone>(t: &ThreadSummary, look: &RowLook, mode: RowMode, now: &DateTime<Tz>, wake: Option<&crate::inbox::Wake>) -> Trailing {
     let now_ms = now.timestamp_millis();
     if let Some(moving) = &t.moving {
         let state = moving.get("state").and_then(|v| v.as_str()).unwrap_or("");
@@ -552,6 +553,10 @@ pub fn trailing<Tz: TimeZone>(t: &ThreadSummary, look: &RowLook, mode: RowMode, 
             }
             if look.woke {
                 return Trailing { text: "Woke up".into(), kind: TrailingKind::Woke, tip: Some(woke_tip(t)) };
+            }
+            // When its schedule messages it next, where the time would be.
+            if let Some(wake) = wake {
+                return Trailing { text: until_words(wake.at_ms, now), kind: TrailingKind::Quiet, tip: Some(format!("Scheduled: {}", wake.when_text)) };
             }
             Trailing { text: time(), kind: TrailingKind::Quiet, tip: None }
         }
@@ -969,32 +974,38 @@ mod tests {
         let now = at("2026-11-09T20:00:00+11:00");
         let room = thread(json!({ "needsYou": true, "waitingForRoom": { "until": "2026-11-09T18:00:00Z" } }));
         let look = RowLook::of(&room, Some("inbox"));
-        assert_eq!(trailing(&room, &look, RowMode::Inbox, &now).text, "Waiting for room · tomorrow 5:00 am");
+        assert_eq!(trailing(&room, &look, RowMode::Inbox, &now, None).text, "Waiting for room · tomorrow 5:00 am");
 
         let failed = thread(json!({ "status": "error" }));
         let look = RowLook::of(&failed, Some("inbox"));
-        let out = trailing(&failed, &look, RowMode::Inbox, &now);
+        let out = trailing(&failed, &look, RowMode::Inbox, &now, None);
         assert_eq!((out.text.as_str(), out.kind), ("Failed", TrailingKind::Failed));
 
         let woke = thread(json!({ "woke": { "at": "2026-11-09T08:00:00Z", "since": "2026-11-07T08:00:00Z" } }));
         let look = RowLook::of(&woke, Some("inbox"));
-        let out = trailing(&woke, &look, RowMode::Inbox, &now);
+        let out = trailing(&woke, &look, RowMode::Inbox, &now, None);
         assert_eq!(out.text, "Woke up");
         assert_eq!(out.tip.as_deref(), Some("Woke up after hibernating for 2 days"));
 
         let sleeping = thread(json!({ "snoozedUntil": "2026-11-09T22:00:00Z" }));
-        assert_eq!(trailing(&sleeping, &RowLook::PLAIN, RowMode::Hibernating, &now).text, "Back Tue 9:00 am");
+        assert_eq!(trailing(&sleeping, &RowLook::PLAIN, RowMode::Hibernating, &now, None).text, "Back Tue 9:00 am");
 
         let topic = thread(json!({ "snoozedUntil": "9999-12-31T00:00:00.000Z", "wakeWhen": { "said": "next time I talk about wood", "topic": "wood" } }));
-        let out = trailing(&topic, &RowLook::PLAIN, RowMode::Hibernating, &now);
+        let out = trailing(&topic, &RowLook::PLAIN, RowMode::Hibernating, &now, None);
         assert_eq!(out.text, "wood");
         assert!(out.tip.unwrap().starts_with("Back when you next talk about wood."));
 
         let thinking = thread(json!({ "snoozedUntil": "9999-12-31T00:00:00.000Z", "wakeWhen": { "said": "soon", "pending": true } }));
-        assert_eq!(trailing(&thinking, &RowLook::PLAIN, RowMode::Hibernating, &now).text, "Thinking…");
+        assert_eq!(trailing(&thinking, &RowLook::PLAIN, RowMode::Hibernating, &now, None).text, "Thinking…");
 
         let restart = thread(json!({ "snoozedUntil": "9999-12-31T00:00:00.000Z", "snoozedUntilRestart": true }));
-        assert_eq!(trailing(&restart, &RowLook::PLAIN, RowMode::Hibernating, &now).text, "Back on restart");
+        assert_eq!(trailing(&restart, &RowLook::PLAIN, RowMode::Hibernating, &now, None).text, "Back on restart");
+        // Under Hibernating for its schedule rather than a snooze: when that
+        // messages it next.
+        let wake = crate::inbox::Wake { at_ms: now.timestamp_millis() + 3_600_000, when_text: "Weekdays at 9:00".into() };
+        let quiet = trailing(&restart, &RowLook::PLAIN, RowMode::Inbox, &now, Some(&wake));
+        assert_eq!(quiet.tip.as_deref(), Some("Scheduled: Weekdays at 9:00"));
+        assert_eq!(quiet.text, until_words(wake.at_ms, &now));
     }
 
     #[test]
@@ -1090,9 +1101,9 @@ mod tests {
         let c = thread(json!({ "id": "asking", "status": "waiting", "lastActivityAt": "2026-11-09T04:00:00Z" }));
         let all = [a, b, c];
         let inbox = |s: &[Section]| s.iter().find(|x| x.key == "inbox").unwrap().rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
-        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::NeedsYou)), ["asking", "new", "old"]);
-        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::Newest)), ["new", "asking", "old"]);
-        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::Oldest)), ["old", "asking", "new"]);
+        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::NeedsYou, &Default::default())), ["asking", "new", "old"]);
+        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::Newest, &Default::default())), ["new", "asking", "old"]);
+        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::Oldest, &Default::default())), ["old", "asking", "new"]);
     }
 
     /// The shared urgency rule (`app/Tests/Fixtures/inbox-urgency-cases.json`):

@@ -100,25 +100,17 @@ pub struct RunnerLogins {
 
 impl RunnerLogins {
     pub fn from_hello(hello: &Value) -> RunnerLogins {
-        let mut accounts: Vec<Account> = lossy(&hello["accounts"]);
-        for account in &mut accounts {
-            for model in &mut account.models {
-                // `model` and `title` fall back to the id (ModelChoice.init).
-                if model.model.is_empty() {
-                    model.model = model.id.clone();
-                }
-                if model.title.is_empty() {
-                    model.title = model.id.clone();
-                }
-            }
-        }
-        let mut pools: Vec<Pool> = lossy(&hello["pools"]);
-        for pool in &mut pools {
-            if pool.title.is_empty() {
-                pool.title = pool.id.clone();
-            }
-        }
-        RunnerLogins { accounts, pools, defaults: serde_json::from_value(hello["defaults"].clone()).unwrap_or_default() }
+        RunnerLogins { accounts: accounts_from(&hello["accounts"]), pools: pools_from(&hello["pools"]), defaults: serde_json::from_value(hello["defaults"].clone()).unwrap_or_default() }
+    }
+
+    /// `accounts.updated`: the logins, which replace the ones from `hello`.
+    pub fn set_accounts(&mut self, accounts: &Value) {
+        self.accounts = accounts_from(accounts);
+    }
+
+    /// `pools.updated`: the pools, which replace the ones from `hello`.
+    pub fn set_pools(&mut self, pools: &Value) {
+        self.pools = pools_from(pools);
     }
 
     pub fn account(&self, id: &str) -> Option<&Account> {
@@ -134,6 +126,32 @@ impl RunnerLogins {
     pub fn uses_pools(&self) -> bool {
         !self.pools.is_empty()
     }
+}
+
+fn accounts_from(v: &Value) -> Vec<Account> {
+    let mut accounts: Vec<Account> = lossy(v);
+    for account in &mut accounts {
+        for model in &mut account.models {
+            // `model` and `title` fall back to the id (ModelChoice.init).
+            if model.model.is_empty() {
+                model.model = model.id.clone();
+            }
+            if model.title.is_empty() {
+                model.title = model.id.clone();
+            }
+        }
+    }
+    accounts
+}
+
+fn pools_from(v: &Value) -> Vec<Pool> {
+    let mut pools: Vec<Pool> = lossy(v);
+    for pool in &mut pools {
+        if pool.title.is_empty() {
+            pool.title = pool.id.clone();
+        }
+    }
+    pools
 }
 
 fn lossy<T: serde::de::DeserializeOwned>(v: &Value) -> Vec<T> {

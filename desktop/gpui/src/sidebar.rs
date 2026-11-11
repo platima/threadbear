@@ -218,9 +218,27 @@ pub(crate) struct SidebarState {
     pub(crate) project_icons: HashMap<String, ProjectIcon>,
     /// The projects themselves, for the new-thread page's chip.
     pub(crate) projects: Vec<ProjectBrief>,
+    /// Headings folding or unfolding, by key (Swift's
+    /// `withAnimation(.snappy(duration: 0.2))`): the rows ease shut or open
+    /// while what's below slides with them.
+    pub(crate) folding: HashMap<&'static str, Fold>,
+    /// Each section's rows' height when last drawn, for a fold to run to or from.
+    heights: HashMap<&'static str, std::rc::Rc<std::cell::Cell<f32>>>,
+    fold_serial: u64,
     scroll: ScrollHandle,
     _tick: Task<()>,
 }
+
+/// A heading's fold under way: opening or closing, and which toggle it is,
+/// so a click mid-fold starts a new one rather than finishing the old.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Fold {
+    pub(crate) opening: bool,
+    serial: u64,
+}
+
+/// How long a fold takes, as Swift's `.snappy(duration: 0.2)`.
+const FOLD_TIME: std::time::Duration = std::time::Duration::from_millis(200);
 
 impl SidebarState {
     pub(crate) fn new(cx: &mut Context<Threadbear>) -> Self {
@@ -253,6 +271,9 @@ impl SidebarState {
             restart_pending: false,
             project_icons: HashMap::new(),
             projects: Vec::new(),
+            folding: HashMap::new(),
+            heights: HashMap::new(),
+            fold_serial: 0,
             scroll: ScrollHandle::new(),
             _tick: tick,
         }
@@ -867,6 +888,9 @@ impl Threadbear {
         let query = self.search.read(cx).value().trim().to_lowercase();
         let searching = !query.is_empty();
         let sections = self.shown_sections(cx, now);
+        // When a schedule next messages each thread, for those under
+        // Hibernating for it (`app.wakes`).
+        let wakes = threadbear_core::inbox::wakes(&self.scheduled.list);
         let mut list = v_flex().px(px(OUTER_INSET)).pb(px(32.));
         let loaded = self.sidebar.loaded;
         if !loaded {
@@ -890,24 +914,45 @@ impl Threadbear {
                     (total, 0)
                 };
                 list = list.child(self.render_heading(section.key, section.title, total, folded, searching, &p, cx));
-                if folded {
+                // A fold under way draws the rows while they ease shut, and
+                // from the moment they start to open.
+                let fold = (!searching).then(|| self.sidebar.folding.get(section.key).copied()).flatten();
+                if folded && fold.is_none() {
                     continue;
                 }
+                let mut body = v_flex().relative().w_full();
                 for t in section.rows.iter().take(shown.0) {
-                    list = list.child(self.render_row(t, section.key, now, &clock, &p, cx));
+                    let wake = (section.key == "hibernating").then(|| wakes.get(&t.id)).flatten();
+                    body = body.child(self.render_row(t, section.key, wake, now, &clock, &p, cx));
                     if !matches!(section.key, "hibernating" | "archived") {
                         for sub in self.render_subagents(t, section.key, now, &p, cx) {
-                            list = list.child(sub);
+                            body = body.child(sub);
                         }
                     }
                 }
                 if section.key == "archived" && shown.1 > 0 {
-                    list = list.child(self.render_show_more(shown.1, &p, cx));
+                    body = body.child(self.render_show_more(shown.1, &p, cx));
                 }
                 // Under the empty Inbox heading.
                 if section.key == "inbox" && section.rows.is_empty() && !searching {
-                    list = list.child(div().pl(px(LEADING)).pt(px(14.)).text_size(px(style::size::SIDEBAR_PREVIEW)).text_color(p.secondary).child("Nothing in the inbox."));
+                    body = body.child(div().pl(px(LEADING)).pt(px(14.)).text_size(px(style::size::SIDEBAR_PREVIEW)).text_color(p.secondary).child("Nothing in the inbox."));
                 }
+                // Its height as drawn, for a fold to run to or from.
+                let height = self.sidebar.heights.entry(section.key).or_default().clone();
+                let measured = height.clone();
+                body = body.child(canvas(move |bounds, _, _| measured.set(f32::from(bounds.size.height)), |_, _, _, _| {}).absolute().top_0().left_0().size_full());
+                list = list.child(match fold {
+                    None => body.into_any_element(),
+                    Some(fold) => div()
+                        .w_full()
+                        .overflow_hidden()
+                        .child(body)
+                        .with_animation(("section-fold", fold.serial as usize), Animation::new(FOLD_TIME).with_easing(ease_out_quint()), move |el, t| {
+                            let open = if fold.opening { t } else { 1. - t };
+                            el.h(gpui_kit::px(height.get() * open)).opacity(open)
+                        })
+                        .into_any_element(),
+                });
             }
         }
         let new_thread_active = self.selected.is_none();
@@ -1009,13 +1054,34 @@ impl Threadbear {
             trailing,
             p,
             move |this, cx| {
-                if !this.folded.remove(key) {
+                let opening = this.folded.remove(key);
+                if !opening {
                     this.folded.insert(key);
                 }
+                this.start_fold(key, opening, cx);
                 this.sidebar_settings_changed(cx);
             },
             cx,
         )
+    }
+
+    /// Starts a heading's fold, and ends it once it's run, so a closed
+    /// section stops drawing its rows (a click mid-fold starts another).
+    fn start_fold(&mut self, key: &'static str, opening: bool, cx: &mut Context<Self>) {
+        self.sidebar.fold_serial += 1;
+        let serial = self.sidebar.fold_serial;
+        self.sidebar.folding.insert(key, Fold { opening, serial });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FOLD_TIME + std::time::Duration::from_millis(30)).await;
+            this.update(cx, |this, cx| {
+                if this.sidebar.folding.get(key).is_some_and(|f| f.serial == serial) {
+                    this.sidebar.folding.remove(key);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// `SectionHeading`: a quiet divider with room above each group, folding
@@ -1097,12 +1163,12 @@ impl Threadbear {
     }
 
     /// `ThreadRowView`: tile, title, place line, status or hover buttons.
-    fn render_row(&mut self, t: &ThreadSummary, section: &'static str, now: i64, clock: &Clock, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(&mut self, t: &ThreadSummary, section: &'static str, wake: Option<&threadbear_core::inbox::Wake>, now: i64, clock: &Clock, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let mode = RowMode::of(section, t, now);
         // The Hibernating and Archived rows read plainly; only live ones say
         // what they're doing (`ThreadRowView.body`).
         let look = if mode == RowMode::Inbox { RowLook::of(t, Some(section)) } else { RowLook::PLAIN };
-        let trailing = rows::trailing(t, &look, mode, clock);
+        let trailing = rows::trailing(t, &look, mode, clock, wake);
         let id = t.id.clone();
         let selected = self.selected.as_deref() == Some(id.as_str());
         // A script's hover wins over the real pointer, which on a shared
@@ -1298,12 +1364,13 @@ impl Threadbear {
         let now = now_ms();
         let clock: Clock = rows::local_now();
         let selected_sub = self.selected.clone();
+        let wakes = threadbear_core::inbox::wakes(&self.scheduled.list);
         let row = |t: &ThreadSummary, section: Option<&str>| -> Value {
             let key = section.unwrap_or("inbox");
             let mode = RowMode::of(key, t, now);
             let look = RowLook::of(t, section);
             let plain = if mode == RowMode::Inbox { look } else { RowLook::PLAIN };
-            let tail = rows::trailing(t, &plain, mode, &clock);
+            let tail = rows::trailing(t, &plain, mode, &clock, (key == "hibernating").then(|| wakes.get(&t.id)).flatten());
             let hovered = self.sidebar.hover_override.as_deref() == Some(t.id.as_str());
             let tile = match rows::tile(t).0 {
                 Tile::Letter(l) => l,

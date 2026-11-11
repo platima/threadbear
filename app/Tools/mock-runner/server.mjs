@@ -389,6 +389,12 @@ addDemoProjects();
 // Threadbear's threads waiting on a card of asks, with what they're for. Only
 // when asked, as it changes those threads' rows and the Projects page.
 if (process.env.TB_MOCK_DECISIONS) addDemoDecisions();
+// A big set for timing the Projects view (TB_MOCK_PERF_PROJECTS=<threads>):
+// that many threads over 80 projects, nearly all archived, the open ones
+// partly waiting on a card of asks, and a third of the projects with a
+// picture for an icon: the shape of Mike's install on 11 Nov (1,186
+// threads, 1,151 archived, 83 projects).
+if (process.env.TB_MOCK_PERF_PROJECTS) addPerfProjects(Number(process.env.TB_MOCK_PERF_PROJECTS));
 
 const token = crypto.randomBytes(24).toString('hex');
 fs.mkdirSync(path.join(dataDir, 'secrets'), { recursive: true });
@@ -1471,6 +1477,15 @@ async function dispatch(client, method, p) {
       return deviceList();
     }
     // Mock-only helpers for perf runs, demos and screenshots.
+    case 'mock.checkIn': {
+      // A check-in booked on a thread, as an agent's schedule_message leaves
+      // one: a schedule that messages it in an hour (or `minutes`), for a
+      // scenario about a thread waiting on its schedule.
+      const entry = [...threads.values()].find((t) => t.summary.title === p.title);
+      if (!entry) throw rpcError(-32602, `No thread called "${p.title}"`);
+      const at = new Date(Date.now() + (p.minutes ?? 60) * 60_000).toISOString();
+      return dispatch(client, 'schedules.create', { title: p.text ?? 'See how it went', text: p.text ?? 'See how it went.', at, threadId: entry.summary.id, createdBy: entry.summary.id });
+    }
     case 'mock.moveLeftBehind':
       moveLeftBehind = p.lines ?? [];
       return { lines: moveLeftBehind };
@@ -2694,6 +2709,46 @@ function listedProjects(archived) {
 
 function membersOf(projectId) {
   return [...threads.values()].map((t) => t.summary).filter((s) => s.projects?.some((x) => x.id === projectId));
+}
+
+function addPerfProjects(count) {
+  const now = Date.now();
+  const ago = (minutes) => new Date(now - minutes * 60_000).toISOString();
+  const base = ['Poddle', 'Walkies HQ', 'Stash It', 'Voice Type', 'Sammy Cam', 'Convex videos', 'Pool site', 'RememBear'];
+  const names = Array.from({ length: 80 }, (_, i) => `${base[i % base.length]}${i < base.length ? '' : ` ${Math.floor(i / base.length) + 1}`}`);
+  const picture = fileURLToPath(new URL('../../icons/threadbear.png', import.meta.url));
+  const made = names.map((title, i) => ({
+    id: `p_perf_${i}`, title, folders: [`/Users/mike/dev/me/${title.toLowerCase().replace(/ /g, '-')}`],
+    goals: `Keep ${title} moving.`, state: `${title} is in progress; a few threads are waiting on decisions.`, notes: '', links: [],
+    createdBy: 'librarian', createdAt: ago(60 * 24 * 20), updatedAt: ago(i * 7),
+    icon: i % 3 === 0 ? { image: { path: picture, mediaType: 'image/png' }, by: 'librarian', updatedAt: ago(60) } : { symbol: 'folder', by: 'librarian', updatedAt: ago(60) },
+  }));
+  projects.push(...made);
+  for (let i = 0; i < count; i++) {
+    const id = `th_perf_${i}`;
+    const at = ago(i * 17 + 3);
+    const project = made[i % made.length];
+    // About 3% open (the newest), a third of those asking.
+    const open = i < Math.ceil(count * 0.03);
+    const asking = open && i % 3 === 0;
+    const asks = asking ? [{ action: `Ship change ${i} now, or wait for the next release?`, why: 'Both are fine; it only changes when people see it.',
+      options: ['Ship it now', 'Wait'], optionNotes: ['Goes out tonight', 'Next Monday'], suggested: 0 }] : undefined;
+    const summary = {
+      id, title: `${project.title} task ${i + 1}`, cwd: project.folders[0], accountId: 'claude-main', provider: 'claude',
+      permissionMode: 'full', status: 'idle', live: false, needsYou: asking, createdAt: at, updatedAt: at, lastActivityAt: at,
+      preview: `Worked on ${project.title} task ${i + 1}.`, lastSeq: 2, lastSeenSeq: asking ? 1 : 2,
+      recap: `Moves ${project.title} task ${i + 1} along.\n- Halfway there`,
+      ...(open ? {} : { archivedAt: at }),
+      ...(asking ? { needs: 'you', asks, asksSeq: 2 } : {}),
+    };
+    join(summary, project, 'librarian', false, at);
+    if (i % 13 === 0) join(summary, made[(i + 1) % made.length], 'agent', false, at);
+    const events = [
+      { seq: 1, ts: at, threadId: id, turnId: 't0', type: 'user.message', text: `Do ${project.title} task ${i + 1}`, images: [] },
+      { seq: 2, ts: at, threadId: id, turnId: 't0', type: 'turn.completed', outcome: 'completed', durationMs: 4000, ...(asking ? { needs: 'you', asks } : { needs: 'nothing' }) },
+    ];
+    threads.set(id, { summary, events, inProgress: new Map(), timers: [] });
+  }
 }
 
 /**

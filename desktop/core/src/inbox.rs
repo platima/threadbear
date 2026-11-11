@@ -2,6 +2,7 @@
 // (app/Sources/ThreadbearCore/Threads/ThreadSections.swift), which the phone's
 // InboxSections and the website's web/src/sections.ts follow too. A summary
 // is what `threads.list` gives; what a row says about it is in `sidebar.rs`.
+use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -295,15 +296,40 @@ pub struct Section {
     pub rows: Vec<ThreadSummary>,
 }
 
-/// Sections in the Mac app's default order (`ThreadSections.build`).
+/// Sections in the Mac app's default order (`ThreadSections.build`), with no
+/// schedules known.
 pub fn sections<'a>(threads: impl IntoIterator<Item = &'a ThreadSummary>, now_ms: i64) -> Vec<Section> {
-    sections_ordered(threads, now_ms, InboxOrder::NeedsYou)
+    sections_ordered(threads, now_ms, InboxOrder::NeedsYou, &HashMap::new())
+}
+
+/// When a schedule next messages a thread by itself, and its words for when
+/// ("Weekdays at 9:00").
+#[derive(Clone, Debug, PartialEq)]
+pub struct Wake {
+    pub at_ms: i64,
+    pub when_text: String,
+}
+
+/// `ThreadSections.wakes`: for each thread a schedule will message by itself,
+/// the one due soonest. Paused and finished ones don't count, nor ones that
+/// start a new thread.
+pub fn wakes(schedules: &[crate::highlights::Schedule]) -> HashMap<String, Wake> {
+    let mut soonest: HashMap<String, Wake> = HashMap::new();
+    for schedule in schedules.iter().filter(|s| s.is_active()) {
+        let (Some(thread), Some(at_ms)) = (schedule.thread_id.as_ref(), schedule.next_run_at.as_deref().and_then(parse_ms)) else { continue };
+        if soonest.get(thread).is_some_and(|w| w.at_ms <= at_ms) {
+            continue;
+        }
+        soonest.insert(thread.clone(), Wake { at_ms, when_text: schedule.when_text.clone() });
+    }
+    soonest
 }
 
 /// `ThreadSections.build`: where each thread goes and the order within each
-/// heading. A thread with a schedule due to message it (`wakes` in the Swift
-/// app) stays in the Inbox here until this app loads schedules.
-pub fn sections_ordered<'a>(threads: impl IntoIterator<Item = &'a ThreadSummary>, now_ms: i64, order: InboxOrder) -> Vec<Section> {
+/// heading. `wakes` are the threads a schedule is due to message
+/// (`inbox::wakes`): one that's idle with nothing for Mike waits for it under
+/// Hibernating rather than sitting in the Inbox.
+pub fn sections_ordered<'a>(threads: impl IntoIterator<Item = &'a ThreadSummary>, now_ms: i64, order: InboxOrder, wakes: &HashMap<String, Wake>) -> Vec<Section> {
     let (mut starred, mut inbox, mut running, mut hibernating, mut archived) = (vec![], vec![], vec![], vec![], vec![]);
     for t in threads {
         if t.is_archived() {
@@ -316,6 +342,8 @@ pub fn sections_ordered<'a>(threads: impl IntoIterator<Item = &'a ThreadSummary>
             inbox.push(t.clone());
         } else if t.busy() || t.working_in_background() {
             running.push(t.clone());
+        } else if t.status == "idle" && t.needs.as_deref() != Some("you") && t.waiting_for_room.is_none() && wakes.contains_key(&t.id) {
+            hibernating.push(t.clone());
         } else {
             inbox.push(t.clone());
         }
@@ -333,9 +361,10 @@ pub fn sections_ordered<'a>(threads: impl IntoIterator<Item = &'a ThreadSummary>
         InboxOrder::Oldest => inbox.sort_by_cached_key(|t| (t.activity_ms(), Reverse(t.id.clone()))),
     }
     running.sort_by_cached_key(newest_first);
-    // A snooze's time; back on restart has none, so it goes last.
-    let wakes = |t: &ThreadSummary| t.snoozed_until_ms().filter(|_| t.snoozed_until_restart != Some(true)).unwrap_or(i64::MAX);
-    hibernating.sort_by_cached_key(|t| (wakes(t), newest_first(t)));
+    // A snooze's time, or for one waiting on a schedule its next run. Back on
+    // restart has no time, so it goes last.
+    let wakes_at = |t: &ThreadSummary| t.snoozed_until_ms().filter(|_| t.snoozed_until_restart != Some(true)).or_else(|| wakes.get(&t.id).map(|w| w.at_ms)).unwrap_or(i64::MAX);
+    hibernating.sort_by_cached_key(|t| (wakes_at(t), newest_first(t)));
     archived.sort_by_cached_key(|t| (Reverse(t.archived_ms()), t.id.clone()));
     [("starred", "Starred", starred), ("inbox", "Inbox", inbox), ("running", "Running", running), ("hibernating", "Hibernating", hibernating), ("archived", "Archived", archived)]
         .into_iter()
@@ -463,6 +492,29 @@ mod tests {
     }
     fn now() -> i64 {
         parse_ms("2026-11-06T12:00:00Z").unwrap()
+    }
+
+    #[test]
+    fn a_thread_waiting_on_its_schedule_hibernates_until_it() {
+        use crate::highlights::Schedule;
+        let schedule = |id: &str, thread: &str, next: &str, paused: bool| Schedule { id: id.into(), thread_id: Some(thread.into()), next_run_at: Some(next.into()), when_text: "Weekdays at 9:00".into(), paused, ..Default::default() };
+        let quiet = thread(1, json!({}));
+        let later = thread(2, json!({}));
+        let asks = thread(3, json!({ "needs": "you", "needsYou": true, "asks": [{ "action": "Ship it?" }] }));
+        let paused = thread(4, json!({}));
+        let schedules = [
+            schedule("s1", "t1", "2026-11-07T09:00:00Z", false),
+            schedule("s1b", "t1", "2026-11-06T13:00:00Z", false),
+            schedule("s2", "t2", "2026-11-06T12:30:00Z", false),
+            schedule("s3", "t3", "2026-11-06T13:00:00Z", false),
+            schedule("s4", "t4", "2026-11-06T13:00:00Z", true),
+        ];
+        let wakes = wakes(&schedules);
+        assert_eq!(wakes["t1"].at_ms, parse_ms("2026-11-06T13:00:00Z").unwrap(), "the soonest of its schedules");
+        assert!(!wakes.contains_key("t4"), "a paused schedule wakes nothing");
+        let s = sections_ordered(&[quiet, later, asks, paused], now(), InboxOrder::NeedsYou, &wakes);
+        assert_eq!(ids(&s, "hibernating"), ["t2", "t1"], "soonest to wake first");
+        assert_eq!(ids(&s, "inbox"), ["t3", "t4"], "one that needs Mike stays where he'll see it");
     }
 
     #[test]

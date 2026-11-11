@@ -466,6 +466,8 @@ type Runtime = {
   // the latest, so an older one finishing late is dropped, and when it began.
   looseEndsRun?: number;
   looseEndsAt?: number;
+  // A loose-ends check is running: opening the thread doesn't start another.
+  looseEndsBusy?: boolean;
 };
 
 export type ThreadState = { rec: ThreadRecord; rt: Runtime };

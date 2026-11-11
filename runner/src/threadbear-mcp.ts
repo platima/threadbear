@@ -26,6 +26,12 @@ import { SAID_MAX } from './wake-when.ts';
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
 import { runCommandProblem, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, turnReply, type TurnReply } from './needs.ts';
+
+// end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
+// 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
+// a repo where merging needed Mike's OK, and he nearly archived it
+// (loose-ends.ts has the check that backs this up).
+const WHOLE_JOB = "Done is the whole job, not this step: if the next step to finish it is theirs (a merge, a deploy), it's an ask.";
 import { asksForAppRestart, type AppRestarts } from './app-restarts.ts';
 import { PANEL_PLACES } from './panel-requests.ts';
 import { nudgedThisTurn, signInNudge, turnSignIns, uncovered, type ConnectorService } from './connectors.ts';
@@ -1284,7 +1290,7 @@ export function buildThreadbearTools(
       endTurnDescription(codex ? 'codex' : 'claude', bulletReplies(), true),
       {
         headline: z.string().optional().describe('One line, at most 80 characters, for the sidebar and notifications: the result, or what you need from them.'),
-        needs: z.enum(['you', 'nothing']).optional().describe('"you" when the user has to do something before this can go on (an approval, a decision, a key, something to look at, or trying what you made when only they can tell whether it works); "nothing" when it is done or still going by itself. Left out, it follows the asks.'),
+        needs: z.enum(['you', 'nothing']).optional().describe(`"you" when the user has to do something before this can go on (an approval, a decision, a key, something to look at, or trying what you made when only they can tell whether it works); "nothing" when it is done or still going by itself. ${WHOLE_JOB} Left out, it follows the asks.`),
         asks: z
           .array(
             z.object({
@@ -1395,7 +1401,7 @@ export function buildThreadbearTools(
       END_TURN_TOOL,
       endTurnDescription(codex ? 'codex' : 'claude', bulletReplies()),
       {
-        needs: z.enum(['you', 'nothing']).optional().describe('"you" when the user has to do something before this can go on; "nothing" when it is done. Left out, it follows the asks.'),
+        needs: z.enum(['you', 'nothing']).optional().describe(`"you" when the user has to do something before this can go on; "nothing" when it is done. ${WHOLE_JOB} Left out, it follows the asks.`),
         summary: z
           .array(z.string())
           .max(8)

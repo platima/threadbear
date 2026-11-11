@@ -106,7 +106,7 @@ export const threadFields = {
   // The done card's loose ends (docs/protocol.md, "Loose ends"; experiment
   // looseEnds), since API 73: what the runner found still open on a thread
   // whose last turn needs nothing, for the phone's done card. kind is
-  // unlanded, uncommitted, unpushed, thread, scheduled or open, and a later
+  // unlanded, uncommitted, unpushed, unmerged, thread, scheduled or open, and a later
   // one shows as its text; threadId for a thread one, at (ISO) for a
   // booked check-in.
   looseEnds: v.optional(v.array(v.object({ kind: v.string(), text: v.string(), threadId: v.optional(v.string()), at: v.optional(v.string()) }))),

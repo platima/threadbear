@@ -313,9 +313,11 @@ export type ThreadSummary = {
 
 // unlanded: commits on its branch that main lacks. uncommitted: files in
 // its worktree. thread: one it started, still working or waiting on Mike.
-// scheduled: a schedule that will message it again (at: when), which
-// doesn't stop an archive. Clients show any other kind as its text.
-export type LooseEndKind = 'unlanded' | 'uncommitted' | 'unpushed' | 'thread' | 'open' | 'scheduled';
+// unmerged: work it pushed to a branch (an open PR) that isn't on the
+// remote's default branch. scheduled: a schedule that will message it
+// again (at: when), which doesn't stop an archive. Clients show any other
+// kind as its text.
+export type LooseEndKind = 'unlanded' | 'uncommitted' | 'unpushed' | 'unmerged' | 'thread' | 'open' | 'scheduled';
 export type LooseEnd = { kind: LooseEndKind; text: string; threadId?: string; at?: string };
 
 export type ShareAccess = 'off' | 'link';
