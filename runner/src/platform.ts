@@ -22,6 +22,39 @@ export function dataDirFor(p: Probe = {}): string {
   return path.join(home, 'Library', 'Application Support', 'Threadbear');
 }
 
+// The app was called Threadbare until 27 Oct 2026, and its variables were
+// THREADBARE_*. Threads, skills and launchd jobs from before then may still
+// set the old names, so each one stands in for its new name when that
+// isn't set. On import of config.ts, so every entry point (the runner, tb)
+// gets it. (Here, with the data folder below, so that scripts/install-windows.mjs
+// can ask the same question the runner does without loading all of config.ts.)
+export function adoptOldNames(env: NodeJS.ProcessEnv): void {
+  for (const [k, v] of Object.entries(env)) {
+    if (!k.startsWith('THREADBARE_') || v === undefined) continue;
+    const name = 'THREADBEAR_' + k.slice('THREADBARE_'.length);
+    if (env[name] === undefined) env[name] = v;
+  }
+}
+
+// A leading ~ (or ~/, and ~\ on Windows) is the user's home folder.
+export function expandHome(p: string): string {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || (process.platform === 'win32' && p.startsWith('~\\'))) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
+// The data folder the runner works in for this environment, which is where its
+// run/runner.pid is: THREADBEAR_HOME, else THREADBEAR_DATA_DIR (the name the Mac
+// app uses for the same override), else the default, each also under its old
+// THREADBARE_ name, with a leading ~ expanded and the result made absolute.
+// config.ts loadConfig takes its home from here, and scripts/install-windows.mjs
+// --stop looks for a runner in it, so the two cannot differ. Like loadConfig,
+// it adopts the old names into `env` itself.
+export function dataHomeFor(env: NodeJS.ProcessEnv = process.env): string {
+  adoptOldNames(env);
+  return path.resolve(expandHome(env.THREADBEAR_HOME || env.THREADBEAR_DATA_DIR || dataDirFor()));
+}
+
 // Where the runner writes its log.
 export function logFileFor(p: Probe = {}): string {
   const platform = p.platform ?? process.platform;

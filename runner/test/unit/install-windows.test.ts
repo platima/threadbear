@@ -13,7 +13,8 @@ import { PATIENCE_MS } from '../helpers/patience.ts';
 import { IS_WINDOWS, onlyOnWindows } from '../helpers/platform.ts';
 import { killTreeWindows, pidExists, processImage, processInfo, sameStartTime } from '../../src/proc.ts';
 import { readHolder } from '../../src/lock.ts';
-import { dataDirFor } from '../../src/platform.ts';
+import { dataDirFor, dataHomeFor } from '../../src/platform.ts';
+import { loadConfig } from '../../src/config.ts';
 
 const RUNNER_DIR = path.join(import.meta.dirname, '..', '..');
 const SCRIPTS = path.join(RUNNER_DIR, 'scripts');
@@ -436,17 +437,20 @@ test('the supervisor waits longer after each quick failure, and starts again at 
 
 // Runs the supervisor against a stand-in for the runner. Resolves when it ends, or
 // `ms` later with what it logged so far, ending it itself in that case.
-function startSupervisor(entryBody: string): { sv: ChildProcess; dir: string; logFile: string } {
+// `appData` is the %LOCALAPPDATA% to give it (its log and note are kept there): the folder of its
+// own unless a test starts a second supervisor for the same user.
+function startSupervisor(entryBody: string, appData?: string): { sv: ChildProcess; dir: string; logFile: string } {
   const dir = tmpDir();
+  const home = appData ?? dir;
   const entry = path.join(dir, 'fake-main.mjs');
   fs.writeFileSync(entry, entryBody);
   const sv = spawn(process.execPath, [path.join(SCRIPTS, 'windows-run.mjs')], {
-    env: { ...process.env, THREADBEAR_SUPERVISE_NO_RUN: '', LOCALAPPDATA: dir, HOME: dir, THREADBEAR_SUPERVISE_ENTRY: entry, THREADBEAR_SUPERVISE_FIRST_WAIT_MS: '100' },
+    env: { ...process.env, THREADBEAR_SUPERVISE_NO_RUN: '', LOCALAPPDATA: home, HOME: home, THREADBEAR_SUPERVISE_ENTRY: entry, THREADBEAR_SUPERVISE_FIRST_WAIT_MS: '100' },
     stdio: 'ignore',
   });
   // Where the supervisor keeps its log: %LOCALAPPDATA%\Threadbear\Logs on Windows,
   // ~/Library/Logs elsewhere (it runs the Linux service too).
-  const logFile = IS_WINDOWS ? path.join(dir, 'Threadbear', 'Logs', 'runner-supervisor.log') : path.join(dir, 'Library', 'Logs', 'runner-supervisor.log');
+  const logFile = IS_WINDOWS ? path.join(home, 'Threadbear', 'Logs', 'runner-supervisor.log') : path.join(home, 'Library', 'Logs', 'runner-supervisor.log');
   return { sv, dir, logFile };
 }
 
@@ -892,6 +896,261 @@ test('the note the supervisor writes is one --stop reads: its start time matches
   }
 });
 
+// ------------------------------------- more than one supervisor for the same user
+//
+// Task Scheduler's End may leave a supervisor running, and the task can then be started again (or
+// two are started together). Whatever happens, every supervisor that is still running must be the
+// one runner-supervisor.pid names, or --stop ends the one it finds and the other starts the runner
+// again. So a supervisor never replaces or removes the note of one that is running, and one that
+// finds another running stops at once, leaving its note as it was.
+
+// The runners startsBody stand-ins noted in <dir>\starts.txt.
+const startedIn = (dir: string): number[] => {
+  const file = path.join(dir, 'starts.txt');
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number) : [];
+};
+
+// What a test that starts supervisors ends when it is done: the supervisors, by their own handles,
+// and the stand-in runners they started, each only if it has the start time it had when the test
+// saw it, so never a pid something else has taken since.
+function tidy() {
+  const supervisors: ChildProcess[] = [];
+  const runners = new Map<number, string>();
+  return {
+    add(sv: ChildProcess): void {
+      supervisors.push(sv);
+    },
+    note(dir: string): void {
+      for (const pid of startedIn(dir)) if (!runners.has(pid)) runners.set(pid, processInfo(pid)?.lstart ?? '');
+    },
+    end(): void {
+      for (const sv of supervisors) sv.kill();
+      for (const [pid, lstart] of runners) if (lstart && pidExists(pid) && processInfo(pid)?.lstart === lstart) process.kill(pid);
+    },
+  };
+}
+
+test('a second supervisor started while one is running leaves its note alone, starts no runner, and stops with exit code 0, so --stop still ends the first', WINDOWS_ONLY, async () => {
+  const mine = tidy();
+  const first = startSupervisor(startsBody());
+  mine.add(first.sv);
+  try {
+    const pidFile = inst.supervisorPidFileFor({ LOCALAPPDATA: first.dir });
+    await until('the first supervisor to note itself and start its runner', () => readHolder(pidFile)?.pid === first.sv.pid && startedIn(first.dir).length === 1);
+    mine.note(first.dir);
+    const before = fs.readFileSync(pidFile, 'utf8');
+
+    // The task started again, for the same user: the same folder for the note and the log.
+    const second = startSupervisor(startsBody(), first.dir);
+    mine.add(second.sv);
+    assert.equal(await exits(second.sv), true, 'the second supervisor stopped by itself');
+    assert.equal(second.sv.exitCode, 0, 'with the exit code that Task Scheduler does not start it again for');
+    assert.equal(fs.readFileSync(pidFile, 'utf8'), before, 'the first is still the one noted');
+    assert.deepEqual(startedIn(second.dir), [], 'it started no runner');
+    assert.match(fs.readFileSync(first.logFile, 'utf8'), new RegExp(`another supervisor \\(pid ${first.sv.pid}\\) is already running`));
+    assert.equal(first.sv.exitCode, null, 'and the first is still running');
+
+    const f = fake('unused', [TASK]);
+    f.d.supervisorPidFile = pidFile;
+    mayEnd(f);
+    assert.equal(inst.runInstaller(['--stop'], f.d), 0, f.lines.join('\n'));
+    assert.equal(f.lines[1], `Ended the supervisor (pid ${first.sv.pid}), which the task had not stopped.`);
+    assert.equal(await exits(first.sv), true);
+  } finally {
+    mine.note(first.dir);
+    mine.end();
+  }
+});
+
+test('two supervisors started together: one is noted and stays, the other stops without starting a runner', WINDOWS_ONLY, async () => {
+  for (let round = 1; round <= 3; round++) {
+    const mine = tidy();
+    const appData = tmpDir();
+    const a = startSupervisor(startsBody(), appData);
+    const b = startSupervisor(startsBody(), appData);
+    mine.add(a.sv);
+    mine.add(b.sv);
+    try {
+      const pidFile = inst.supervisorPidFileFor({ LOCALAPPDATA: appData });
+      await until(`one of the two to stop (round ${round})`, () => a.sv.exitCode !== null || b.sv.exitCode !== null);
+      const [stayed, stopped] = a.sv.exitCode === null ? [a, b] : [b, a];
+      assert.equal(stopped.sv.exitCode, 0, `round ${round}`);
+      assert.equal(readHolder(pidFile)?.pid, stayed.sv.pid, `the note names the one that stayed (round ${round})`);
+      await until('the one that stayed to start its runner', () => startedIn(stayed.dir).length === 1);
+      mine.note(stayed.dir);
+      assert.deepEqual(startedIn(stopped.dir), [], `the other started none (round ${round})`);
+      // Neither is cut short later: the note is still the survivor's, and it is still running.
+      await new Promise((r) => setTimeout(r, 400));
+      assert.equal(stayed.sv.exitCode, null, `round ${round}`);
+      assert.equal(readHolder(pidFile)?.pid, stayed.sv.pid, `round ${round}`);
+    } finally {
+      mine.end();
+    }
+  }
+});
+
+test('a supervisor takes over a note that names nothing running: a pid that has gone, one something else has now, or a note that does not read', WINDOWS_ONLY, async () => {
+  const other = startStandIn(path.join(tmpDir(), 'Other'));
+  const gone = spawnSync(process.execPath, ['-e', '0'], { windowsHide: true }).pid;
+  try {
+    const otherStart = BigInt(processInfo(other.pid)!.lstart);
+    const notes: Record<string, string> = {
+      'a pid that has gone': JSON.stringify({ pid: gone, lstart: String(otherStart) }),
+      'a pid something else has now, with the start time of an earlier process': JSON.stringify({ pid: other.pid, lstart: String(otherStart - 36_000_000_000n) }),
+      'a note with no start time': JSON.stringify({ pid: other.pid }),
+      'a note that is not JSON': 'half a line',
+      'an empty note': '',
+    };
+    for (const [what, text] of Object.entries(notes)) {
+      const mine = tidy();
+      const appData = tmpDir();
+      const pidFile = inst.supervisorPidFileFor({ LOCALAPPDATA: appData });
+      fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+      fs.writeFileSync(pidFile, text);
+      const s = startSupervisor(startsBody(), appData);
+      mine.add(s.sv);
+      try {
+        await until(`the supervisor to note itself over ${what}`, () => readHolder(pidFile)?.pid === s.sv.pid);
+        await until('its runner to start', () => startedIn(s.dir).length === 1);
+        mine.note(s.dir);
+        assert.equal(s.sv.exitCode, null, `it stayed over ${what}`);
+        assert.equal(pidExists(other.pid), true, 'the control is untouched');
+      } finally {
+        mine.end();
+      }
+    }
+  } finally {
+    await ended(other);
+  }
+});
+
+test('a supervisor that stops because the runner finds the folder in use removes its own note and not one another supervisor has put there', WINDOWS_ONLY, async () => {
+  // The stand-in runner puts another supervisor's note over this one's, as one that started in
+  // the meantime would have, then says another runner is in charge.
+  const body = `
+import fs from 'node:fs';
+import path from 'node:path';
+const note = path.join(process.env.LOCALAPPDATA, 'Threadbear', 'Logs', 'runner-supervisor.pid');
+fs.writeFileSync(note, JSON.stringify({ pid: 4242, lstart: '1' }) + '\\n');
+process.stderr.write('Another runner (pid 4242) is already using C:\\\\data; not starting.\\n');
+process.exit(1);
+`;
+  const { sv, dir } = startSupervisor(body);
+  try {
+    const file = inst.supervisorPidFileFor({ LOCALAPPDATA: dir });
+    assert.equal(await exits(sv), true, 'the supervisor ended itself');
+    assert.equal(sv.exitCode, 0);
+    assert.equal(readHolder(file)?.pid, 4242, 'the other note is still there');
+  } finally {
+    sv.kill();
+  }
+});
+
+// The same, without a supervisor to run it, so it holds on any machine.
+const noteText = (pid: number, lstart = '~134000000000000000'): string => JSON.stringify({ pid, lstart }) + '\n';
+
+test('claimNote makes the note when there is none, keeps the note of a running supervisor as it was, and takes one that names nothing running', async () => {
+  const file = path.join(tmpDir(), 'runner-supervisor.pid');
+  const mine = noteText(100);
+  assert.deepEqual(await sup.claimNote(file, mine, { alive: () => assert.fail('nobody to ask about') }), { state: 'noted' });
+  assert.equal(fs.readFileSync(file, 'utf8'), mine);
+
+  // The same one again is not another supervisor.
+  assert.deepEqual(await sup.claimNote(file, mine, { alive: () => assert.fail('it is this one') }), { state: 'noted' });
+
+  // Another that is running: its note stays, byte for byte.
+  const theirs = noteText(200, '~134000000000000001');
+  fs.writeFileSync(file, theirs);
+  const asked: number[] = [];
+  const running = async (n: { pid: number }) => (asked.push(n.pid), true);
+  assert.deepEqual(await sup.claimNote(file, mine, { alive: running }), { state: 'other', pid: 200 });
+  assert.equal(fs.readFileSync(file, 'utf8'), theirs);
+  assert.deepEqual(asked, [200]);
+
+  // One that names nothing running is the leftover of a supervisor that was ended hard.
+  assert.deepEqual(await sup.claimNote(file, mine, { alive: async () => false }), { state: 'noted' });
+  assert.equal(fs.readFileSync(file, 'utf8'), mine);
+});
+
+test('claimNote takes a note that does not read as its own, and a note with no folder to be made in is not an error', async () => {
+  for (const text of ['', 'half a line', '{"pid":', '{"pid":"7","lstart":"~1"}', '{"pid":7}', '[]', 'null']) {
+    const file = path.join(tmpDir(), 'runner-supervisor.pid');
+    fs.writeFileSync(file, text);
+    const mine = noteText(100);
+    assert.deepEqual(await sup.claimNote(file, mine, { alive: () => assert.fail('it names nobody'), settleMs: 0 }), { state: 'noted' }, JSON.stringify(text));
+    assert.equal(fs.readFileSync(file, 'utf8'), mine);
+  }
+  assert.deepEqual(await sup.claimNote(path.join(tmpDir(), 'no', 'such', 'folder', 'x.pid'), noteText(100)), { state: 'unwritable' });
+});
+
+test('claimNote waits for a note that another supervisor is still writing, rather than taking it for a broken one', async () => {
+  const file = path.join(tmpDir(), 'runner-supervisor.pid');
+  fs.writeFileSync(file, ''); // made, and not written yet
+  const theirs = noteText(200, '~134000000000000001');
+  // Written by a program of its own, shortly after: this one waits in place, so it cannot do it.
+  const writer = spawn(process.execPath, ['-e', `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(file)}, ${JSON.stringify(theirs)}), 150)`], { stdio: 'ignore', windowsHide: true });
+  try {
+    assert.deepEqual(await sup.claimNote(file, noteText(100), { alive: async () => true }), { state: 'other', pid: 200 });
+    assert.equal(fs.readFileSync(file, 'utf8'), theirs);
+  } finally {
+    await exits(writer);
+  }
+});
+
+test('claimNote does not remove a note another supervisor has made while it was finding out whether the old one was running', async () => {
+  const file = path.join(tmpDir(), 'runner-supervisor.pid');
+  fs.writeFileSync(file, noteText(300, '~134000000000000003')); // left by a supervisor that is gone
+  const newer = noteText(200, '~134000000000000001');
+  const asked: number[] = [];
+  const alive = async (n: { pid: number }) => {
+    asked.push(n.pid);
+    if (n.pid === 300) {
+      // The slow part is over and the answer is "not running", but another supervisor has
+      // taken the old note away and made its own in the meantime.
+      fs.writeFileSync(file, newer);
+      return false;
+    }
+    return true;
+  };
+  assert.deepEqual(await sup.claimNote(file, noteText(100), { alive }), { state: 'other', pid: 200 });
+  assert.equal(fs.readFileSync(file, 'utf8'), newer, 'the newer note is still there');
+  assert.deepEqual(asked, [300, 200]);
+});
+
+test('livingSupervisor says a note is of a running supervisor only when its pid is there and started when the note says', async () => {
+  const note = { pid: 4000, lstart: '~134000000000000000' };
+  const tools = (o: { exists?: boolean; image?: { lstart: string; path: string; slack: bigint } | null } = {}) => async () => ({
+    pidExists: () => o.exists ?? true,
+    processImage: () => (o.image === undefined ? { lstart: '134000000000000000', path: 'node.exe', slack: 0n } : o.image),
+    sameStartTime: (recorded: string, read: string, slack = 0n) => sameStartTime(recorded, read, slack),
+  });
+  assert.equal(await sup.livingSupervisor(note, tools()), true);
+  assert.equal(await sup.livingSupervisor(note, tools({ exists: false })), false, 'no such process');
+  assert.equal(await sup.livingSupervisor(note, tools({ image: { lstart: '133999000000000000', path: 'node.exe', slack: 0n } })), false, 'a process that has the pid now');
+  assert.equal(await sup.livingSupervisor(note, tools({ image: null })), false, 'cannot be told: the runner comes first');
+  assert.equal(await sup.livingSupervisor({ pid: process.pid, lstart: note.lstart }, tools()), false, 'this process is not another supervisor');
+  assert.equal(
+    await sup.livingSupervisor(note, async () => {
+      throw new Error('Cannot find module');
+    }),
+    false,
+    'the runner\'s files do not load',
+  );
+});
+
+test('livingSupervisor, with the runner\'s own functions, tells a running process from the same pid at another start time', WINDOWS_ONLY, async () => {
+  const other = startStandIn(path.join(tmpDir(), 'Other'));
+  try {
+    const started = processInfo(other.pid)!.lstart;
+    assert.equal(await sup.livingSupervisor({ pid: other.pid, lstart: started }), true);
+    assert.equal(await sup.livingSupervisor({ pid: other.pid, lstart: `~${started}` }), true, 'an estimate close to it, as a supervisor works its own out');
+    assert.equal(await sup.livingSupervisor({ pid: other.pid, lstart: String(BigInt(started) - 36_000_000_000n) }), false);
+    assert.equal(await sup.livingSupervisor({ pid: spawnSync(process.execPath, ['-e', '0'], { windowsHide: true }).pid!, lstart: started }), false, 'a pid that has gone');
+  } finally {
+    await ended(other);
+  }
+});
+
 test('--stop --dry-run and the other flags do not look at the runner, let alone end it', WINDOWS_ONLY, async () => {
   const runner = startStandIn(path.join(tmpDir(), 'Programs', 'Threadbear'));
   try {
@@ -917,7 +1176,7 @@ test('loadRunnerTools hands the script the runner\'s own process functions and f
   assert.equal(tools.sameStartTime, sameStartTime);
   assert.equal(tools.readHolder, readHolder);
   assert.equal(tools.endTree, killTreeWindows);
-  assert.equal(tools.dataDirFor(), dataDirFor());
+  assert.equal(tools.dataHomeFor, dataHomeFor);
 });
 
 // How the script is really used: a node that has loaded none of the runner's files, as the one the
@@ -928,7 +1187,7 @@ test('loadRunnerTools, in a fresh node that has loaded nothing of the runner, fi
   // Only the functions are loaded: nothing here reads Task Scheduler or the real install.
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, THREADBEAR_INSTALL_NO_RUN: '1' }, encoding: 'utf8', windowsHide: true });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stdout.trim(), 'dataDirFor,endTree,pidExists,processImage,readHolder,sameStartTime');
+  assert.equal(r.stdout.trim(), 'dataHomeFor,endTree,pidExists,processImage,readHolder,sameStartTime');
   // The desktop app takes stderr for part of the answer, and Node 24 says it is stripping types.
   assert.equal(r.stderr, '');
 });
@@ -1033,6 +1292,50 @@ test('the script\'s own dependencies carry the tools, this Node, and the data fo
   assert.equal(inst.runInstaller(['--stop'], f.d), 1);
   assert.deepEqual(f.events.slice(0, 1), [`/End ${TASK}`], 'the task is still ended');
   assert.equal(f.lines[1], 'Could not check whether the runner is still running (Cannot find module).');
+});
+
+// --stop looks for a runner the task left in the data folder the runner itself works out, with the
+// same variables in the same order (config.ts loadConfig). Looking anywhere else finds no runner.pid,
+// and --stop says the runner is not running while it is.
+test('--stop looks in the data folder the runner uses: the same variables in the same order, the names from before the rename, and ~ expanded', async () => {
+  const tools = await inst.loadRunnerTools();
+  const root = tmpDir();
+  const A = path.join(root, 'a');
+  const B = path.join(root, 'b');
+  const keys = ['THREADBEAR_HOME', 'THREADBEAR_DATA_DIR', 'THREADBARE_HOME', 'THREADBARE_DATA_DIR', 'HOME', 'USERPROFILE', 'APPDATA'];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  type Case = { what: string; env: Record<string, string>; want?: string };
+  const cases: Case[] = [
+    { what: 'nothing set: the default folder', env: {}, want: IS_WINDOWS ? path.join(root, 'AppData', 'Roaming', 'Threadbear') : path.join(root, 'Library', 'Application Support', 'Threadbear') },
+    { what: 'THREADBEAR_HOME', env: { THREADBEAR_HOME: A }, want: A },
+    { what: 'THREADBEAR_DATA_DIR', env: { THREADBEAR_DATA_DIR: B }, want: B },
+    { what: 'both of those: THREADBEAR_HOME wins', env: { THREADBEAR_HOME: A, THREADBEAR_DATA_DIR: B }, want: A },
+    { what: 'THREADBARE_HOME, the name before the rename', env: { THREADBARE_HOME: A }, want: A },
+    { what: 'THREADBARE_DATA_DIR', env: { THREADBARE_DATA_DIR: B }, want: B },
+    { what: 'THREADBARE_HOME stands in for THREADBEAR_HOME, so it comes before THREADBEAR_DATA_DIR', env: { THREADBARE_HOME: A, THREADBEAR_DATA_DIR: B }, want: A },
+    { what: 'THREADBEAR_HOME over THREADBARE_HOME', env: { THREADBARE_HOME: A, THREADBEAR_HOME: B }, want: B },
+    { what: 'an empty THREADBEAR_HOME falls through to THREADBEAR_DATA_DIR', env: { THREADBEAR_HOME: '', THREADBEAR_DATA_DIR: B }, want: B },
+    { what: '~/ in the name', env: { THREADBEAR_HOME: '~/tb-home' }, want: path.join(root, 'tb-home') },
+    { what: '~ alone', env: { THREADBEAR_DATA_DIR: '~' }, want: root },
+    { what: '~ in a name from before the rename', env: { THREADBARE_HOME: '~/old-home' }, want: path.join(root, 'old-home') },
+    ...(IS_WINDOWS ? [{ what: '~\\ in the name', env: { THREADBEAR_HOME: '~\\tb-home' }, want: path.join(root, 'tb-home') }] : []),
+    { what: 'a relative name', env: { THREADBEAR_HOME: path.join('rel', 'home') }, want: path.resolve('rel', 'home') },
+  ];
+  try {
+    for (const c of cases) {
+      // The profile is a throwaway one, so neither ~ nor the default folder is the real one.
+      for (const k of keys) delete process.env[k];
+      Object.assign(process.env, { HOME: root, USERPROFILE: root, APPDATA: path.join(root, 'AppData', 'Roaming') }, c.env);
+      const runner = loadConfig({ ...process.env, THREADBEAR_PORT: '0' }).home;
+      if (c.want !== undefined) assert.equal(runner, c.want, `the runner's folder for ${c.what}`);
+      assert.equal(inst.realDeps(tools).home, runner, c.what);
+    }
+  } finally {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
 });
 
 // ----------------------------------------------- the runner stays with its supervisor

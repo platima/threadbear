@@ -472,7 +472,11 @@ said otherwise.
   time is read for any process (from `Get-Process`, or from the system's
   process table, WMI, which can be read for a service or an elevated program
   too) and found not to be the one recorded. To read those it runs
-  `powershell.exe` for that one process id. Nothing is ever ended by name. The
+  `powershell.exe` for that one process id. The data folder it looks in for
+  `run\runner.pid` is the one the runner works out for itself from the same
+  variables (`THREADBEAR_HOME`, else `THREADBEAR_DATA_DIR`, each also under its
+  old `THREADBARE_` name, with a leading `~` expanded, else the default).
+  Nothing is ever ended by name. The
   exit code is 1 as well if the task is still running after the 10 seconds, or
   if the runner's files could not be loaded to look. The installers and the
   desktop app's quit ignore the exit code; `scripts/setup-sync.mjs` reads it,
@@ -483,14 +487,22 @@ said otherwise.
   which is what happens when the supervisor ends; the runner removes the
   variable from its environment, so nothing it starts inherits it. The
   supervisor's log also starts each run with a line giving its process id and
-  the `node.exe` it runs on.
+  the `node.exe` it runs on. Only one supervisor keeps `runner-supervisor.pid`:
+  one that starts while the file names a supervisor that is running (the
+  process is there and started at the time recorded) stops at once with exit
+  code 0, starts no runner and leaves the file as it was, so `--stop` can still
+  find the first. To tell, it runs `powershell.exe` once for that one process
+  id, and only when the file names a process that is running; a file that names
+  nothing running (the supervisor was ended hard, or the PC restarted), or that
+  does not read, is replaced.
 - **Where things are:** the data folder is `%APPDATA%\Threadbear` (the Mac's
   layout inside it), the runner's log is
   `%LOCALAPPDATA%\Threadbear\Logs\threadbear-runner.log`, and the supervisor's
   is `runner-supervisor.log` beside it, with `runner-supervisor.log.1` once it
   has passed 2 MB and `runner-supervisor.pid` (its process id and start time, a
   line of JSON, removed when it stops itself because another runner has the
-  folder). `%APPDATA%` is the roaming folder: on a PC with a roaming
+  folder, and never removed or replaced by another supervisor while the one it
+  names is running). `%APPDATA%` is the roaming folder: on a PC with a roaming
   profile or folder redirection it may be copied to a server, and the runner's
   token and secrets are in it. NTFS gives these files the profile's own
   permissions, so the 0600 and 0700 modes are not set; when `THREADBEAR_HOME`

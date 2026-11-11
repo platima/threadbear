@@ -287,7 +287,7 @@ export async function loadRunnerTools() {
       sameStartTime: proc.sameStartTime,
       readHolder: lock.readHolder,
       endTree: proc.killTreeWindows,
-      dataDirFor: platform.dataDirFor,
+      dataHomeFor: platform.dataHomeFor,
     };
   });
 }
@@ -576,9 +576,11 @@ export function realDeps(tools, toolsError) {
     task: taskNameFor(username),
     me: `${env.USERDOMAIN || os.hostname()}\\${username}`,
     node: process.execPath,
-    // The runner's data folder, where run/runner.pid says which process it is
-    // (config.ts loadConfig: THREADBEAR_HOME or THREADBEAR_DATA_DIR, else the default).
-    home: tools ? path.resolve(env.THREADBEAR_HOME || env.THREADBEAR_DATA_DIR || tools.dataDirFor()) : undefined,
+    // The runner's data folder, where run/runner.pid says which process it is: the
+    // runner's own answer (platform.ts dataHomeFor, which config.ts loadConfig takes
+    // its home from), so that the same variables count in the same order, the names
+    // from before the rename included, and a leading ~ is expanded.
+    home: tools ? tools.dataHomeFor(env) : undefined,
     procs: tools,
     procsError: toolsError,
     supervisorPidFile: supervisorPidFileFor(env),
