@@ -561,15 +561,23 @@ said otherwise.
   the app to quit (`Threadbear.exe --quit`) and ends the runner's task
   (`--runner --stop`), and starts the task again afterwards (`--runner
   --start`) if it is registered; uninstalling does the same quit and stop, then
-  runs `--runner --uninstall`. The setup exe then waits up to 20 seconds for
-  `node\node.exe` and `Threadbear.exe` in the folder to be free, with a
+  runs `--runner --uninstall`. The setup exe runs the quit and the stop as the
+  person who started Setup (the task is theirs, and is named for them), and
+  starts the task again the same way if it stops without installing. It then
+  waits up to 20 seconds for `node\node.exe` and `Threadbear.exe` in the folder
+  to be free, with a
   PowerShell script it carries (`installer/release-folder.ps1`, unpacked to
   Setup's own temporary folder and gone when Setup exits, run with Windows
   PowerShell). The script opens those two files for writing without changing
   them, and reads the list of programs running on the PC (through WMI) to find
-  any whose program file is inside the install folder. If one is still in the
-  way, Setup names it and asks, and a silent install does not ask, then ends it
-  by its process number: only one that belongs to the person installing, is
+  any whose program file is inside the install folder; one running from the
+  `node`, `runner`, `desktop` or `docs` folder is in the way even when those two
+  files are free. If one is still in the way, Setup names it (as the app, the
+  runner, a helper of the app, or something else started with its Node) and
+  asks. A `/VERYSILENT` install has nobody to ask and ends nothing unless it was
+  run with `/ENDRUNNING=1`. Once it may, it asks Task Scheduler to end the
+  runner's task once more, then ends the program by its process number: only one
+  that belongs to the person installing, is
   `Threadbear.exe` or sits in the `node`, `runner`, `desktop` or `docs` folder,
   and is the same process that was listed (its start time is read again just
   before). It does not end what that program started. Anything else it names

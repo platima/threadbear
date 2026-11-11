@@ -25,6 +25,11 @@ const REPO = path.resolve(import.meta.dirname, '..', '..', '..');
 const HELPER = path.join(REPO, 'installer', 'release-folder.ps1');
 const ISS = path.join(REPO, 'installer', 'threadbear.iss');
 const WINDOWS_ONLY = onlyOnWindows('The helper reads the Windows process table and the setup exe it belongs to is Windows only');
+// A test that starts programs and asks the helper about them runs Windows PowerShell three
+// or four times, each reading the whole process table: 3 s on a quiet PC and over 40 s with
+// every core busy (scripts/test-windows.mjs), against the run's limit of 30 s, or 60 on CI.
+// So these have a limit of their own, as main.test.ts does for its three runners.
+const WITH_PROGRAMS = { ...WINDOWS_ONLY, timeout: 120_000 };
 
 const helperText = fs.readFileSync(HELPER, 'utf8');
 const issText = fs.readFileSync(ISS, 'utf8');
@@ -67,12 +72,72 @@ test('the parts of the install the helper may end programs from are the folders 
   assert.match(helperText, /\$script:ManagedFiles = @\('Threadbear\.exe'\)/);
 });
 
-test('the setup keeps its own fallback: it never fails because the helper could not run, and it only ends a program after asking or when silent', () => {
+// One function or procedure of the setup's [Code], from its header to the `end;` at the start of a line.
+function pascal(code: string, name: string): string {
+  const found = new RegExp(`^(?:function|procedure) ${name}\\b[\\s\\S]*?^end;`, 'm').exec(code);
+  assert.ok(found, `${name} is in the [Code] section`);
+  return found[0];
+}
+
+test('the setup keeps its own fallback: it never fails because the helper could not run', () => {
   const code = section(issText, 'Code');
   assert.ok(/Setup carries on without the helper/.test(code), 'the fallback is written down where it happens');
-  assert.ok(/WizardSilent/.test(code), 'a silent install does not wait for an answer nobody gives');
-  assert.ok(/SuppressibleMsgBox\([^;]*IDYES\)/s.test(code), 'and /SUPPRESSMSGBOXES answers yes');
   assert.ok(!/taskkill|Stop-Process|\/IM\b/i.test(code), 'the setup itself ends nothing: the helper does, by process number');
+});
+
+test('a program is ended only after a yes: from a box that is answered no when boxes are suppressed, or from /ENDRUNNING=1', () => {
+  const code = section(issText, 'Code');
+  assert.match(pascal(code, 'EndSwitchGiven'), /\{param:ENDRUNNING\|0\}'\) = '1'/, 'the switch that says yes ahead of time');
+  assert.match(pascal(code, 'VerySilent'), /ParamStr\(I\)[^;]*'\/VERYSILENT'/, 'Inno has no function for /VERYSILENT alone, so the command line is read');
+  const ask = pascal(code, 'AskToEnd');
+  assert.match(ask, /VerySilent\(\)/, 'a very silent install has no box to answer, so it ends nothing without the switch');
+  assert.match(ask, /SuppressibleMsgBox\([^;]*, IDNO\) = IDYES/s, '/SUPPRESSMSGBOXES is a no');
+  // The only way to a yes without the box is the switch.
+  const yes = ask.split('Result := True;');
+  assert.equal(yes.length, 2, 'one place answers yes without asking');
+  assert.match(yes[0]!, /if EndSwitchGiven\(\) then/, 'and it is behind the switch');
+  assert.ok(!/WizardSilent/.test(ask), 'a plain /SILENT, which still shows boxes, is asked as well');
+});
+
+test('the dialog says in plain words what each program is, not only its command line', () => {
+  const code = section(issText, 'Code');
+  const role = pascal(code, 'RoleOf');
+  assert.match(role, /the \{#AppName\} app/);
+  assert.match(role, /the \{#AppName\} runner/);
+  // The install's own folders, not any folder with the name: a project on the Desktop is not a helper of the app.
+  assert.match(role, /Pos\(Base \+ '\\runner\\'/);
+  assert.match(role, /Pos\(Base \+ '\\desktop\\'/);
+  assert.match(pascal(code, 'DescribeHolders'), /RoleOf\(Dir, /);
+});
+
+test('an install asks the app to quit and ends the runner\'s task as the user who started Setup, as [Run] starts it again; the uninstaller is left as it was', () => {
+  const code = section(issText, 'Code');
+  assert.ok(/ExecAsOriginalUser\(/.test(pascal(code, 'RunAndLog')), 'Exec runs as the account Setup was elevated to, whose task name is another');
+  const stop = pascal(code, 'StopCopyIn');
+  assert.match(stop, /RunAndLog\(Exe, '--quit', Dir, AsOriginalUser\)/);
+  assert.match(stop, /RunAndLog\(Exe, '--runner --stop', Dir, AsOriginalUser\)/);
+  const prepare = pascal(code, 'PrepareToInstall');
+  assert.match(prepare, /StopCopyIn\(Previous, False, True\)/);
+  assert.match(prepare, /StopCopyIn\(Dir, False, True\)/);
+  assert.match(pascal(code, 'CurUninstallStepChanged'), /StopCopyIn\(ExpandConstant\('\{app\}'\), True, False\)/);
+  assert.match(code, /Setup is running as ' \+ GetUserNameString\(\)/, 'and the log says whose account that is');
+});
+
+test('what is left is first asked of Task Scheduler again, so that ending it by number does not look like a failure for the task to restart', () => {
+  const free = pascal(section(issText, 'Code'), 'FreeTheFolder');
+  const again = free.indexOf('StopRunnerIn(Dir)');
+  const end = free.indexOf("RunHelper('End'");
+  assert.ok(again > 0 && end > again, 'the task is stopped through the scheduler before anything is ended by number');
+  assert.match(pascal(section(issText, 'Code'), 'StopRunnerIn'), /RunAndLog\(Exe, '--runner --stop', Dir, True\)/);
+});
+
+test('when Setup stops, the runner it ended is started again and the message says the app and the runner were stopped', () => {
+  const prepare = pascal(section(issText, 'Code'), 'PrepareToInstall');
+  const refused = /if Result <> '' then\s+begin([\s\S]*?)\n  end;/.exec(prepare);
+  assert.ok(refused, 'a refusal has a branch of its own');
+  assert.match(refused[1]!, /StartRunnerAgain\(Previous, Dir\)/);
+  assert.match(refused[1]!, /asked \{#AppName\} to close and stopped its runner/, 'the person is told the app and the runner were stopped');
+  assert.match(pascal(section(issText, 'Code'), 'StartRunnerAgain'), /'--runner --start'/);
 });
 
 // ---------------------------------------------------------------- running the helper
@@ -113,9 +178,15 @@ function exited(child: ChildProcess, ms = 15_000): Promise<boolean> {
   });
 }
 
-// A program that does nothing, run from the copy of Node in `folder`.
-async function standIn(folder: string, script = 'setInterval(() => {}, 1000)'): Promise<ChildProcess> {
-  const child = spawn(exeIn(folder), ['-e', script], { stdio: 'ignore', windowsHide: true });
+// What every stand-in runs. It ends itself: when this test process is gone (the run
+// was killed with Ctrl-C, or crashed, so no `finally` ran) it leaves within a second,
+// and whatever happens it leaves after 150 seconds, so none stays behind holding its
+// files in the temp folder. Kept short: the helper cuts a command line at 400 characters.
+const STAND_IN = `const p=${process.pid};setInterval(()=>{try{process.kill(p,0)}catch(e){if(e.code==='ESRCH')process.exit(0)}},1000);setTimeout(()=>process.exit(0),15e4)`;
+
+// Runs `exe` with `args`, kept in `live` until it exits so the `after` hook ends it.
+async function launch(exe: string, args: string[]): Promise<ChildProcess> {
+  const child = spawn(exe, args, { stdio: 'ignore', windowsHide: true });
   live.add(child);
   child.once('exit', () => live.delete(child));
   await new Promise<void>((resolve, reject) => {
@@ -123,6 +194,19 @@ async function standIn(folder: string, script = 'setInterval(() => {}, 1000)'): 
     child.once('error', reject);
   });
   return child;
+}
+
+// A program that does nothing, run from the copy of Node in `folder`. `tail` goes on
+// the end of its script (a comment, say).
+function standIn(folder: string, tail = ''): Promise<ChildProcess> {
+  return launch(exeIn(folder), ['-e', STAND_IN + tail]);
+}
+
+// A copy of Node at `file`, whatever the folders on the way to it, to run as a stand-in.
+function copyNodeTo(file: string): string {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.copyFileSync(process.execPath, file);
+  return file;
 }
 
 async function endStandIn(child: ChildProcess): Promise<void> {
@@ -294,7 +378,7 @@ ConvertTo-Json -InputObject ([ordered]@{
 
 // ---------------------------------------------------------------- with stand-ins
 
-test('a held node.exe is reported with its process number and start time; the controls beside it are not', WINDOWS_ONLY, async () => {
+test('a held node.exe is reported with its process number and start time; the controls beside it are not', WITH_PROGRAMS, async () => {
   const held = await standIn(install);
   const controlA = await standIn(other);
   const controlB = await standIn(lookalike);
@@ -330,8 +414,8 @@ test('a held node.exe is reported with its process number and start time; the co
   }
 });
 
-test('a bar in a command line cannot split the fields of its line, which setup reads by position', WINDOWS_ONLY, async () => {
-  const held = await standIn(install, 'setInterval(() => {}, 1000); // one|two|three');
+test('a bar in a command line cannot split the fields of its line, which setup reads by position', WITH_PROGRAMS, async () => {
+  const held = await standIn(install, ' // one|two|three');
   try {
     const r = helper('List', install);
     const line = r.lines.find((l) => l.startsWith('PROC|'));
@@ -344,7 +428,7 @@ test('a bar in a command line cannot split the fields of its line, which setup r
   }
 });
 
-test('a running exe can be renamed, so a rename says free while the lock is real; opening it for writing says held', WINDOWS_ONLY, async () => {
+test('a running exe can be renamed, so a rename says free while the lock is real; opening it for writing says held', WITH_PROGRAMS, async () => {
   const held = await standIn(install);
   const renamed = path.join(path.dirname(exeIn(install)), 'node-renamed.exe');
   try {
@@ -361,7 +445,7 @@ test('a running exe can be renamed, so a rename says free while the lock is real
   }
 });
 
-test('the probe says free once the holder is ended through its own handle', WINDOWS_ONLY, async () => {
+test('the probe says free once the holder is ended through its own handle', WITH_PROGRAMS, async () => {
   const held = await standIn(install);
   try {
     assert.equal(helper('Probe', install).code, 11);
@@ -376,7 +460,7 @@ test('the probe says free once the holder is ended through its own handle', WIND
   assert.deepEqual(procs(r.lines), []);
 });
 
-test('Wait gives up when the time is up and says who holds the folder, and stops waiting the moment it is free', WINDOWS_ONLY, async () => {
+test('Wait gives up when the time is up and says who holds the folder, and stops waiting the moment it is free', WITH_PROGRAMS, async () => {
   const held = await standIn(install);
   try {
     const started = Date.now();
@@ -399,7 +483,7 @@ test('Wait gives up when the time is up and says who holds the folder, and stops
   }
 });
 
-test('End ends the stand-in under the folder by its number, and the controls are left running', WINDOWS_ONLY, async () => {
+test('End ends the stand-in under the folder by its number, and the controls are left running', WITH_PROGRAMS, async () => {
   const held = await standIn(install);
   const controlA = await standIn(other);
   const controlB = await standIn(lookalike);
@@ -422,7 +506,7 @@ test('End ends the stand-in under the folder by its number, and the controls are
   }
 });
 
-test('End leaves a program whose start time is not the one that was listed: the number may have been reused', WINDOWS_ONLY, async () => {
+test('End leaves a program whose start time is not the one that was listed: the number may have been reused', WITH_PROGRAMS, async () => {
   const held = await standIn(install);
   try {
     const target = procs(helper('List', install).lines)[0]!;
@@ -435,7 +519,7 @@ test('End leaves a program whose start time is not the one that was listed: the 
   }
 });
 
-test('End re-reads the file as well: a program outside the folder is left even when its number and start time are right', WINDOWS_ONLY, async () => {
+test('End re-reads the file as well: a program outside the folder is left even when its number and start time are right', WITH_PROGRAMS, async () => {
   const controlA = await standIn(other);
   const controlB = await standIn(lookalike);
   try {
@@ -453,7 +537,7 @@ test('End re-reads the file as well: a program outside the folder is left even w
   }
 });
 
-test('a program that setup was started from is never ended, even one in the folder that was asked for by number', WINDOWS_ONLY, async () => {
+test('a program that setup was started from is never ended, even one in the folder that was asked for by number', WITH_PROGRAMS, async () => {
   // The helper is run by a stand-in under the folder, as setup would be if it had been
   // downloaded into the install folder. That stand-in is its parent.
   const listOut = path.join(root, 'nested-list.txt');
@@ -493,6 +577,125 @@ console.log('finished');
     );
   } finally {
     await endStandIn(child);
+  }
+});
+
+// An install whose node.exe and Threadbear.exe are not there at all, so neither can be the
+// file that is held. What runs from it is some other image of the install, as a ConPTY host
+// (desktop\node_modules\@lydell\...\OpenConsole.exe) would.
+const bare = path.join(root, 'Bare');
+const hostImage = path.join(bare, 'desktop', 'node_modules', '@lydell', 'node-pty', 'host.exe');
+
+test('a program from another part of the install holds the folder, though node.exe and Threadbear.exe can be written to', WITH_PROGRAMS, async () => {
+  copyNodeTo(hostImage);
+  const host = await launch(hostImage, ['-e', STAND_IN]);
+  try {
+    // The two files are the probe's whole business, and neither is held.
+    const probe = helper('Probe', bare);
+    assert.equal(probe.code, 10, `${probe.lines.join(' ; ')} ${probe.stderr}`);
+
+    // Waiting and listing look at what is running as well.
+    const waited = helper('Wait', bare, ['-Seconds', '2']);
+    assert.equal(waited.code, 11, `${waited.lines.join(' ; ')} ${waited.stderr}`);
+    assert.equal(state(waited.lines), 'held');
+    assert.ok(!files(waited.lines).some((l) => l.startsWith('FILE|held|')), 'and no file is the reason');
+    const holders = procs(waited.lines);
+    assert.deepEqual(holders.map((p) => p.pid), [host.pid]);
+    assert.equal(holders[0]!.verdict, 'end');
+    assert.ok(same(holders[0]!.file, hostImage));
+    assert.equal(helper('List', bare).code, 11);
+
+    // Ended by its number like any other, after which the folder is free.
+    const target = holders[0]!;
+    const ended = helper('End', bare, ['-Expect', `${target.pid}:${target.start}`]);
+    assert.deepEqual(ended.lines.filter((l) => /^(ENDED|SKIPPED|GONE|FAILED)\|/.test(l)), [`ENDED|${host.pid}`]);
+    assert.ok(await exited(host), 'the holder is gone');
+    const after = helper('Wait', bare, ['-Seconds', '10']);
+    assert.equal(after.code, 10, `${after.lines.join(' ; ')} ${after.stderr}`);
+  } finally {
+    await endStandIn(host);
+  }
+});
+
+test('a program in the install folder that setup does not replace does not hold it', WITH_PROGRAMS, async () => {
+  const keeper = copyNodeTo(path.join(bare, 'unins000.exe'));
+  const running = await launch(keeper, ['-e', STAND_IN]);
+  try {
+    const r = helper('Wait', bare, ['-Seconds', '3']);
+    assert.equal(r.code, 10, `${r.lines.join(' ; ')} ${r.stderr}`);
+    assert.equal(state(r.lines), 'free');
+    // Listed when asked, and not ours to end.
+    const listed = procs(helper('List', bare).lines).filter((p) => p.pid === running.pid);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0]!.verdict, 'keep:not-part-of-install');
+  } finally {
+    await endStandIn(running);
+  }
+});
+
+test('End goes through the oldest first, so a supervisor that would start its runner again goes before the runner', WITH_PROGRAMS, async () => {
+  // A supervisor (windows-run.mjs does this) that starts a runner and starts it again 100 ms
+  // after it exits, and the runner. Both run from the install's node.exe.
+  const log = path.join(root, 'supervisor.log');
+  const script = path.join(root, 'supervisor.cjs');
+  fs.rmSync(log, { force: true });
+  fs.writeFileSync(
+    script,
+    `const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const [log, parent] = process.argv.slice(2);
+let starts = 0;
+function startRunner() {
+  starts++;
+  fs.appendFileSync(log, 'start ' + starts + '\\n');
+  const runner = spawn(process.execPath, ['-e', ${JSON.stringify(STAND_IN)}], { stdio: 'ignore', windowsHide: true });
+  runner.once('exit', () => setTimeout(startRunner, 100));
+}
+startRunner();
+setInterval(() => { try { process.kill(Number(parent), 0); } catch (e) { if (e.code === 'ESRCH') process.exit(0); } }, 1000);
+setTimeout(() => process.exit(0), 150000);
+`,
+  );
+  const supervisor = await launch(exeIn(install), [script, log, String(process.pid)]);
+  let supervisorStart: bigint | undefined;
+  try {
+    for (let i = 0; i < 100 && !(fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes('start 1')); i++) await new Promise((r) => setTimeout(r, 200));
+    // The runner is up once the helper lists two programs, the second a child of the first.
+    let listed: Proc[] = [];
+    for (let i = 0; i < 10 && listed.length < 2; i++) listed = procs(helper('List', install).lines);
+    assert.equal(listed.length, 2, 'the supervisor and its runner');
+    const sup = listed.find((p) => p.pid === supervisor.pid)!;
+    const runner = listed.find((p) => p.parent === supervisor.pid)!;
+    assert.ok(sup && runner, 'one is the other\'s parent');
+    supervisorStart = BigInt(sup.start);
+    assert.ok(supervisorStart < BigInt(runner.start), 'and the supervisor is the older');
+
+    // Asked for with the runner first: it is not the order they are ended in.
+    const r = helper('End', install, ['-Expect', `${runner.pid}:${runner.start},${sup.pid}:${sup.start}`]);
+    const outcome = r.lines.filter((l) => /^(ENDED|SKIPPED|GONE|FAILED)\|/.test(l));
+    assert.equal(outcome[0], `ENDED|${sup.pid}`, 'the supervisor first');
+    // A runner is in its supervisor's job, as windows-run.mjs starts it, so it may be gone with it.
+    assert.match(outcome[1] ?? '', new RegExp(`^(ENDED|GONE)\\|${runner.pid}$`));
+    assert.equal(outcome.length, 2);
+    assert.ok(await exited(supervisor), 'the supervisor is gone');
+    // Had the runner gone first, the supervisor would have started another by now.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    assert.equal(fs.readFileSync(log, 'utf8').trim().split(/\r?\n/).length, 1, `started once: ${fs.readFileSync(log, 'utf8')}`);
+    assert.equal(helper('Wait', install, ['-Seconds', '10']).code, 10, 'and nothing is left');
+  } finally {
+    await endStandIn(supervisor);
+    // A runner it started is its child, so ours to end; a run that failed part way could leave one.
+    if (supervisorStart !== undefined) {
+      for (const p of procs(helper('List', install).lines)) {
+        if (p.parent === supervisor.pid && BigInt(p.start) > supervisorStart) {
+          try {
+            process.kill(p.pid);
+          } catch {
+            // already gone
+          }
+        }
+      }
+    }
   }
 });
 

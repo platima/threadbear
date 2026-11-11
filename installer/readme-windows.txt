@@ -53,11 +53,14 @@ Updates
 The app says in its side rail when a newer release is out. Installing that
 release over this one is the update. The setup exe asks Threadbear to quit and
 its runner to stop first, then waits up to 20 seconds for their files to be
-free. If a program is still using them, it says which and offers to end it (a
-silent install ends it without asking, so it can finish). If something it may
-not end is in the way, it stops before changing anything, and says which file
-and program, so the old copy still works. The MSI asks Threadbear to quit too
-but does not wait for it, so quit Threadbear yourself before running the MSI.
+free. If a program is still using them, it says which and asks whether to end
+it. A /VERYSILENT install cannot ask, so it ends nothing unless it is run with
+/ENDRUNNING=1. If something it may not end, or was not allowed to end, is in
+the way, it stops before changing any file and says which file and program.
+Threadbear and its runner have been stopped by then: it asks the runner to
+start again, and you open Threadbear from the Start menu. The MSI asks
+Threadbear to quit too but does not wait for it, so quit Threadbear yourself
+before running the MSI.
 
 Licences
 --------

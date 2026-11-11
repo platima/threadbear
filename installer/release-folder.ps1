@@ -14,6 +14,12 @@
 #   End    End the programs named by -Expect, each only if it still passes every
 #          check below. -Expect is what a List or Wait showed: pid:start pairs.
 #
+# The folder is held when either file is, and also when a program is running whose
+# file is any part of the install that setup replaces (see below), as its being
+# deleted fails just the same: an OpenConsole.exe under desktop\node_modules that
+# outlived the app, say, with both files free. List and Wait look for that; Probe
+# does not, as it reads nothing but the two files.
+#
 # Everything but End only looks. It reads the process table (CIM, as wmic is
 # gone from current Windows 11) and opens the two files without writing to them.
 #
@@ -262,6 +268,24 @@ function Format-Field {
     return $s
 }
 
+# True when a program is running whose file is a part of the install that setup
+# replaces (Test-ManagedPath), whether or not it has either probed file open.
+# Setup itself and what it was started from are not counted: nothing could end
+# them, and they are not what a deletion fails on. A drive root has no such
+# programs, as with Get-Verdict.
+function Test-ManagedInUse {
+    param([string]$Path)
+    $table = Get-ProcessTable
+    $context = New-Context $Path $table
+    if ($context.RootFolder) { return $false }
+    foreach ($cim in $table) {
+        if (-not (Test-ManagedPath ([string]$cim.ExecutablePath) $context.Prefix)) { continue }
+        if ($context.Own.ContainsKey([int]$cim.ProcessId)) { continue }
+        return $true
+    }
+    return $false
+}
+
 function Get-HolderLines {
     param([string]$Path)
     $table = Get-ProcessTable
@@ -329,9 +353,19 @@ function Invoke-Main {
             { $_ -eq 'List' -or $_ -eq 'Wait' } {
                 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(0, $Seconds))
                 if ($Action -eq 'List') { $deadline = [DateTime]::UtcNow }
+                $notes = @()
                 while ($true) {
                     $files = @(Get-FolderFiles $Folder)
                     $state = Get-FolderState $files
+                    # Both files can be opened, but another part of the install may be running.
+                    # If the programs cannot be read the answer is the files', as before.
+                    if ($state -eq 'free') {
+                        try {
+                            if (Test-ManagedInUse $Folder) { $state = 'held' }
+                        } catch {
+                            $notes = @('NOTE|the programs could not be read: ' + (Format-Field $_.Exception.Message))
+                        }
+                    }
                     if ($state -ne 'held' -or [DateTime]::UtcNow -ge $deadline) { break }
                     Start-Sleep -Milliseconds 500
                 }
@@ -343,6 +377,8 @@ function Invoke-Main {
                     } catch {
                         $lines += 'NOTE|the programs could not be listed: ' + (Format-Field $_.Exception.Message)
                     }
+                } else {
+                    $lines += $notes
                 }
                 $code = @{ free = 10; held = 11; unknown = 12 }[$state]
             }

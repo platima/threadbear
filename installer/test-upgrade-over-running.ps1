@@ -14,16 +14,26 @@
 # What it checks, all with a setup run silently (/VERYSILENT /SUPPRESSMSGBOXES):
 #   1. A fresh install into <WorkDir>\Threadbear works.
 #   2. With a program running from <install>\node\node.exe (so the file cannot be
-#      replaced), a second run of the setup ends that program, and only that one,
-#      and completes the upgrade: the runner folder is rebuilt, which a marker
-#      file placed in it proves, and the setup log says what it ended.
-#      Controls that must survive: a copy of node.exe in another folder, and one
-#      in a sibling folder whose name starts the same (Threadbear2).
+#      replaced):
+#      a. a very silent run with no /ENDRUNNING=1 ends nothing: it waits, then
+#         stops with exit code 7 before [InstallDelete] has touched anything (the
+#         marker file placed in the runner folder is still there), the program is
+#         still running, and the log names it;
+#      b. the same run with /ENDRUNNING=1 ends that program, and only that one,
+#         and completes the upgrade: the runner folder is rebuilt, which the
+#         marker proves, and the setup log says what it ended.
+#      Controls that must survive both: a copy of node.exe in another folder, and
+#      one in a sibling folder whose name starts the same (Threadbear2).
 #   3. With node.exe held by something that is not a program running from the
-#      folder (a handle this script keeps open), a third run waits, then stops
-#      with exit code 7 before [InstallDelete] has touched anything: the marker is
-#      still there. Releasing the handle, a fourth run completes.
+#      folder (a handle this script keeps open), a run waits, then stops with
+#      exit code 7 before [InstallDelete] has touched anything, even with
+#      /ENDRUNNING=1: the marker is still there. Releasing the handle, a last run
+#      completes.
 # Then it uninstalls. Everything it starts is ended through the handle it kept.
+#
+# What it looks for in the log is the setup's own wording ("Setup stopped before
+# changing anything", threadbear.iss), not Inno Setup's for a refusal from
+# PrepareToInstall, which this script has no way to see.
 
 param(
     [Parameter(Mandatory = $true)][string]$Setup,
@@ -57,12 +67,13 @@ function Assert-That {
 
 # Runs the setup silently into $install and gives its exit code, how long it took
 # and its log. Waits for the setup process itself, not for anything it started.
+# $Extra is more of its command line, such as /ENDRUNNING=1.
 function Invoke-Setup {
-    param([string]$Label)
+    param([string]$Label, [string]$Extra = '')
     $log = Join-Path $WorkDir "$Label.log"
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = $Setup
-    $info.Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER /DIR=$install /LOG=$log"
+    $info.Arguments = ("/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER /DIR=$install /LOG=$log $Extra").Trim()
     $info.UseShellExecute = $false
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
     $process = [System.Diagnostics.Process]::Start($info)
@@ -181,9 +192,22 @@ try {
     Assert-That (-not $holder.HasExited) 'the program running from the install folder is up'
     Assert-That (-not (Test-Exclusive $nodeExe)) 'and it stops node.exe being opened for writing (the lock is real)'
 
-    $second = Invoke-Setup 'install-2-over-a-running-node'
+    # 2a. Nobody has said it may end what is running, and a very silent run cannot ask.
+    $refused = Invoke-Setup 'install-2a-no-switch'
+    $log = Get-LogText $refused
+    Assert-That ($refused.Code -eq 7) "with no /ENDRUNNING=1, a very silent upgrade over a running node.exe stops with exit code 7 (it exited $($refused.Code))"
+    Assert-That ($refused.Seconds -ge 18) "after waiting for the files to be let go of (it took $([int]$refused.Seconds) s)"
+    Assert-That ($log -match "release-folder: PROC\|$($holder.Id)\|") 'the setup log lists the program in the way by its process number'
+    Assert-That ($log -match 'this install is very silent and was not given /ENDRUNNING=1') 'and says why it did not end it'
+    Assert-That ($log -match 'Setup stopped before changing anything') 'and that it stopped before changing anything'
+    Assert-That (-not $holder.HasExited) 'the program that held node.exe is still running'
+    Assert-That (Test-Path -LiteralPath $marker) 'and the old install is untouched: [InstallDelete] had not run'
+    Assert-That (-not $controlOther.HasExited -and -not $controlLookalike.HasExited) 'and the controls are still running'
+
+    # 2b. Told it may.
+    $second = Invoke-Setup 'install-2b-end-running' '/ENDRUNNING=1'
     $log = Get-LogText $second
-    Assert-That ($second.Code -eq 0) "the upgrade over a running node.exe exits 0 (it exited $($second.Code))"
+    Assert-That ($second.Code -eq 0) "with /ENDRUNNING=1 the upgrade over a running node.exe exits 0 (it exited $($second.Code))"
     Assert-That ($holder.WaitForExit(10000)) 'the program that held node.exe was ended'
     Assert-That (-not $controlOther.HasExited) 'the copy of node.exe in another folder was left running'
     Assert-That (-not $controlLookalike.HasExited) 'and so was the one in Threadbear2'
@@ -198,11 +222,11 @@ try {
     # ---- 3. node.exe is held, but not by a program running from the folder
     New-Item -ItemType File -Force $marker -Value 'left over from the earlier install' | Out-Null
     $handle = Open-Exclusive $nodeExe
-    $third = Invoke-Setup 'install-3-file-held'
+    $third = Invoke-Setup 'install-3-file-held' '/ENDRUNNING=1'
     $log = Get-LogText $third
-    Assert-That ($third.Code -eq 7) "with node.exe held by something else, Setup stops with exit code 7 (it exited $($third.Code))"
+    Assert-That ($third.Code -eq 7) "with node.exe held by something else, Setup stops with exit code 7 even when it may end programs (it exited $($third.Code))"
     Assert-That ($third.Seconds -ge 18) "after waiting for it (it took $([int]$third.Seconds) s)"
-    Assert-That ($log -match 'PrepareToInstall failed') 'the log says why'
+    Assert-That ($log -match 'Setup stopped before changing anything') 'the log says it stopped before changing anything'
     Assert-That (Test-Path -LiteralPath $marker) 'and the old install is untouched: [InstallDelete] had not run'
     Assert-That (Test-Path -LiteralPath $nodeExe) 'node.exe is still there'
     Assert-That (-not $controlOther.HasExited -and -not $controlLookalike.HasExited) 'and the controls are still running'

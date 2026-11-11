@@ -262,15 +262,22 @@ arm64 packages are built by the same workflow but have not been seen running
 on an Arm PC yet.
 
 Upgrading over a copy that is still running: the setup exe asks Threadbear to
-quit and its runner to stop, waits up to 20 seconds for `node\node.exe` and
-`Threadbear.exe` to be free, and, if a program running from the install folder
-is still in the way, ends it (by its process number, and only one that belongs
-to the person installing; a silent run does not ask first). If something else
-is holding those files, it stops before it changes anything, with exit code 7
-when silent, and says which file and program. Give it `/LOG="<file>"` to read
-that afterwards, and `/SUPPRESSMSGBOXES` with `/VERYSILENT`, or the message
-shows in a box even though the install is silent. It needs Windows PowerShell
-for this and carries on as it used to without it. The MSI does none of this.
+quit and its runner to stop (as the person who started Setup), then waits up
+to 20 seconds for `node\node.exe` and `Threadbear.exe` to be free and for
+nothing to be running from the `node`, `runner`, `desktop` and `docs` folders.
+If a program running from the install folder is still in the way, it lists it
+and asks whether to end it (by its process number, and only one that belongs to
+the person installing). A `/VERYSILENT` run has nobody to ask and ends nothing
+unless it is given `/ENDRUNNING=1`, as what is left may be something of your
+own, such as a runner you started in a terminal. If anything is still in the
+way, or it was not told to end it, Setup stops before it changes a file, with
+exit code 7 when silent, and says which file and program. Threadbear and its
+runner have been stopped by then, so it asks the runner to start again; the
+files are as they were, and anything the runner was part way through has ended.
+Give it `/LOG="<file>"` to read what it found afterwards, and
+`/SUPPRESSMSGBOXES` with `/VERYSILENT`, or the message shows in a box even
+though the install is silent. It needs Windows PowerShell for this and carries
+on as it used to without it. The MSI does none of this.
 
 **From a checkout,** to work on it or to build the packages:
 

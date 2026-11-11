@@ -17,13 +17,18 @@
 ; as the MSI does.
 ;
 ; An upgrade over a copy that is still running first asks the app to quit and
-; ends the runner's task, then waits (up to 20 seconds) until node\node.exe and
-; Threadbear.exe can be written to. If something still holds them, the setup log
-; says what, the person is asked whether to end it (a silent install says yes),
-; and if anything still holds them after that, Setup stops in PrepareToInstall,
-; before [InstallDelete] has removed a file: exit code 7 when silent, the old
-; install untouched. release-folder.ps1 does the looking and the ending (see
-; PrepareToInstall below). With no PowerShell it carries on as it always did.
+; ends the runner's task (as the user who started Setup, whose they are), then
+; waits (up to 20 seconds) until node\node.exe and Threadbear.exe can be written
+; to and nothing is running from the parts of the install it replaces. If
+; something still holds them, the setup log says what and the person is asked
+; whether to end it. A very silent install cannot be asked, and ends nothing
+; unless it was run with /ENDRUNNING=1: what is left may be the person's own (a
+; runner started in a terminal, a dev server on Threadbear's Node). If anything
+; still holds the folder after that, Setup stops in PrepareToInstall, before
+; [InstallDelete] has removed a file: exit code 7 when silent, the old install's
+; files untouched, and the runner started again. release-folder.ps1 does the
+; looking and the ending (see PrepareToInstall below). With no PowerShell it
+; carries on as it always did.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -251,11 +256,28 @@ end;
 
 // Runs a program and says in the log how it ended. What it was asked to do is
 // not checked here (neither of these says anything of use); the folder is.
-procedure RunAndLog(const Exe, Params, WorkDir: String);
+//
+// AsOriginalUser runs it as the account that started Setup. That is not the one
+// Setup runs as when a standard user chose "all users" and typed an
+// administrator's name, and the runner's task is named for, and belongs to, the
+// first of them: stopped as the administrator it finds no task. It is the same
+// as Exec when Setup is not elevated, and falls back to Exec if it cannot be
+// done. The uninstaller does not use it.
+procedure RunAndLog(const Exe, Params, WorkDir: String; const AsOriginalUser: Boolean);
 var
   Code: Integer;
+  Ran: Boolean;
 begin
-  if Exec(Exe, Params, WorkDir, SW_HIDE, ewWaitUntilTerminated, Code) then
+  Ran := False;
+  if AsOriginalUser then
+  begin
+    Ran := ExecAsOriginalUser(Exe, Params, WorkDir, SW_HIDE, ewWaitUntilTerminated, Code);
+    if not Ran then
+      Log(Exe + ' ' + Params + ' could not be run as the user who started Setup: ' + SysErrorMessage(Code) + ' (' + IntToStr(Code) + '), so it is run as Setup');
+  end;
+  if not Ran then
+    Ran := Exec(Exe, Params, WorkDir, SW_HIDE, ewWaitUntilTerminated, Code);
+  if Ran then
     Log(Exe + ' ' + Params + ' ended with exit code ' + IntToStr(Code))
   else
     Log(Exe + ' ' + Params + ' could not be run: ' + SysErrorMessage(Code) + ' (' + IntToStr(Code) + ')');
@@ -265,16 +287,47 @@ end;
 // moment to let go of their files (the uninstaller, which has no helper, does
 // that; an install waits on the files themselves instead). Does nothing when
 // there is no copy to ask.
-procedure StopCopyIn(const Dir: String; const Settle: Boolean);
+procedure StopCopyIn(const Dir: String; const Settle, AsOriginalUser: Boolean);
 var
   Exe: String;
 begin
   if Dir = '' then Exit;
   Exe := Dir + '\{#AppExe}';
   if not FileExists(Exe) then Exit;
-  RunAndLog(Exe, '--quit', Dir);
-  RunAndLog(Exe, '--runner --stop', Dir);
+  RunAndLog(Exe, '--quit', Dir, AsOriginalUser);
+  RunAndLog(Exe, '--runner --stop', Dir, AsOriginalUser);
   if Settle then Sleep(1500);
+end;
+
+// Asks Task Scheduler to end the runner's task once more, for what the first ask
+// did not finish. The task is set to start again after a failure (a minute on,
+// up to 999 times), and a supervisor ended by its process number ends with an
+// error; ended through the scheduler it is a stop the person asked for, which
+// is not restarted. So this comes before anything is ended by number, or the
+// supervisor could come back while the files are being replaced.
+procedure StopRunnerIn(const Dir: String);
+var
+  Exe: String;
+begin
+  Exe := Dir + '\{#AppExe}';
+  if FileExists(Exe) then
+    RunAndLog(Exe, '--runner --stop', Dir, True);
+end;
+
+// Starts the runner's task again when Setup stops without installing. The old
+// files are as they were, but the app has been asked to quit and the task ended,
+// and nothing else starts the runner: the [Run] entry that does it only runs
+// after an install that finishes. Does nothing when no task is registered (the
+// command says so and exits). The app is not opened again; that is for the
+// person to do.
+procedure StartRunnerAgain(const Previous, Dir: String);
+var
+  Folder: String;
+begin
+  Folder := FolderWithApp(Previous);
+  if Folder = '' then Folder := FolderWithApp(Dir);
+  if Folder = '' then Exit;
+  RunAndLog(Folder + '\{#AppExe}', '--runner --start', Folder, True);
 end;
 
 // ------------------------------------------------------------------ the helper
@@ -386,7 +439,7 @@ end;
 function WhyNot(const Verdict: String): String;
 begin
   if Verdict = 'keep:other-owner' then
-    Result := 'it is not running as you'
+    Result := 'it belongs to another user than the one running Setup'
   else if Verdict = 'keep:setup-itself' then
     Result := 'it is what Setup was started from'
   else if Verdict = 'keep:start-time-unreadable' then
@@ -395,10 +448,32 @@ begin
     Result := 'it is not clearly part of {#AppName}';
 end;
 
+// What a program is, in plain words, from its file and command line: the app,
+// the runner (its supervisor or the runner itself, which are run from Dir's
+// runner folder), a helper of the app (run from Dir's desktop folder), or
+// something else started with the install's own Node, which is a dev server or
+// a command a thread ran. The folders are Dir's own, not any folder of that
+// name: a project on the Desktop is not a helper of the app.
+function RoleOf(const Dir, ProcFile, Command: String): String;
+var
+  Lower, Base: String;
+begin
+  Lower := Lowercase(ProcFile + ' ' + Command);
+  Base := Lowercase(RemoveBackslash(Dir));
+  if SameText(ExtractFileName(ProcFile), '{#AppExe}') then
+    Result := 'the {#AppName} app'
+  else if Pos(Base + '\runner\', Lower) > 0 then
+    Result := 'the {#AppName} runner'
+  else if Pos(Base + '\desktop\', Lower) > 0 then
+    Result := 'a helper of the {#AppName} app'
+  else
+    Result := 'something started with {#AppName}''s own Node';
+end;
+
 // Reads the programs the report lists. Endable gets a line for each that Setup
 // may end and Other one for each that it may not (and why). Pairs is the
 // "number:start" of the first kind, as the helper wants them back.
-procedure DescribeHolders(var Report: TArrayOfString; var Endable, Other, Pairs: String);
+procedure DescribeHolders(const Dir: String; var Report: TArrayOfString; var Endable, Other, Pairs: String);
 var
   I: Integer;
   Line, ProcId, ProcStart, ProcName, Verdict, ProcFile, Command, Shown: String;
@@ -418,8 +493,9 @@ begin
       Verdict := TakeField(Line);
       ProcFile := TakeField(Line);
       Command := Line;
+      Shown := '  ' + ProcName + ' (process ' + ProcId + ', ' + RoleOf(Dir, ProcFile, Command) + '): ';
       if Command = '' then Command := ProcFile;
-      Shown := '  ' + ProcName + ' (process ' + ProcId + '): ' + Copy(Command, 1, 200) + #13#10;
+      Shown := Shown + Copy(Command, 1, 200) + #13#10;
       if Verdict = 'end' then
       begin
         Endable := Endable + Shown;
@@ -433,8 +509,10 @@ begin
 end;
 
 // What PrepareToInstall says when the files are still held: which, by what, and
-// that nothing has been changed (it is said before [InstallDelete] runs).
-function StuckMessage(const Dir: String; var Report: TArrayOfString): String;
+// that nothing has been changed (it is said before [InstallDelete] runs). With
+// Offer, and programs Setup may end, it also says how to have a silent install
+// end them.
+function StuckMessage(const Dir: String; var Report: TArrayOfString; const Offer: Boolean): String;
 var
   I: Integer;
   Line, Held, Endable, Other, Pairs: String;
@@ -447,24 +525,58 @@ begin
       if TakeField(Line) = 'held' then
         Held := Held + '  ' + Line + #13#10;
   end;
-  DescribeHolders(Report, Endable, Other, Pairs);
-  Result := '{#AppName} is still running, so Setup cannot replace its files in ' + Dir + '.' + #13#10#13#10 +
-    'Windows says these are open:' + #13#10 + Held;
+  DescribeHolders(Dir, Report, Endable, Other, Pairs);
+  Result := '{#AppName} is still running, so Setup cannot replace its files in ' + Dir + '.' + #13#10;
+  // Nothing is open when what is in the way is only a program running from the folder.
+  if Held <> '' then
+    Result := Result + #13#10 + 'Windows says these are open:' + #13#10 + Held;
   if (Endable <> '') or (Other <> '') then
     Result := Result + #13#10 + 'Running from that folder:' + #13#10 + Endable + Other
   else
     Result := Result + #13#10 + 'Setup could not tell which program has them open.' + #13#10;
-  Result := Result + #13#10 + 'Close it, or end it in Task Manager, then run Setup again. Nothing in the folder has been changed.';
+  Result := Result + #13#10 + 'Close it, or end it in Task Manager, then run Setup again.';
+  if Offer and (Endable <> '') then
+    Result := Result + ' Or run Setup again with /ENDRUNNING=1, and it ends the programs listed above that it may.';
+  Result := Result + ' Nothing in the folder has been changed.';
 end;
 
-// Whether Setup may end the programs listed. A silent install cannot be asked,
-// and says yes: the old copy is being replaced, and ending the runner's task
-// already ends it hard. /SUPPRESSMSGBOXES gives the same yes to a visible one.
+// True when Setup was run with /ENDRUNNING=1: the person (or the script that
+// runs Setup) has said ahead of time that what is left running may be ended.
+function EndSwitchGiven(): Boolean;
+begin
+  Result := ExpandConstant('{param:ENDRUNNING|0}') = '1';
+end;
+
+// True when Setup was run with /VERYSILENT, which shows nothing at all (Inno has
+// WizardSilent for /SILENT and /VERYSILENT together, and nothing for this one).
+function VerySilent(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/VERYSILENT') = 0 then
+      Result := True;
+end;
+
+// Whether Setup may end the programs listed. Yes ahead of time with
+// /ENDRUNNING=1. Otherwise it asks. A very silent install has nobody to ask, and
+// says no: what is left running may be the person's own (a runner they started
+// in a terminal, a dev server on Threadbear's Node), the old copy is untouched
+// and the message says how to have it ended. /SUPPRESSMSGBOXES gives the box its
+// default, which is no. A plain /SILENT still shows the box.
 function AskToEnd(const Dir, Endable: String): Boolean;
 begin
-  if WizardSilent then
+  if EndSwitchGiven() then
   begin
+    Log('release-folder: /ENDRUNNING=1 was given, so what holds the folder may be ended');
     Result := True;
+    Exit;
+  end;
+  if VerySilent() then
+  begin
+    Log('release-folder: this install is very silent and was not given /ENDRUNNING=1, so nothing is ended');
+    Result := False;
     Exit;
   end;
   Result := SuppressibleMsgBox(
@@ -472,7 +584,7 @@ begin
     Endable + #13#10 +
     'Setup can end these for you. Anything they are doing stops straight away.' + #13#10#13#10 +
     'End them and carry on?',
-    mbConfirmation, MB_YESNO, IDYES) = IDYES;
+    mbConfirmation, MB_YESNO, IDNO) = IDYES;
 end;
 
 // Waits for the files this setup replaces to be free. Returns '' when they are
@@ -513,12 +625,14 @@ begin
   end;
 
   // Still held after the wait.
-  DescribeHolders(Report, Endable, Other, Pairs);
+  DescribeHolders(Dir, Report, Endable, Other, Pairs);
   if Pairs <> '' then
   begin
     if AskToEnd(Dir, Endable) then
     begin
       Log('release-folder: ending ' + Pairs);
+      // Through Task Scheduler once more first (see StopRunnerIn), then by number.
+      StopRunnerIn(Dir);
       if RunHelper('End', Dir, ' -Expect "' + Pairs + '"', Ended) then LogReport(Ended);
       if RunHelper('Wait', Dir, ' -Seconds ' + IntToStr(AfterEndSeconds), After) then
       begin
@@ -527,7 +641,7 @@ begin
         if Condition = 'free' then Exit;
         if Condition = 'held' then
         begin
-          Result := StuckMessage(Dir, After);
+          Result := StuckMessage(Dir, After, False);
           Log('Setup stopped before changing anything: ' + Result);
           Exit;
         end;
@@ -537,10 +651,10 @@ begin
       end;
     end
     else
-      Log('release-folder: the person chose not to end them');
+      Log('release-folder: they are not being ended');
   end;
 
-  Result := StuckMessage(Dir, Report);
+  Result := StuckMessage(Dir, Report, WizardSilent and not EndSwitchGiven());
   Log('Setup stopped before changing anything: ' + Result);
 end;
 
@@ -660,21 +774,30 @@ begin
 end;
 
 // Before [InstallDelete] and the copy, so a message from here leaves the old
-// install exactly as it was. The copy that is on record is asked to quit and its
-// runner to stop, and so is whatever is in the folder being installed to (it may
-// not be on record: a zip, or the other registry hive), then the files that
-// copy would replace are waited for (FreeTheFolder).
+// install's files exactly as they were. The copy that is on record is asked to
+// quit and its runner to stop, and so is whatever is in the folder being
+// installed to (it may not be on record: a zip, or the other registry hive), both
+// as the user who started Setup, then the files that copy would replace are
+// waited for (FreeTheFolder). A refusal starts the runner again and says that
+// the app and the runner were stopped.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Dir, Previous: String;
 begin
   Dir := ExpandConstant('{app}');
   Previous := PreviousInstall();
-  Log('Installing to ' + Dir + '; an earlier copy is on record at "' + Previous + '"');
-  StopCopyIn(Previous, False);
+  Log('Installing to ' + Dir + '; an earlier copy is on record at "' + Previous + '"; Setup is running as ' + GetUserNameString());
+  StopCopyIn(Previous, False, True);
   if not SameText(Previous, Dir) then
-    StopCopyIn(Dir, False);
+    StopCopyIn(Dir, False, True);
   Result := FreeTheFolder(Dir);
+  if Result <> '' then
+  begin
+    StartRunnerAgain(Previous, Dir);
+    Log('Setup asked the runner to start again');
+    Result := Result + #13#10#13#10 +
+      'To make room, Setup asked {#AppName} to close and stopped its runner, so anything either was part way through has ended. Setup has asked the runner to start again. Open {#AppName} from the Start menu to carry on.';
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -683,5 +806,5 @@ begin
   // removes `tb` whichever of the two comes first. The uninstaller cannot
   // unpack the helper, so it only gives the files a moment.
   if CurUninstallStep = usUninstall then
-    StopCopyIn(ExpandConstant('{app}'), True);
+    StopCopyIn(ExpandConstant('{app}'), True, False);
 end;
