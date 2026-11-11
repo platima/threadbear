@@ -31,7 +31,9 @@
 //                                this running (and holding node.exe open). When
 //                                the shell quits it closes the pipe on purpose,
 //                                and kills this only if it is still there 3
-//                                seconds later (src-tauri/src/lib.rs, stop_bridge).
+//                                seconds later, or at once when the installer
+//                                asked for the quit (src-tauri/src/lib.rs,
+//                                end_in_order).
 //   THREADBEAR_BRIDGE_DEV        "1": also trust pages served by the vite dev
 //                                server on port 5183 (npm run dev).
 //   THREADBEAR_BRIDGE_KEY, THREADBEAR_DIST, THREADBEAR_HOME, THREADBEAR_PORT
@@ -521,9 +523,11 @@ server.listen(tryPort, '127.0.0.1');
 
 // The app shell that started this keeps the other end of our standard input
 // open for as long as it lives. The shell closes it itself when it quits, so the
-// exit handler above runs (the Terminal's shells are asked to stop), and the
-// system closes it if the shell is killed or crashes, which is the one case it
-// can't tidy up after itself.
+// exit handler above runs (it ends the Terminal's shells, by their process ids on
+// Windows) and the shell can log whether this went by itself. The system closes it
+// if the shell is killed or crashes, which is the one case the shell can't tidy up
+// after itself; the system also closes the Terminal's consoles when this is killed
+// outright, so the shells go either way.
 if (process.env.THREADBEAR_BRIDGE_WATCH_STDIN === '1') {
   const quit = () => process.exit(0);
   process.stdin.on('end', quit);

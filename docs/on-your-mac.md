@@ -487,8 +487,9 @@ said otherwise.
   `%LOCALAPPDATA%\dev.threadbear.desktop`, both Tauri's standard places). It
   starts `node desktop/bridge/bridge.ts` on a loopback port and stops it on
   quitting, by closing its input (it ends itself, and the Terminal's shells
-  with it) and killing it if it has not gone after 3 seconds; if the app is
-  killed, the bridge notices and exits by itself. The
+  with it) and killing it if it has not gone after 3 seconds, or at once when
+  the installer asked for the quit (a second launch with `--quit`); if the app
+  is killed, the bridge notices and exits by itself. The
   page it shows may pick a folder, show a toast and open an `http`, `https` or
   `mailto` link in your browser, and nothing else (`capabilities/default.json`).
 - **The desktop bridge** (`desktop-tauri/bridge/bridge.ts`) listens on `127.0.0.1`
@@ -512,7 +513,10 @@ said otherwise.
   nothing. The shells are the bridge's own child processes. A thread's shell
   stops when the thread is archived or deleted, End shell stops one, and all of
   them stop when the app quits (a shell that outlives a page reload is kept by
-  the bridge, which is why the window can be reloaded without losing it).
+  the bridge, which is why the window can be reloaded without losing it). On
+  Windows the bridge ends the shells as it exits by running `taskkill /F /T`
+  once, on the process ids of the shells it started and still has running, so
+  their programs go too.
   To list the shells it looks for `pwsh.exe` on the PATH and in `Program Files\PowerShell\7`,
   `powershell.exe` and `cmd.exe` in `System32`, Git for Windows' `bash.exe` as the
   runner does, and, if `System32\wsl.exe` is there, runs `wsl.exe -l -q` to

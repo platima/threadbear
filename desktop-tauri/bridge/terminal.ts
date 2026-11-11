@@ -21,8 +21,10 @@
 // stops it (the thread was archived or deleted), when it exits, and when the bridge
 // ends, which the app shell does when the app quits.
 
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
 import { command, pick, shellsNow, type Shell, type ShellList } from './shells.ts';
@@ -52,6 +54,22 @@ export function realSpawn(): Spawn {
     throw new Error(`The terminal is not available in this copy of Threadbear: ${(e as Error).message.split('\n')[0]}`);
   }
   return (file, args, opts) => pty.spawn(file, args, { name: 'xterm-256color', cols: opts.cols, rows: opts.rows, cwd: opts.cwd, env: opts.env });
+}
+
+/**
+ * Ends these processes and everything they started, now, and waits for taskkill to say it has.
+ * Windows only. Each id is a shell this bridge started and has not seen end. Whatever it
+ * can't end (a shell that has just gone, or taskkill taking longer than 2 seconds) is let go:
+ * the bridge is ending.
+ */
+export function taskkillTrees(pids: number[]): void {
+  if (pids.length === 0) return;
+  const exe = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe');
+  try {
+    execFileSync(exe, ['/F', '/T', ...pids.flatMap((p) => ['/PID', String(p)])], { stdio: 'ignore', windowsHide: true, timeout: 2000 });
+  } catch {
+    // some had gone already, or it ran out of time
+  }
 }
 
 const SCROLLBACK = 256 * 1024;
@@ -105,6 +123,8 @@ export class Terminals {
     platform?: NodeJS.Platform;
     home?: string;
     isDir?: (dir: string) => boolean;
+    /** What ends the shells' processes when the bridge ends on Windows; the real one is taskkillTrees. */
+    endProcesses?: (pids: number[]) => void;
   };
 
   constructor(deps: Terminals['deps'] = {}) {
@@ -303,9 +323,30 @@ export class Terminals {
     for (const key of [...this.sessions.keys()]) if (!wanted.has(key)) this.stop(key);
   }
 
+  /**
+   * Ends every shell, for the bridge's own end. On Windows node-pty's kill forks a helper from this
+   * Node to list the console's processes and ends them in a callback, which an exiting process never
+   * runs; with a dozen shells that left the bridge stuck instead of ending (terminal.test.ts), and
+   * every helper holds node.exe open for a moment. So there the shells' own process ids go to
+   * taskkill, in one call, and the pty is left to the system, as it was when the bridge was killed.
+   */
   stopAll(): void {
     this.cancelStarts();
-    for (const key of [...this.sessions.keys()]) this.stop(key);
+    const end = this.endProcessesWhenEnding();
+    if (!end) {
+      for (const key of [...this.sessions.keys()]) this.stop(key);
+      return;
+    }
+    const pids = [...this.sessions.values()].filter((s) => s.exited === undefined && s.pty.pid > 0).map((s) => s.pty.pid);
+    for (const s of this.sessions.values()) s.sinks.clear();
+    this.sessions.clear();
+    end(pids);
+  }
+
+  // Only a real node-pty has real process ids, so a stand-in is never handed to taskkill.
+  private endProcessesWhenEnding(): ((pids: number[]) => void) | undefined {
+    if ((this.deps.platform ?? process.platform) !== 'win32') return undefined;
+    return this.deps.endProcesses ?? (this.deps.spawn ? undefined : taskkillTrees);
   }
 
   /** Serves one page connection until it closes. */

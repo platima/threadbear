@@ -29,8 +29,14 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 // The running bridge. Its standard input stays open for as long as this program
 // lives: the bridge ends itself when that pipe closes, which Windows does for
 // us if this program is killed or crashes (bridge.ts, THREADBEAR_BRIDGE_WATCH_STDIN),
-// and which quitting does on purpose (stop_bridge).
+// and which quitting does on purpose (end_in_order).
 struct Bridge(Mutex<Option<Child>>);
+
+// Set when this copy is ended by a second launch with `--quit`, which is how the installer
+// asks for the files to be let go. That quit cannot wait for the bridge to wind itself up:
+// the installer is about to replace the files its node.exe has open, so the bridge is killed
+// at once, as it was before the quit gave it time.
+struct QuitForSetup(AtomicBool);
 
 // Whether closing the window may leave the app running in the tray: on Windows
 // once the tray icon is made. Not on Linux, where making an indicator does not mean
@@ -46,9 +52,9 @@ struct UiStarted(AtomicBool);
 // How long to wait for the bridge to say it is ready.
 const BRIDGE_READY: Duration = Duration::from_secs(20);
 
-// How long quitting waits for the bridge to end itself once its input is closed,
-// before it is killed. Its own exit asks the Terminal's shells to stop, and each
-// of those can take a moment, so a hung one must not hold the quit up for long.
+// How long quitting gives the bridge to end itself once its input is closed, counted from
+// the moment it is closed, before it is killed. A bridge that is stuck must not hold the
+// quit up for long.
 const BRIDGE_STOP_WAIT: Duration = Duration::from_secs(3);
 
 // How long quitting waits for the runner to be stopped (when it is one that runs only
@@ -838,6 +844,9 @@ enum BridgeEnd {
     Closed(ExitStatus),
     // It was still there when the wait was over, and was killed.
     Killed,
+    // It was killed without being given any time, as the quit came from a second launch
+    // with --quit.
+    KilledAtOnce,
 }
 
 impl BridgeEnd {
@@ -847,22 +856,47 @@ impl BridgeEnd {
             BridgeEnd::Already(status) => format!("had ended before quit asked it to ({status})"),
             BridgeEnd::Closed(status) => format!("ended itself once its input was closed ({status})"),
             BridgeEnd::Killed => format!("was still running {} seconds after its input was closed, so it was killed", wait.as_secs()),
+            BridgeEnd::KilledAtOnce => "was killed at once, as the quit came from a second launch with --quit (the installer is about to replace its files)".to_string(),
         }
     }
 }
 
-// Ends the bridge the way it is built to end: its standard input is closed, which it
-// takes as the app being gone, and it runs its own exit handler (which stops the
-// Terminal's shells) before it goes. Killing it outright skipped that. If it is still
-// there after `wait`, it is killed, so a hung bridge cannot hold the quit up, and the
-// child has been waited for either way. Polls with try_wait, as std has no wait with a limit.
-fn stop_bridge(child: &mut Child, wait: Duration) -> BridgeEnd {
+// How quitting stops the bridge.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum BridgeStop {
+    // Close its input, which it takes as the app being gone, and give it this long, counted
+    // from then, to end by itself.
+    Gracefully(Duration),
+    // Kill it now.
+    AtOnce,
+}
+
+// A quit that the installer asked for kills the bridge at once; any other gives it time.
+fn bridge_stop(for_setup: bool) -> BridgeStop {
+    if for_setup {
+        BridgeStop::AtOnce
+    } else {
+        BridgeStop::Gracefully(BRIDGE_STOP_WAIT)
+    }
+}
+
+// The first step of ending the bridge the way it is built to end: its standard input is
+// closed, which it takes as the app being gone, and it runs its own exit handler (which
+// ends the Terminal's shells) and goes. Gives how it ended when it had already, otherwise
+// None, and wait_for_bridge is the second step.
+fn close_bridge_input(child: &mut Child) -> Option<BridgeEnd> {
     if let Ok(Some(status)) = child.try_wait() {
-        return BridgeEnd::Already(status);
+        return Some(BridgeEnd::Already(status));
     }
     // Dropping the handle closes the pipe, and the bridge sees the end of its input.
     drop(child.stdin.take());
-    let deadline = Instant::now() + wait;
+    None
+}
+
+// The second step: waits for the bridge to end until `deadline`, and if it is still there
+// then kills it, so a stuck bridge cannot hold the quit up. The child has been waited for
+// either way. Polls with try_wait, as std has no wait with a limit.
+fn wait_for_bridge(child: &mut Child, deadline: Instant) -> BridgeEnd {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return BridgeEnd::Closed(status),
@@ -874,6 +908,16 @@ fn stop_bridge(child: &mut Child, wait: Duration) -> BridgeEnd {
     let _ = child.kill();
     let _ = child.wait();
     BridgeEnd::Killed
+}
+
+// Kills the bridge now, and waits for it to be gone.
+fn kill_bridge(child: &mut Child) -> BridgeEnd {
+    if let Ok(Some(status)) = child.try_wait() {
+        return BridgeEnd::Already(status);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    BridgeEnd::KilledAtOnce
 }
 
 // Runs `work` on a thread of its own and waits up to `limit` for what it gives back. When
@@ -888,35 +932,60 @@ fn run_bounded<T: Send + 'static>(limit: Duration, work: impl FnOnce() -> T + Se
     rx.recv_timeout(limit)
 }
 
-// What the app does as it ends, whichever way it ends: the bridge is told to stop and
-// waited for, then a runner that runs only while the app is open is stopped, within
-// RUNNER_STOP_WAIT. Each step is a line in shell.log. A copy that never got as far as a
-// window (`--quit` with nothing running) has nothing to stop and writes nothing.
-fn end_everything(app: &AppHandle) {
-    let started = app.state::<UiStarted>().0.load(Ordering::Relaxed);
-    let bridge = app.state::<Bridge>().0.lock().unwrap().take();
-    if let Some(mut child) = bridge {
+// The steps of the app's end, in order, with the waits overlapping instead of adding up: the
+// bridge is stopped (killed now, or its input closed and its time started), then the runner
+// step is run, within `runner_wait`, and only then is the bridge waited for with what is left of
+// its time. So the app is gone within the longer of the two, not both, and the runner's own
+// processes start while the bridge winds up. `runner` is None when this copy never got as far
+// as a window (`--quit` with nothing running), which has nothing to stop. Each step is a line
+// said to `say`, which is shell.log.
+fn end_in_order<R>(bridge: Option<&mut Child>, how: BridgeStop, runner: Option<R>, runner_wait: Duration, say: &dyn Fn(&str))
+where
+    R: FnOnce() -> String + Send + 'static,
+{
+    let mut waiting: Option<(&mut Child, u32, Instant, Duration)> = None;
+    if let Some(child) = bridge {
         let pid = child.id();
-        let end = stop_bridge(&mut child, BRIDGE_STOP_WAIT);
-        log_shell(&format!("quit: bridge pid {pid} {}", end.describe(BRIDGE_STOP_WAIT)));
-    } else if started {
+        match how {
+            BridgeStop::AtOnce => {
+                let end = kill_bridge(child);
+                say(&format!("quit: bridge pid {pid} {}", end.describe(Duration::ZERO)));
+            }
+            BridgeStop::Gracefully(wait) => match close_bridge_input(child) {
+                Some(end) => say(&format!("quit: bridge pid {pid} {}", end.describe(wait))),
+                None => waiting = Some((child, pid, Instant::now() + wait, wait)),
+            },
+        }
+    } else if runner.is_some() {
         // Its end was seen by watch_bridge, which took the child and said so in the log.
-        log_shell("quit: no bridge to stop");
+        say("quit: no bridge to stop");
     }
     // A runner set up to run only while the app is open ends with it, whichever way the
     // app ends (a failed bridge has taken its child already, which is why this goes by
-    // UiStarted). A runner that starts at sign-in is left alone.
-    if started {
-        let said = match run_bounded(RUNNER_STOP_WAIT, stop_runner_if_on_demand) {
+    // the window having started). A runner that starts at sign-in is left alone.
+    if let Some(step) = runner {
+        let said = match run_bounded(runner_wait, step) {
             Ok(what) => what,
             Err(mpsc::RecvTimeoutError::Timeout) => format!(
                 "the runner step did not finish within {} seconds, so quit went on without it (an on-demand runner may still be running)",
-                RUNNER_STOP_WAIT.as_secs()
+                runner_wait.as_secs()
             ),
             Err(mpsc::RecvTimeoutError::Disconnected) => "the runner step failed".to_string(),
         };
-        log_shell(&format!("quit: {said}"));
+        say(&format!("quit: {said}"));
     }
+    if let Some((child, pid, deadline, wait)) = waiting {
+        let end = wait_for_bridge(child, deadline);
+        say(&format!("quit: bridge pid {pid} {}", end.describe(wait)));
+    }
+}
+
+// What the app does as it ends, whichever way it ends (end_in_order), in shell.log.
+fn end_everything(app: &AppHandle) {
+    let started = app.state::<UiStarted>().0.load(Ordering::Relaxed);
+    let for_setup = app.state::<QuitForSetup>().0.load(Ordering::Relaxed);
+    let mut bridge = app.state::<Bridge>().0.lock().unwrap().take();
+    end_in_order(bridge.as_mut(), bridge_stop(for_setup), started.then_some(stop_runner_if_on_demand), RUNNER_STOP_WAIT, &log_shell);
 }
 
 fn show_main(app: &AppHandle) {
@@ -1055,8 +1124,12 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // A second launch with --quit is an installer asking this copy to
             // end (it has no window to close); any other second launch just
-            // brings the window forward.
+            // brings the window forward. The installer is about to replace the
+            // files, so the end it gets does not wait for anything (QuitForSetup).
             if args.iter().any(|a| a == "--quit") {
+                if let Some(flag) = app.try_state::<QuitForSetup>() {
+                    flag.0.store(true, Ordering::Relaxed);
+                }
                 app.exit(0);
             } else {
                 show_main(app);
@@ -1069,6 +1142,7 @@ pub fn run() {
         .manage(Bridge(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(false)))
         .manage(UiStarted(AtomicBool::new(false)))
+        .manage(QuitForSetup(AtomicBool::new(false)))
         // What the page may ask of the shell besides the plugins' own commands
         // (capabilities/default.json): the "Exit on close" box and "Start the runner".
         .invoke_handler(tauri::generate_handler![get_exit_on_close, set_exit_on_close, runner_setup, start_runner, open_claude_login])
@@ -1116,6 +1190,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn the_port_is_the_same_for_a_user_and_in_range() {
@@ -1224,7 +1299,8 @@ mod tests {
     // else: never a search for a process, and each stand-in also ends itself after two minutes.
 
     // The bridge's way of ending (bridge.ts): it exits when its input does, and its exit
-    // handler, which is where it stops the Terminal's shells, leaves a note in the file it is given.
+    // handler, which is where the real one ends the Terminal's shells, leaves a note in the file
+    // it is given.
     const ENDS_WITH_ITS_INPUT: &str = "const fs=require('node:fs');process.on('exit',()=>fs.writeFileSync(process.argv[1],'bye'));process.stdin.on('end',()=>process.exit(0));process.stdin.resume();setTimeout(()=>process.exit(3),120000)";
     // A bridge that never looks at its input.
     const IGNORES_ITS_INPUT: &str = "setTimeout(()=>process.exit(3),120000)";
@@ -1289,6 +1365,13 @@ mod tests {
         }
     }
 
+    // Both steps of stopping the bridge gracefully, one straight after the other, as
+    // end_in_order does them when there is nothing to do in between.
+    fn stop_bridge(child: &mut Child, wait: Duration) -> BridgeEnd {
+        let deadline = Instant::now() + wait;
+        close_bridge_input(child).unwrap_or_else(|| wait_for_bridge(child, deadline))
+    }
+
     #[test]
     fn a_bridge_is_stopped_by_closing_its_input_and_gets_to_run_its_exit_handler() {
         let mut bridge = Standin::start("closes", ENDS_WITH_ITS_INPUT);
@@ -1319,5 +1402,88 @@ mod tests {
         let mut bridge = Standin::start("gone", IS_ALREADY_GONE);
         let status = bridge.child.wait().unwrap();
         assert_eq!(stop_bridge(&mut bridge.child, Duration::from_secs(5)), BridgeEnd::Already(status));
+    }
+
+    // The whole end, in order (end_in_order), with the lines it says to shell.log.
+
+    #[test]
+    fn only_the_installers_quit_kills_the_bridge_at_once() {
+        assert_eq!(bridge_stop(true), BridgeStop::AtOnce);
+        assert_eq!(bridge_stop(false), BridgeStop::Gracefully(BRIDGE_STOP_WAIT));
+    }
+
+    #[test]
+    fn a_quit_for_the_installer_kills_the_bridge_without_waiting_for_it() {
+        let mut bridge = Standin::start("at-once", ENDS_WITH_ITS_INPUT);
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        let started = Instant::now();
+        end_in_order(Some(&mut bridge.child), BridgeStop::AtOnce, None::<fn() -> String>, RUNNER_STOP_WAIT, &say);
+        let took = started.elapsed();
+        assert!(matches!(bridge.child.try_wait(), Ok(Some(_))), "it is still running");
+        // Given no time, it never got to its exit handler, as when quit killed it outright.
+        assert!(!bridge.marker().exists(), "its exit handler ran, so it was given time");
+        assert!(took < Duration::from_secs(2), "it waited, {took:?}");
+        let lines = lines.into_inner();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("killed at once"), "{lines:?}");
+    }
+
+    #[test]
+    fn the_runner_step_starts_while_the_bridge_is_still_winding_up_and_the_waits_overlap() {
+        let mut bridge = Standin::start("overlap", IGNORES_ITS_INPUT);
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        let origin = Instant::now();
+        let runner_began = Arc::new(Mutex::new(None::<Duration>));
+        let began = runner_began.clone();
+        let runner = move || {
+            *began.lock().unwrap() = Some(origin.elapsed());
+            std::thread::sleep(Duration::from_millis(300));
+            "runner stopped".to_string()
+        };
+        let wait = Duration::from_secs(2);
+        end_in_order(Some(&mut bridge.child), BridgeStop::Gracefully(wait), Some(runner), Duration::from_secs(30), &say);
+        let total = origin.elapsed();
+        let began = runner_began.lock().unwrap().expect("the runner step never ran");
+        // One after the other it would start only once the bridge's two seconds were up.
+        assert!(began < Duration::from_secs(1), "the runner step waited for the bridge, starting after {began:?}");
+        // The bridge's time is counted from when its input was closed, not from after the runner step.
+        assert!(total >= wait, "the bridge was killed early, after {total:?}");
+        assert!(total < wait + Duration::from_secs(1), "the waits added up, {total:?}");
+        assert!(matches!(bridge.child.try_wait(), Ok(Some(_))), "it is still running");
+        let lines = lines.into_inner();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0], "quit: runner stopped");
+        assert!(lines[1].contains("was still running 2 seconds after its input was closed, so it was killed"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_bridge_that_ends_during_the_runner_step_is_said_to_have_ended_itself() {
+        let mut bridge = Standin::start("during", ENDS_WITH_ITS_INPUT);
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        let runner = || {
+            std::thread::sleep(Duration::from_millis(200));
+            "runner stopped".to_string()
+        };
+        end_in_order(Some(&mut bridge.child), BridgeStop::Gracefully(Duration::from_secs(60)), Some(runner), Duration::from_secs(30), &say);
+        assert!(bridge.marker().exists(), "it was gone, but its exit handler did not run");
+        let lines = lines.into_inner();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0], "quit: runner stopped");
+        assert!(lines[1].contains("ended itself once its input was closed"), "{lines:?}");
+    }
+
+    #[test]
+    fn with_no_bridge_the_runner_is_still_stopped_and_with_nothing_started_nothing_is_said() {
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_string());
+        end_in_order(None, bridge_stop(false), Some(|| "runner stopped".to_string()), Duration::from_secs(30), &say);
+        assert_eq!(lines.borrow().as_slice(), ["quit: no bridge to stop", "quit: runner stopped"]);
+        lines.borrow_mut().clear();
+        // A copy that never got as far as a window (`--quit` with nothing running).
+        end_in_order(None, bridge_stop(false), None::<fn() -> String>, Duration::from_secs(30), &say);
+        assert!(lines.borrow().is_empty(), "{:?}", lines.borrow());
     }
 }
