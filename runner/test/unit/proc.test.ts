@@ -214,7 +214,11 @@ test('processImage still gives a start time for a process Get-Process cannot rea
   assert.match(image.lstart, /^\d+$/);
   assert.equal(typeof image.path, 'string', 'the program may be unreadable, which is "" and no answer');
   assert.ok(BigInt(image.lstart) < BigInt(ownStartTime().slice(1)), 'the system started before this test did');
-  assert.ok(image.slack && image.slack > 0n, 'and it is said to be to the microsecond only');
+  // Whether Get-Process can read System's start time depends on the account: a normal session can't (so the process
+  // table's reading is used, and is to the microsecond only), an elevated one such as a CI runner's can (and it is
+  // exact). Either way there is an answer, and the slack says which it is.
+  assert.equal(typeof image.slack, 'bigint');
+  assert.ok(image.slack >= 0n, 'the slack is how far the reading can be out, never less than none');
   // A process Get-Process reads in full is exact.
   assert.equal(processImage(process.pid)?.slack ?? 0n, 0n);
 });
