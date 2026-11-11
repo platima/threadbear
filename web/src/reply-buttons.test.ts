@@ -17,6 +17,15 @@ test('a press shows as pressing until its command is done, then pressed with the
   assert.deepEqual(buttonLook(start, { state: 'done', threadId: 't2' }, false), { kind: 'pressed', threadId: 't2', tip: 'Pressed.' });
 });
 
+test('a press that is waiting or sent says where, whatever kind of computer the runner is', () => {
+  assert.equal(buttonLook(start, { state: 'pending' }, true).tip, 'Waiting for your computer to pick this up');
+  assert.equal(buttonLook(start, { state: 'taken' }, true).tip, 'Sent to your computer');
+  assert.equal(buttonLook(start, undefined, true).tip, 'Sent to your computer');
+  // With several runners it names the one the thread is on.
+  assert.equal(buttonLook(send, { state: 'pending' }, true, 'cloud').tip, 'Waiting for cloud to pick this up');
+  assert.equal(buttonLook(send, { state: 'taken' }, true, 'cloud').tip, 'Sent to cloud');
+});
+
 test('the row saying pressed wins, wherever it was pressed', () => {
   assert.equal(buttonLook({ ...start, pressedThreadId: 't3' }, undefined, false).kind, 'pressed');
   assert.equal(buttonLook({ ...start, pressedThreadId: 't3' }, { state: 'failed', note: 'x' }, false).kind, 'pressed');

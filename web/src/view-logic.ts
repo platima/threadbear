@@ -19,6 +19,22 @@ export function runnersShown<T extends RunnerRow>(rows: T[], now: number): T[] {
     .sort((a, b) => Number(isOnline(b, now)) - Number(isOnline(a, now)) || a.name.localeCompare(b.name));
 }
 
+// Where a command went, in a person's words. A runner can be a Mac, a Windows
+// PC or a Linux machine and the page isn't told which, so it's "your computer";
+// with several runners (as the Runners page lists them) its name tells them
+// apart, as the iPhone app does (AppModel.runnerName). Never the raw id, which
+// can be 'any' or one this page hasn't heard of.
+export const COMPUTER = 'your computer';
+
+export function runnerWords(runners: RunnerRow[] | undefined, runnerId: string | undefined, now: number): string {
+  if (!runners || !runnerId || runnersShown(runners, now).length < 2) return COMPUTER;
+  return runners.find((r) => r.runnerId === runnerId)?.name.trim() || COMPUTER;
+}
+
+// The line above the message box (command-state.tsx) and a reply button's tip
+// (reply-buttons.ts) while a command waits on its runner. `where` is runnerWords.
+export const sentWords = (state: 'pending' | 'taken', where = COMPUTER) => (state === 'pending' ? `Waiting for ${where} to pick this up` : `Sent to ${where}`);
+
 export function runnerState(r: RunnerRow, now: number): string {
   if (!isOnline(r, now)) return `Offline, last heard from ${sinceWords(Date.parse(r.lastSeenAt), now)} ago`;
   return r.draining ? `Updating, heard from ${sinceWords(Date.parse(r.lastSeenAt), now)} ago` : `Online, heard from ${sinceWords(Date.parse(r.lastSeenAt), now)} ago`;

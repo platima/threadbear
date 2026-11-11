@@ -361,10 +361,11 @@ export function previewOf(title: string, messages: PageMessage[], images: Pictur
 // Mike's sharing controls, on his own thread page and on the shared page
 // when he's signed in: a switch for sharing by link, the link to copy, how
 // it unfurls, and a new link. Each is a command the runner applies
-// (phone:share), so it shows "Waiting for the Mac" while the Mac is
-// asleep. No New link on the shared page itself: its own address would
-// stop working under him.
-export function ShareControl({ token, threadId, share, onSharePage, preview }: { token: string; threadId: string; share?: { access: string; slug: string }; onSharePage?: boolean; preview?: Unfurl }) {
+// (phone:share), so it shows "Waiting for your computer" while that is
+// asleep. `where` is the thread's runner, as runnerWords says it; the shared
+// page doesn't look the runners up, so it says "your computer". No New link on
+// the shared page itself: its own address would stop working under him.
+export function ShareControl({ token, threadId, share, onSharePage, preview, where }: { token: string; threadId: string; share?: { access: string; slug: string }; onSharePage?: boolean; preview?: Unfurl; where?: string }) {
   const send = useMutation(api.phone.share);
   const [pending, setPending] = useState<Id<'commands'> | null>(null);
   const shared = share?.access === 'link';
@@ -418,7 +419,7 @@ export function ShareControl({ token, threadId, share, onSharePage, preview }: {
             </button>
           </div>
         ) : null}
-        {pending ? <CommandState token={token} commandId={pending} onDone={() => setPending(null)} /> : null}
+        {pending ? <CommandState token={token} commandId={pending} onDone={() => setPending(null)} where={where} /> : null}
       </div>
     </details>
   );
