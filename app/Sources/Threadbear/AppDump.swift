@@ -63,12 +63,41 @@ struct AppDump: Encodable {
     struct Section: Encodable {
         var name: String
         var threads: [Thread]
-        /// Inbox and Scheduled sections only: folded away under their heading.
+        /// Inbox and Scheduled sections, and Projects ones with the
+        /// projectDecisions experiment: folded away under their heading.
         var collapsed: Bool? = nil
         /// The number drawn on the heading while it's folded.
         var count: Int? = nil
         /// How many rows it draws, for the Archived section (`ArchiveRows`).
         var shown: Int? = nil
+    }
+
+    struct HomePageInfo: Encodable {
+        var title: String
+        var status: String?
+        var stats: [StatInfo]
+    }
+
+    struct SettingsWindowInfo: Encodable {
+        var tab: String
+        var appearance: String
+        var defaultFolder: String?
+        var keepAwake: Bool?
+        var labReview: Bool?
+        var privateFolders: [String]?
+        var smallJobsPool: String?
+    }
+
+    struct ScheduleEditorInfo: Encodable {
+        var isNew: Bool
+        var text: String
+        var once: Bool
+        var cron: String?
+    }
+
+    struct StatInfo: Encodable {
+        var value: String
+        var label: String
     }
 
     struct Sidebar: Encodable {
@@ -105,13 +134,13 @@ struct AppDump: Encodable {
         var pool: String? = nil
         /// The model chip as it reads ("Claude · Opus 5.5 · High").
         var chip: String = ""
+        /// After its title: "Limit reached", or "· 12%" running low.
+        var chipBadge: String? = nil
         /// The other runner it runs on ("bruce"); nil for this Mac.
         var runner: String? = nil
         /// The open card in the box, for the behaviour specs: "Done" with
         /// its follow-ups, or "Needs you" with each ask.
         var card: [String]? = nil
-        /// The recap box's lines, while it's up.
-        var recap: [String]? = nil
         /// A new thread from this box is on its way: its words stay, greyed
         /// and locked, until the runner has made it (`composer.starting`).
         var creating: Bool = false
@@ -278,6 +307,13 @@ struct AppDump: Encodable {
         var buttons: [String]? = nil
     }
 
+    struct LimitInfo: Encodable {
+        var text: String
+        var button: String?
+        /// The box's Carry on by itself, "Yes" or "No", when it offers it.
+        var carryOn: String? = nil
+    }
+
     struct Transcript: Encodable {
         var threadId: String
         var state: String
@@ -291,6 +327,9 @@ struct AppDump: Encodable {
     var connection: String
     var runnerVersion: String
     var banner: BannerInfo?
+    /// The line under the bar when the open thread can't go on where it is
+    /// (LimitBanner): what it says and its button.
+    var limit: LimitInfo?
     /// The Archived note with Undo at the top of the thread panel: its thread.
     var archivedNote: String?
     /// The milestone note at the top of the thread panel: its first line.
@@ -320,9 +359,23 @@ struct AppDump: Encodable {
     var usage: Usage? = nil
     /// The project page showing in place of the thread, if one is.
     var project: ProjectInfo? = nil
+    /// The open project page's decisions (the projectDecisions experiment),
+    /// one line a thread: "Title: first ask | second ask", "(sending)" at
+    /// the end while an answer's on its way. Nil with the experiment off or
+    /// no project page open.
+    var projectDecisions: [String]? = nil
     /// The Projects page's cards, while it's showing: "Title: 1 needs
     /// you · 2 working" (or "Title: quiet").
     var projectCards: [String]? = nil
+    /// The page in the detail area in place of a thread (`showsHomePage`):
+    /// its title, and for Scheduled its status line and tiles.
+    var homePage: HomePageInfo? = nil
+    /// The schedule editor while it's up, as it was opened: the sheet keeps
+    /// its own copy after that, so what's typed in it isn't here.
+    var scheduleEditor: ScheduleEditorInfo? = nil
+    /// The Settings window while it's open: its section, and the runner's
+    /// settings it shows.
+    var settingsWindow: SettingsWindowInfo? = nil
     /// The librarian's state in words ("Looking at ..."), when the runner
     /// has projects.
     var librarian: String? = nil
@@ -539,9 +592,17 @@ struct AppDump: Encodable {
             }
         case .projects:
             // A section per project, then the threads in none.
+            // Folded to a row a project with the projectDecisions experiment
+            // on: a folded one lists no threads, with its count, as drawn.
             let built = app.projectSections
-            sections = built.sections.map { Section(name: $0.project.title, threads: $0.threads.map { thread($0) }) }
-                + [Section(name: "Not in a project", threads: built.unfiled.map { thread($0) })]
+            let folding = app.projectDecisionsOn
+            let section = { (id: String, name: String, threads: [ThreadSummary]) -> Section in
+                let folded = folding && !app.openProjectRows.contains(id)
+                return Section(name: name, threads: folded ? [] : threads.map { thread($0) },
+                               collapsed: folding ? folded : nil, count: folding ? threads.count : nil)
+            }
+            sections = built.sections.map { section($0.id, $0.project.title, $0.threads) }
+                + [section(ProjectFolds.unfiledId, "Not in a project", built.unfiled)]
         case .librarian:
             // Looks in the thread shape: the queue's reason, or what a look
             // did, is the status.
@@ -555,13 +616,12 @@ struct AppDump: Encodable {
                 }),
             ]
         case .scheduled:
-            // Schedules in the thread shape: their state is the status.
+            // Schedules in the thread shape: their state is the status, and
+            // the row's lines as ScheduleRowView draws them.
             let groups = ScheduleSection.group(app.schedules)
             sections = ScheduleSection.allCases.map { section in
-                Section(name: section.title, threads: (groups[section] ?? []).map { schedule in
-                    Thread(id: schedule.id, title: schedule.title, status: schedule.paused ? "paused" : schedule.isFinished ? "finished" : "active",
-                           needsYou: false, unread: false, hovered: app.hoverOverride == schedule.id)
-                }, collapsed: app.collapsedScheduleSections.contains(section))
+                Section(name: section.title, threads: (groups[section] ?? []).map { scheduleRow($0, app: app) },
+                        collapsed: app.collapsedScheduleSections.contains(section))
             }
         }
         let key = app.selection ?? "new"
@@ -592,6 +652,7 @@ struct AppDump: Encodable {
             connection: connectionName(app.connection),
             runnerVersion: app.runnerVersion,
             banner: app.banner.map { BannerInfo(style: $0.style.rawValue, text: $0.text, detail: $0.detail) },
+            limit: app.selectedThread.flatMap { limitInfo(app, thread: $0) },
             archivedNote: app.archivedNote?.threadId,
             milestoneNote: app.milestoneNote.map { ThreadMilestones.title($0.tier) },
             error: app.errorMessage,
@@ -617,9 +678,16 @@ struct AppDump: Encodable {
                 return ProjectInfo(id: project.id, title: project.title, folders: project.folders, threads: threads.map(\.id),
                                    patches: PatchGroups.patches(of: project, in: threads).map(\.patch.id), archived: project.archived)
             },
+            projectDecisions: app.openProject.flatMap { projectDecisionLines($0, app: app) },
             projectCards: app.openProject == nil && app.showsProjectsHome ? app.projectCards.map { card in
                 card.project.title + ": " + (card.status.isQuiet ? "quiet" : card.status.parts.map(\.text).joined(separator: " · "))
             } : nil,
+            homePage: homePageDump(app),
+            scheduleEditor: app.scheduleEditor.map { ScheduleEditorInfo(isNew: $0.isNew, text: $0.text, once: $0.once, cron: $0.once ? nil : $0.repeatChoice.cron) },
+            settingsWindow: SettingsWindow.current?.isVisible == true ? SettingsWindowInfo(
+                tab: app.settingsTab.rawValue, appearance: UserDefaults.standard.string(forKey: AppAppearance.key) ?? "system",
+                defaultFolder: app.runnerSettings?.defaultCwd, keepAwake: app.runnerSettings?.keepAwake, labReview: app.runnerSettings?.labReview,
+                privateFolders: app.runnerSettings?.models.privateFolders, smallJobsPool: app.runnerSettings?.models.pool) : nil,
             librarian: app.librarian.map(LibrarianText.state),
             pools: app.usesPools ? app.pools.map { pool in
                 PoolInfo(id: pool.id, title: pool.title, logins: pool.accountIds, folders: pool.folders,
@@ -631,6 +699,61 @@ struct AppDump: Encodable {
             rails: rails(app),
             header: header(app)
         )
+    }
+
+    /// The page in the detail area, if one's in place of the thread.
+    @MainActor
+    private static func homePageDump(_ app: AppModel) -> HomePageInfo? {
+        guard app.openProject == nil else { return nil }
+        if app.showsScheduledHome {
+            let next = ScheduledStats.next(app.schedules)
+            let status = next.map { "Next: \(ScheduledStats.title($0)), \(ScheduledStats.when($0, now: app.now))" } ?? "Nothing coming up"
+            let tiles = app.schedulesSupported ? ScheduledStats.tiles(app.schedules, now: app.now) : []
+            return HomePageInfo(title: "Scheduled", status: status, stats: tiles.map { StatInfo(value: $0.value, label: $0.label) })
+        }
+        if app.showsProjectsHome { return HomePageInfo(title: "Projects", status: nil, stats: []) }
+        if app.showsLibrarianHome {
+            let tiles = app.librarian.map { LibrarianStats.tiles($0, projects: app.projects, threads: Array(app.threads.values)) } ?? []
+            return HomePageInfo(title: "Librarian", status: app.librarian.map(LibrarianText.state), stats: tiles.map { StatInfo(value: $0.value, label: $0.label) })
+        }
+        return nil
+    }
+
+    /// A schedule's row as ScheduleRowView draws it, in the thread shape:
+    /// when it next runs (or Paused, Done), the line under the title, a run
+    /// that didn't send or another Mac's Run now still waiting, and the
+    /// hover buttons' tips.
+    @MainActor
+    private static func scheduleRow(_ schedule: Schedule, app: AppModel) -> Thread {
+        let hovered = app.hoverOverride == schedule.id
+        let away = app.awayRunnerName(schedule)
+        let trailing: String
+        if schedule.paused {
+            trailing = "Paused"
+        } else if schedule.isFinished {
+            trailing = "Done"
+        } else if let next = schedule.nextRunAt {
+            trailing = ScheduleTime.relative(next, now: app.now)
+        } else {
+            trailing = ""
+        }
+        let place = ([schedule.whenText] + (away.map { [$0] } ?? []) + [app.scheduleTarget(schedule)]).joined(separator: " · ")
+        var waiting: String?
+        if let away, schedule.runRequestedAt != nil {
+            waiting = "Waiting for \(away) to run it"
+        } else if let last = schedule.lastRun {
+            switch last.outcome {
+            case .sent: waiting = nil
+            case .failed: waiting = "Last run failed" + (last.note.map { ": \($0)" } ?? "")
+            case .skipped: waiting = "Skipped last run" + (last.note.map { ": \($0)" } ?? "")
+            }
+        }
+        var buttons = [away.map { "Ask \($0) to run it now" } ?? "Run now"]
+        if !schedule.isFinished { buttons.append(schedule.paused ? "Resume" : "Pause") }
+        buttons.append("Delete")
+        return Thread(id: schedule.id, title: schedule.title, status: schedule.paused ? "paused" : schedule.isFinished ? "finished" : "active",
+                      needsYou: false, unread: false, hovered: hovered, waiting: waiting, place: place, trailing: trailing,
+                      hoverButtons: hovered ? buttons : nil)
     }
 
     /// What ThreadRowView draws for a row, as data: the same rules as its
@@ -979,6 +1102,22 @@ struct AppDump: Encodable {
         return "\"\(note.text)\"" + pictures
     }
 
+    /// The threads with decisions on a project's page, as it lists them.
+    @MainActor
+    static func projectDecisionThreads(_ project: Project, app: AppModel) -> [ThreadSummary] {
+        ProjectDecisions.threads(app.projectSections.sections.first { $0.id == project.id }?.threads ?? [])
+    }
+
+    @MainActor
+    static func projectDecisionLines(_ project: Project, app: AppModel) -> [String]? {
+        guard app.projectDecisionsOn else { return nil }
+        return projectDecisionThreads(project, app: app).map { thread in
+            let asks = thread.asks.filter { !$0.ticked }.map(\.plainAction).joined(separator: " | ")
+            let sending = ProjectDecisions.isSending(thread, sentFor: app.decisionSends[thread.id]?.asksSeq)
+            return "\(thread.title): \(asks)" + (sending ? " (sending)" : "")
+        }
+    }
+
     /// "2 picked", then each ask with its choices, "*" on the agent's
     /// pick, its links and the answer picked.
     @MainActor
@@ -1019,31 +1158,52 @@ struct AppDump: Encodable {
                         editing: app.editing[key]?.seq,
                         cwd: settings.cwd, account: settings.account, model: settings.model, ask: settings.ask, mode: settings.mode, effort: settings.effort,
                         pool: settings.pool, chip: ThreadSettings(app: app, thread: app.selectedThread).modelChipTitle,
+                        chipBadge: badgeWords(ThreadSettings(app: app, thread: app.selectedThread).modelChipBadge),
                         runner: app.selectedThread.flatMap(app.runnerName(of:)) ?? (app.selectedThread == nil ? app.newThreadRunner?.name : nil),
-                        card: cardLines(app, key: key), recap: recapLines(app), creating: key == "new" && app.creatingThread)
+                        card: cardLines(app, key: key), creating: key == "new" && app.creatingThread)
     }
 
-    /// The recap box as lines (`composer.recap`), nil unless it's up.
-    @MainActor private static func recapLines(_ app: AppModel) -> [String]? {
-        guard let thread = app.selectedThread, Recap.isDue(thread, dismissedAt: app.dismissedRecaps[thread.id]), let recap = thread.recap else { return nil }
-        let parts = Recap.parts(recap)
-        return (parts.purpose.map { [$0] } ?? []) + parts.points
+    /// LimitBanner's words and button, as it draws them.
+    @MainActor private static func limitInfo(_ app: AppModel, thread: ThreadSummary) -> LimitInfo? {
+        guard let advice = app.limitAdvice(for: thread) else { return nil }
+        let waiting = thread.waitingForRoom != nil && app.usesPools
+        let button = advice.target.map { target -> String in
+            let title = AccountUsageText.switchTitle(target, accounts: app.accounts)
+            return waiting ? title.replacingOccurrences(of: "Switch to", with: "Pin to") : title
+        }
+        return LimitInfo(text: advice.text, button: button, carryOn: advice.stopped ? (thread.carryOnAtReset ? "Yes" : "No") : nil)
+    }
+
+    /// A chip's badge as it reads after the title.
+    private static func badgeWords(_ badge: AccountUsageText.ChipBadge?) -> String? {
+        switch badge {
+        case .low(let percent)?: return "· " + percent
+        case .blocked?: return "Limit reached"
+        case nil: return nil
+        }
     }
 
     /// The open card as lines (`composer.card`): "Done" with a "[x]" or
     /// "[ ]" line per follow-up, "(?)" on one asked about; or "Needs you"
-    /// ("(collapsed)" when folded) with a line per ask.
+    /// ("(collapsed)" when folded) with a line per ask, and under an ask
+    /// with a command to run, "    $ <command>" (a line of its own, so a
+    /// spec matching an ask's line by its end still finds it).
     @MainActor
     private static func cardLines(_ app: AppModel, key: String) -> [String]? {
         guard let row = app.sessions[key]?.openCard, case .asks(let card) = row.content else { return nil }
+        return cardLines(card, collapsed: app.collapsedCards[key] == row.seq)
+    }
+
+    static func cardLines(_ card: AsksCard, collapsed: Bool) -> [String] {
         if card.isDone {
             return ["Done"] + card.next.enumerated().map { i, text in
                 (card.pickedNext.contains(i) ? "[x] " : "[ ] ") + text + (card.explainNext.contains(i) ? " (?)" : "")
             }
         }
-        var lines = [app.collapsedCards[key] == row.seq ? "Needs you (collapsed)" : "Needs you"]
+        var lines = [collapsed ? "Needs you (collapsed)" : "Needs you"]
         for (i, ask) in card.asks.enumerated() {
             lines.append((card.picks[i] != nil ? "[x] " : "[ ] ") + "\(i + 1). \(ask.action)")
+            if let run = ask.run { lines.append("    $ " + run.command) }
         }
         return lines
     }
@@ -1134,7 +1294,6 @@ struct AppDump: Encodable {
         }
         if let decisions { lines.append("decisions: " + decisions[0]); lines += decisions.dropFirst().map { "  " + $0 } }
         // The open card as it reads in the box, the done card's follow-ups too.
-        if let recap = composer.recap { lines.append("recap: " + recap.joined(separator: " | ")) }
         if let card = composer.card, let first = card.first { lines.append("card: " + first); lines += card.dropFirst().map { "  " + $0 } }
         lines.append("composer (\(composer.draft)): \"\(composer.text)\"" + (composer.images > 0 ? " and \(composer.images) image(s)" : "")
             + (composer.editing.map { ", editing the message at seq \($0)" } ?? ""))

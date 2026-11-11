@@ -56,7 +56,8 @@ pub(crate) struct FilesState {
     /// Paths the runner has said are folders, so a click goes to the browser.
     known_folders: HashSet<String>,
     /// The pane's own text style, built once per appearance.
-    reading_style: Option<(bool, TextViewStyle)>,
+    /// Keyed by appearance and zoom, as `rows`' is.
+    reading_style: Option<((bool, u32), TextViewStyle)>,
 }
 
 impl FilesState {
@@ -118,36 +119,20 @@ pub(crate) fn home_dir() -> String {
     std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default()
 }
 
-/// A web page in the browser (the panel page is later work).
+/// A web page in the browser (the panel page is later work). Only http and
+/// https: anything else is refused by the open gate, said so.
 pub(crate) fn open_web(url: &str, cx: &mut App) {
-    cx.open_url(url);
+    crate::open_gate::open_web(url, cx);
 }
 
-/// A path as a `file://` URL, with spaces and the like percent-encoded.
-pub(crate) fn file_url(path: &str) -> String {
-    let mut out = String::with_capacity(path.len() + 7);
-    out.push_str("file://");
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => out.push(byte as char),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
+/// A file on this runner in its own app, through the open gate: a document
+/// opens, a program asks first (OpenGate's rule).
+pub(crate) fn open_file_in_app(path: &str, origin: crate::open_gate::Origin, cx: &mut App) {
+    crate::open_gate::open_file(path, origin, cx);
 }
 
-/// A file in its own app, the way a click on `Open` does on this Mac. A file
-/// whose default app would run it never opens from a click (`LinkPolicy`,
-/// OpenGate's rule).
-pub(crate) fn open_file_in_app(path: &str, cx: &mut App) {
-    if core::runs_code(path) {
-        return;
-    }
-    cx.open_url(&file_url(path));
-}
-
-pub(crate) fn reveal(path: &str, cx: &mut App) {
-    cx.reveal_path(std::path::Path::new(path));
+pub(crate) fn reveal(path: &str, origin: crate::open_gate::Origin, cx: &mut App) {
+    crate::open_gate::reveal(path, origin, cx);
 }
 
 /// A quiet line in the middle of the pane (`PaneNote`).
@@ -173,8 +158,10 @@ impl SidePane {
                     self.files.open.insert(thread.id.clone(), OpenFile { path: path.clone(), opened: preview.opened, body: FileBody::Opaque { note }, truncated: false });
                     cx.notify();
                 }
+                // The real file, after its symlinks: a page named .html that's
+                // really something else asks first, as any file does.
                 Viewer::Web => {
-                    open_web(&file_url(path), cx);
+                    open_file_in_app(path, crate::open_gate::Origin::ThisMac, cx);
                     self.previews.remove(&thread.id);
                     cx.notify();
                 }
@@ -283,12 +270,32 @@ impl SidePane {
         FileBody::Text { editor: None, text, language }
     }
 
+    /// A previewed Markdown file, its links going through the open gate:
+    /// a file it links to (from the file's own folder) previews here too,
+    /// read through the runner, so a repo's page can't hand the system one
+    /// of its programs; a web page opens; anything else asks.
+    fn preview_text(&self, doc: &Entity<TextViewState>, thread: &ThreadSummary, path: &str, cx: &mut Context<Self>) -> gpui_kit::base::TextView {
+        use threadbear_core::open_policy::{self as policy, LinkKind};
+        let origin = if thread.is_remote() { crate::open_gate::Origin::OtherMac } else { crate::open_gate::Origin::ThisMac };
+        let folder = path.rsplit_once(['/', '\\']).map_or(String::new(), |(dir, _)| dir.to_owned());
+        let (side, thread) = (cx.entity().downgrade(), thread.clone());
+        let base = folder.clone();
+        crate::open_gate::text_view(doc, origin, &folder).on_link_click(move |url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App| match policy::link_kind(url) {
+            LinkKind::File(target) => {
+                if let Some(target) = policy::absolute(&target, &base, &home_dir()) {
+                    let _ = side.update(cx, |side, cx| side.preview_path(&target, None, &thread, cx));
+                }
+            }
+            _ => crate::open_gate::open_link(url, origin, &base, cx),
+        })
+    }
+
     /// The bar's buttons over a preview: Reveal, Open (`PreviewButtons`).
     pub(crate) fn preview_buttons(&mut self, preview: &PanePreview, thread: &ThreadSummary, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let mut row = h_flex().flex_none().gap(px(0.));
         if let Some(path) = preview.file_path().filter(|_| !thread.is_remote()).map(str::to_owned) {
             let reveal_path = path.clone();
-            row = row.child(self.header_button("hl-reveal", "folder", REVEAL_TITLE.to_owned(), p, cx, move |_, cx| reveal(&reveal_path.clone(), cx)));
+            row = row.child(self.header_button("hl-reveal", "folder", REVEAL_TITLE.to_owned(), p, cx, move |_, cx| reveal(&reveal_path.clone(), crate::open_gate::Origin::ThisMac, cx)));
             let open_path = path.clone();
             row = row.child(self.header_button("hl-open", "arrow.up.right", "Open in its app".to_owned(), p, cx, move |this, cx| this.open_externally(&open_path.clone(), cx)));
         }
@@ -355,12 +362,12 @@ impl SidePane {
                     .into_any_element()
             }
             FileBody::Markdown { doc, .. } => {
-                let dark = cx.theme().is_dark();
+                let key = (cx.theme().is_dark(), crate::style::zoom_percent());
                 let style = match &self.files.reading_style {
-                    Some((was, style)) if *was == dark => style.clone(),
+                    Some((was, style)) if *was == key => style.clone(),
                     _ => {
                         let built = crate::rows::reading_style(cx);
-                        self.files.reading_style = Some((dark, built.clone()));
+                        self.files.reading_style = Some((key, built.clone()));
                         built
                     }
                 };
@@ -378,7 +385,7 @@ impl SidePane {
                             .py(px(18.))
                             .text_size(px(style::size::BODY))
                             .line_height(px(style::size::BODY_LINE))
-                            .child(gpui_kit::base::TextView::new(doc).selectable(true).style(style)),
+                            .child(self.preview_text(doc, thread, path, cx).selectable(true).style(style)),
                     )
                     .into_any_element()
             }

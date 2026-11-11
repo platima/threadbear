@@ -431,7 +431,6 @@ function scheduler(o: { result?: () => CheckResult } = {}) {
     clock: h.clock,
     log: nullLogger,
     zone: () => 'UTC',
-    checksOn: () => true,
     runCheck: async (p) => {
       ran.push({ command: p.command, cwd: p.cwd });
       return o.result?.() ?? { ok: true, output: 'news' };
@@ -638,7 +637,7 @@ function askTools(cwd: string, mode: 'ask' | 'full', answer: () => void = () => 
       return typeof v === 'function' ? v.bind(t) : v;
     },
   });
-  const tools = buildThreadbearTools(control, thread.id, Date.now, sched as never, undefined, undefined, { scheduleChecks: () => true }) as unknown as { name: string; handler: (a: unknown, e?: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> }[];
+  const tools = buildThreadbearTools(control, thread.id, Date.now, sched as never, undefined, undefined, {}) as unknown as { name: string; handler: (a: unknown, e?: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> }[];
   const call = (name: string, a: unknown) => tools.find((t) => t.name === name)!.handler(a);
   return { h, sched, ran, asked, call, thread };
 }
@@ -709,8 +708,8 @@ test('Codex review: a thread moved while the card was up approves nothing, even 
 test('Codex review 3: a folder by a link retargeted while the card was up approves nothing', async () => {
   const dir = repo({ 'A/check.sh': '#!/bin/sh\necho\n', 'B/check.sh': '#!/bin/sh\necho\n' }, { link: 'A' });
   const made = askTools(dir, 'ask', () => {
-    // (recursive: Windows takes a link to a folder for a folder, which rm leaves unless told.)
-    fs.rmSync(path.join(dir, 'link'), { recursive: true });
+    fs.unlinkSync(path.join(dir, 'link'));
+    // ('dir': Windows needs to be told a link is to a folder.)
     fs.symlinkSync('B', path.join(dir, 'link'), 'dir');
   });
   const r = await made.call('schedule_message', { text: 'Look', cron: '*/5 * * * *', new_thread: true, runner: 'runner', folder: path.join(dir, 'link'), check: './check.sh' });

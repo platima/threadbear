@@ -35,6 +35,7 @@ export const THREAD_REQUESTS: Record<string, Row> = {
   'buttons.press': { what: 'Pressing a reply button', relay: 'yes', phone: { via: 'press' } },
   'buttons.list': { what: "A message's reply buttons", relay: 'yes', phone: { via: 'messages' } },
   'threads.commands': { what: 'The slash command list', relay: 'yes', phone: { via: 'slashCommands' } },
+  'threads.contextUsage': { what: 'What fills its context', relay: { no: "Asked of the CLI on that Mac; the ring's popover there shows the totals only." }, phone: { no: 'Not on the phone.' } },
   'threads.tickAsk': { what: 'Ticking an ask on the card', relay: { no: 'Ticks stay on that Mac.' }, phone: { no: 'The phone sends picks with its answer instead.' } },
   'threads.edit': { what: 'Editing a message', relay: { no: 'It undoes file changes on that Mac, so it waits for a way to show what it undid.' }, phone: { no: 'Not on the phone.' } },
   'threads.delete': { what: 'Deleting it', relay: { no: 'Done on that Mac.' }, phone: { no: 'Not on the phone.' } },

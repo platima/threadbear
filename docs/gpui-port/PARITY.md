@@ -11,9 +11,9 @@ The full list of features is [features.md](features.md).
 
 <!-- parity:start -->
 
-108 of 326 features have a spec so far, across 194 scenarios.
+122 of 329 features have a spec so far, across 220 scenarios.
 
-Scenarios passing: Swift: 188 of 194, Mac: 192 of 194, Windows: 192 of 194, Linux: 192 of 194.
+Scenarios passing: Swift: 207 of 220, Mac: 208 of 220, Windows: 192 of 220, Linux: 208 of 220.
 
 
 ### 0. Foundations everything else needs
@@ -28,6 +28,7 @@ Scenarios passing: Swift: 188 of 194, Mac: 192 of 194, Windows: 192 of 194, Linu
 | Feature | Swift | Mac | Windows | Linux |
 |---|---|---|---|---|
 | `dock.layout` Layout tree | pass | pass | pass | pass |
+| `dock.titlebar` No title bar | pending | pending | pending | pending |
 | `dock.frame` Window frame memory | pending | pending | pending | pending |
 | `dock.reset` Default layout and Reset | pass | pass | pass | pass |
 
@@ -72,6 +73,7 @@ Scenarios passing: Swift: 188 of 194, Mac: 192 of 194, Windows: 192 of 194, Linu
 | `header.more` ... menu | pass | pass | pass | pass |
 | `banner.connection` Connection banner | pass | pass | pass | pass |
 | `banner.error` Error banner | pass | pass | pass | pass |
+| `banner.limit` Limit banner | pass | pass | pending | pass |
 | `toast.archived` Archived toast | pass | pass | pass | pass |
 | `toast.inboxend` Inbox end toast | pass | pass | pass | pass |
 | `thread.newpage` New-thread page | pass | pass | pass | pass |
@@ -115,7 +117,7 @@ Scenarios passing: Swift: 188 of 194, Mac: 192 of 194, Windows: 192 of 194, Linu
 | `composer.runner` Runner chip | pass | pass | pass | pass |
 | `composer.modelpicker` Model picker | pass | pass | pass | pass |
 | `composer.permission` Permission chip | pass | pass | pass | pass |
-| `composer.contextring` Context ring | pass | pass | pass | pass |
+| `composer.contextring` Context ring | pass | partly | partly | partly |
 | `composer.send` Send and Stop | pass | pass | pass | pass |
 | `composer.starting` Starting state | pass | pass | pass | pass |
 | `composer.slash` Slash palette | pass | pass | pass | pass |
@@ -169,11 +171,38 @@ Scenarios passing: Swift: 188 of 194, Mac: 192 of 194, Windows: 192 of 194, Linu
 | `folder.menu` Folder menu | pass | pass | pass | pass |
 | `folder.filespanel` Files panel | pass | pass | pass | pass |
 
+### 13. Terminal
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `terminal.panel` Terminal panel | pending | pending | pending | pending |
+| `cards.run` Run on the card | pending | pending | pending | pending |
+| `terminal.putcommand` Put a command in the Terminal | pending | pending | pending | pending |
+
+### 14. Projects, Librarian, Schedules, Usage, Runners, Connectors, Updates
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `projects.decisions` Decisions on the Projects page | pass | pending | pending | pending |
+| `librarian.page` Librarian page | pass | pass | pending | pass |
+| `librarian.log` Librarian log | pass | pass | pending | pass |
+| `schedule.page` Scheduled page | pass | pass | pending | pass |
+| `schedule.list` Scheduled list | pass | pass | pending | pass |
+| `schedule.editor` Schedule editor | pass | pass | pending | pass |
+
+### 15. Settings
+
+| Feature | Swift | Mac | Windows | Linux |
+|---|---|---|---|---|
+| `settings.window` Settings window | pass | pass | pending | pass |
+| `settings.general` General | pending | pass | pending | pass |
+| `settings.models` Models | pending | pass | pending | pass |
+
 ### 17. Navigation, shortcuts, main menu
 
 | Feature | Swift | Mac | Windows | Linux |
 |---|---|---|---|---|
-| `nav.history` Back/forward history | partly | pass | pass | pass |
+| `nav.history` Back/forward history | partly | pass | partly | pass |
 | `nav.sidebuttons` Mouse side buttons | pass | pass | pass | pass |
 | `nav.nextinbox` Next Inbox Thread | pass | pass | pass | pass |
 | `menu.app` App menu | pass | pass | pass | pass |
@@ -192,6 +221,316 @@ One entry a slice, newest first. Every entry has a `Verification:` line: a spec
 run or a screenshot from the running app. A slice with no runtime check doesn't
 count. (Ghostex's port log is where this shape comes from; its slices 214 to 268
 built parsers and gates with no launch of the app, which is the trap.)
+
+### 2026-11-11 Point for point with the Swift app: the composer, its card, and what's round them
+
+- Mike: "can you do like a pixel by pixel comparison ... this decision panel
+  that I'm typing into right now looks slightly larger on the GPUI version".
+  `features/tools/compare.ts` now lays each pair over each other (Swift in
+  red, GPUI in cyan, grey where they agree) and can run commands before a
+  shot (a card's second page). `features/tools/pixel-overlay.swift`'s `rows`
+  and `cols` give each line's top and bottom in both pictures, paired, which
+  is where every number below came from.
+- The composer box: the kit's text box pads itself 10 and 8, so the GPUI box
+  was 18 taller than Swift's with its text 11 further in. It's unpadded now
+  (`composer::bare_textarea`, the Something else box too), and the box's edge
+  is drawn over it as Swift's strokeBorder is (0.5, or 1 in the accent),
+  rather than taking room in it. The empty box now matches to the point.
+- The card (`RowRenderer.asksText`): Swift's paged heading is a 38 pt line
+  (a work line plus 6 otherwise), each ask 12 under what's above, its number
+  where a list's goes (8 in, text at 30), a where line at 11 pt on 19, and
+  buttons on 38 pt lines 6 under that, 29.3 tall, three no-break spaces
+  either side and four between, with a soft shadow. The title is 14 pt
+  medium beside SF's filled hand (drawn here, as Lucide has only the
+  outline), the picked button is the accent with white words, the agent's
+  pick has an accent edge on the grey, the pager's live arrow is a button,
+  and the chevron is Swift's 22 pt square at 5 pt corners. A paged card is
+  as tall as its tallest page, all pages in one grid cell with only the shown
+  one drawn. The separator under it is half a point. The done card has SF's
+  tall tick, rows 8 over and under with their circle at 8 and words at 34,
+  and the small labels at 11 pt.
+- Elsewhere: the user bubble is as wide as its widest line (GPUI's wrapped
+  text takes all the room it's offered); list markers end 11.2 short of the
+  text, which puts a bullet and "1." where Swift's are; a reply that opens
+  with a heading starts without the heading's 6 (TextKit leaves out a first
+  paragraph's space before); the Highlights rows take SwiftUI's own line
+  heights (14 at 11 pt, 16 at 13, 19 at 15: `style::natural_line`, measured
+  with NSHostingView), where GPUI's are 1.618 times the size; the sidebar's
+  search field is Swift's 29 tall; the thread's bar title sits where Swift's
+  does; Full access has SF's open lock and "+" SF's size; and the needs-you
+  orange is systemOrange.
+- A thread is read only while one of the app's windows is in front (the
+  main one, Settings or a panel's window of its own, each saying so from its
+  own activation), as Swift's `isLooking` has it: GPUI read one as soon as it
+  opened, behind other windows too, which moved it down the Inbox in the
+  scripted pictures. A click or key in a window counts as well, for an X
+  server that never says a window's in front, but nothing a script does
+  does, and the scripts' `focus` now means "in front" in both apps. GPUI's
+  own "active window" isn't used: on the Mac it's NSApp.mainWindow, which
+  stays set behind another app.
+- Left: gpui-kit puts list items 3.75 apart (a quarter of the text size,
+  fixed in the kit) where Swift's are 6, and indents a nested list 21 where
+  Swift's is 30, so a card with a list in its why is a few points shorter;
+  that needs the kit to take an item gap. Reply buttons inside list items
+  (pills in Swift) are still plain links here.
+- The reading styles (the transcript's, a file preview's, the card's) are
+  kept per zoom as well as per appearance, as their code sizes are zoomed
+  when they're built.
+- Files: `desktop/gpui/src/{composer_card,composer,composer_chips,icons,
+  style,rows,rows/markdown,highlights,sidebar,header,thread,app,shell,
+  settings_window,automation,open_gate,files}.rs`,
+  `desktop/dock/src/{content,windows}.rs` (`window_activation`),
+  `features/tools/{compare.ts,pixel-overlay.swift}`.
+- Verification: compare.ts on Tinker Desk, every demo thread in dark, with
+  the rows tool after each change (the empty composer, the card on both
+  pages, the bubble, the Highlights rows): the sidebar went from 10.8% of
+  its pixels apart to 2.1%, and the Highlights and main panel came down in
+  every thread. Codex's review, three rounds (read tracking, zoom, a "2."
+  ask's escape, floating windows, no window manager, every scripted input),
+  each finding fixed. The GPUI specs on Linux and the Mac.
+
+### 2026-11-11 The Settings window, with General and Models (`settings.window`, `settings.general`, `settings.models`)
+
+- ⌘, and the rail's gear open Settings in a window of its own, with the
+  Swift app's sidebar of sections (General, Models, Pools, Runners, Phone &
+  browser, Keyboard) and a grouped form whose sections say, behind their ⓘ,
+  what each is and what to ask your agent. A second ⌘, brings it forward.
+- General: Appearance (this app's own, kept in desktop-settings.json and
+  followed by every window), the default folder with Choose…, standing
+  instructions (saved a second after typing stops and when the window
+  closes; a file changed outside Settings is shown as it was when reading
+  started, with Show Newer Version, Clear and Use These, which sends the
+  words shown), Code review, Sleep, Updates from Mike (on a fork),
+  Experiments, and the runner's version. A change shows at once, and one
+  the runner turns down puts back what it had (unless something newer came)
+  with its reason under the form.
+- Models: Small jobs' pool, with None and a set pool that has no Claude
+  login, and the private folders, with a minus on each and Add Folder….
+- Not here yet: the ding (GPUI has no sound to play it with), the activity
+  log (the GPUI app keeps none) and Quitting's question (it doesn't ask),
+  and the Pools, Runners, Phone & browser and Keyboard sections, which say
+  so.
+- The GPUI app's scripts reach the window as the Swift app's do (`settings`
+  with `tab` or `close`, `"settings": true` on `click` and `screenshot`), and
+  both dumps say what it shows (`settingsWindow`).
+- Verification: settings.feature on Linux and on Tinker Desk; the Swift app
+  passes the window scenario, and its two click scenarios are GPUI-only, as
+  a scripted click in the Swift app's AppKit form starts a tracking loop that
+  never answers; both apps' General and Models side by side.
+
+### 2026-11-11 The Librarian view and its page (`librarian.log`, `librarian.page`, `librarian.picture`)
+
+- Librarian in the activity bar (with its count of looks under way and
+  waiting) opens the view in the sidebar and its page beside it, as in the
+  Swift app. The view: what it's doing, with its mark in the rows' gutter (a
+  spinner while it works), the look under way and when it started, today's
+  looks, skips and tokens, Pause or Resume (shown at once, put back if the
+  runner says no) and Look at everything (spins until the looks are
+  queued); then Next, each look's thread (which opens), why and when; and
+  Recent, what each look did, to which thread and projects, coloured by how
+  it went, with why it filed the thread in its tooltip.
+- The page: the bear at its card catalogue, the title with its ⓘ, what
+  it's doing, the six tiles (LibrarianStats, ported to desktop/core with the
+  status model and its words), then its settings: Look at threads, and
+  Runs on, the pool whose Claude logins it uses (the runner's small-jobs
+  setting, `settings.update { models: { pool } }`), and More in Settings.
+  The app now keeps the runner's settings (`settings.get`, then
+  `settings.updated`) for that, and for the Settings window to come.
+- The Scheduled and Librarian pages share one page (desktop/gpui/src/
+  home_page.rs): the picture, what it says when poked, the title and ⓘ, the
+  status line and the tiles.
+- A project's name in a Recent row is plain words for now, as a project's
+  page isn't in this app yet.
+- Both apps' dumps give the page's status and tiles (`homePage`) and the
+  librarian's state in words (`librarian`).
+- Verification: librarian.feature's 3 scenarios with scheduled.feature and
+  header.feature on Linux and on Tinker Desk against both apps (24 of 24
+  each; both apps' tiles agree, Projects it made and Threads it filed
+  included); the view and page side by side in both apps.
+
+### 2026-11-11 The limit box on the composer (`banner.limit`)
+
+- The Swift app moved a thread at its limit from a bar across the top of
+  the thread into a box at the top of its message field (ae80b80b, Mike's
+  call on 10 Nov), after the last full run, so its `banner.limit` scenario
+  failed there while the GPUI app still drew the bar. The GPUI app has the
+  box now: what happened, and when it carries on by itself ("Carries on by
+  itself at 11:06 am."), with a clock while it waits and the red gauge
+  otherwise; Switch to (a pool thread's Pin to) the login with the most
+  room; and Carry on by itself, Yes or No (`threads.update
+  carryOnAtReset`), for a turn that stopped at the limit on this Mac.
+- A pinned thread waiting for its own login (`waitingForRoom` without a
+  pool, also new on 10 Nov) gets the box too.
+- Both dumps say what the box offers (`limit.carryOn`), and the scenario
+  checks it.
+- Verification: header.feature on Linux and on Tinker Desk against both
+  apps (12 of 12 each); the thread side by side in both apps (compare.ts).
+
+### 2026-11-11 The Scheduled view, its page and the editor (`schedule.list`, `schedule.page`, `schedule.editor`)
+
+- Scheduled in the activity bar opens the list in the sidebar and its page in
+  the main panel, as in the Swift app. The list has Active, Paused and Done
+  headings that fold (Done starts folded; saved as
+  `collapsedScheduleSections`). A row says when it runs next (or Paused,
+  Done), when it runs, the other Mac it runs on, and where it sends: a link to
+  that thread, or to the last one it started. Under that, a last run that
+  didn't send, or another Mac's Run now still waiting.
+- On hover: Run now (a spinner until the runner answers), Pause or Resume
+  (shown at once, put back if the runner says no) and Delete (asks first,
+  gone at once, back if refused). The right-click menu has the same, with
+  Edit.
+- The page: the bear winding its alarm clock (built into the app), the title
+  with its ⓘ, what's next and the six tiles (`ScheduledStats`); the picture
+  says something when it's poked. Its wobble isn't here yet.
+- The editor (`ScheduleEditor`): the message, a title, Once (a date and time)
+  or Repeat (presets that are only cron underneath, or a cron of its own),
+  and under it what the runner makes of that as it changes
+  (`schedules.preview`, a quarter of a second after the last change). Then
+  Sends to, Runs on (another Mac's folder is typed as a path there), Folder,
+  and Model and Effort from the login it runs on (`ScheduleModels`, ported
+  to desktop/core). Delete asks over the sheet and closes both.
+- Picking a thread (a schedule's target) puts the thread back in place of
+  the page and leaves the list as it is; Back and Forward remember the page.
+- Both apps' dumps say what a schedule's row shows, the page in place of the
+  thread (`homePage`) and the editor as it was opened (`scheduleEditor`). The
+  GPUI app takes the Swift app's `schedule` and `close-schedule` commands,
+  and its `select` now picks a thread without leaving the view, as Swift's
+  does.
+- Schedule… in a composer's + menu opens the editor on the box's words and
+  its thread (the new-thread box's: a new thread each time on its folder,
+  login and model), and they leave the box once it's saved. Pictures are
+  chips in the GPUI box's text, so a box with any is left as it is, and the
+  editor says so.
+- Codex's review found five things, all fixed: an editor opened before this
+  Mac's runner was known saved another Mac's schedule with this Mac's
+  folder and models (it's now taken to be the other Mac's until known); a
+  Run now or Pause answered after the schedule was deleted brought its row
+  back (fixed in the Swift app too: only a new schedule's reply adds a
+  row); Back to a page recorded the thread behind it as a step, which cut
+  off Forward (a scenario now covers it, on both apps); Save's answer could
+  close Delete's question instead of the editor (Delete is off while
+  saving, and only the editor that saved closes); and a page's place in
+  the history needed the thread behind it to still exist. Its second look
+  found Back to such a page then recorded it as a new place, trapping Back
+  there; a place put back now settles into its own entry, keeping Forward.
+- Remaining: Schedule… from Send's right-click menu
+  (`composer.schedulefromsend`), the header's schedule chip, the picture's
+  wobble, Return in the message box saving.
+- Verification: scheduled.feature's 9 scenarios on Linux, and on Tinker Desk
+  against both apps; pictures of both apps' list, page and editor side by
+  side (the spacing was brought in to match after the first pair).
+
+### 2026-11-10 One gate for opening links and files (Daybreak 58, 59, 63, 64, 67)
+
+- Every link and file the app hands to the system goes through
+  `desktop/gpui/src/open_gate.rs`, on the rules of the Swift app's OpenGate,
+  written in `desktop/core/src/open_policy.rs`: a web page opens, any other
+  scheme asks by name, a file is judged and opened as its real target after
+  symlinks, a known document opens and anything else (a program, a bundle, a
+  script, an unknown kind, a document whose app runs it, which macOS's Launch
+  Services is asked) asks first, and another runner's file never opens here.
+  File URLs are built from the path with `#` and `?` escaped, never pasted.
+  `desktop/core/tests/open_gate_source.rs` fails on an opener anywhere else.
+- The slash palette's Open file previews the skill in the pane; a file link in
+  another runner's thread previews there too, read through that runner.
+- Every rich text view (replies, plan and ask text, Markdown previews) is made
+  by the gate's `text_view` or `markdown_view`, as the kit's own TextView opens
+  a link with the system's opener when it has no handler; a link in a
+  previewed Markdown file to another file previews in the pane.
+- Threadbear's own approval cards show the runner's words under the title
+  (`ApprovalText::runner_reason`), in both apps. File cards show every line
+  of the diff, any argument it doesn't draw (`replace_all`, a notebook cell)
+  and a line break at an edit's end in words, in both apps (and the runner
+  sends an edit's card whole, refusing one too long to show), and Return on a stacked card allows only the ticked
+  calls, as its Allow button does.
+- Pasted pictures are staged in a fresh 0700 folder (`XDG_RUNTIME_DIR` when
+  there is one), written 0600, and removed once the runner has its copy.
+- Remaining: the Swift app's forwarding page for a local `.html` link's
+  `?query` and `#fragment`, which the gate drops; previewing transcript file
+  links in the pane on this runner's threads (they open in their app).
+- Verification: `cargo test --workspace` on Tinker Desk (macOS, with the Launch
+  Services code); the open policy's own tests and the source scan on Linux;
+  the whole spec suite on Linux (see the report for the run).
+### 2026-11-10 Looking like the Swift app, and the pool limit line
+
+- Found by putting both apps' pictures of every demo thread side by side
+  (`features/tools/compare.ts`, which Mike's "a number of things that are
+  off" asked for).
+- Dark mode was near-black: gpui-kit's own dark theme is #0a0a0a, where the
+  Swift app draws on the system's window colour (#1e1e1e on macOS 26 and 27).
+  The GPUI themes now take NSColor.windowBackgroundColor from AppKit on the
+  Mac, and those values elsewhere (`style::install_window_colours`). Menus
+  and popovers sit a little lighter, as macOS's do.
+- Scroll bars show only while scrolling, as the Swift transcript sets them,
+  whatever the system's setting. The side pane's second "Highlights" title
+  under the dock's is gone. Rows name their Mac ("• m5") once there's
+  another, as Swift's have since 9 Nov, and a long status gives way before
+  the folder does. The thread's bar shows the project's own icon, not its
+  letter.
+- A thread waiting on a permission card counts as busy, as Swift's
+  `isBusy` has it, so the composer offers Stop.
+- `banner.limit`: a pool thread out of room says "Every login in Evenings is
+  out of room. It carries on by itself at …" with a quiet clock and "Pin to
+  mike (78% left)"; an account at its limit names its short login, when it
+  resets, and the login with most room. The model chip says "Limit reached"
+  (or "· 12%" running low) when every login in its pool is, and the account
+  chip for its login. Ported from Swift's `limitAdvice`, `Pools.chipBadge`,
+  `AccountUsageText.switchTarget` and `switchTitle` into `desktop/core`.
+- Files: `desktop/gpui/src/{style,app,header,highlights,sidebar,remote,
+  composer_chips,automation}.rs`, `desktop/core/src/{inbox,new_thread,
+  logins,sidebar}.rs`, `AppDump.swift` (`limit`, `composer.chipBadge`),
+  `features/header.feature`.
+- Remaining from the pictures: reply buttons drawn as pills, the thread chips
+  bar ("Review design options"), the rail's Connectors, Runners, Updates and
+  Setup buttons and the Librarian's count, and the providers' logos on the
+  model chip.
+- Codex (gpt-6.1-sol) tried to break the drag, the caching, the sort, `busy()`
+  and the limit port. It found no stale views, no lease panic and no change of
+  order, and two real problems, both fixed: a torn-out window got its last
+  move from a press that ended without a mouse-up, so it could jump to where
+  the pointer had gone since (`pointer_up(released, ..)` in
+  `desktop/dock/src/windows.rs`); and the limit line lacked Swift's case for a
+  turn that failed on its limit while the account still says it has room
+  (`failedOnAccount`, now `note_failed_account` in `header.rs`). That case
+  looks for the newest turn footer, as Swift's does, and the demo thread that
+  failed on its limit has none for the failed turn, so neither app shows a
+  line there; there's no scenario for it yet.
+- Idle frames: an open thread draws nothing once it has settled (four seconds,
+  no frames); the readout's 30 fps was the second after opening one.
+- Verification: `features/tools/compare.ts` pictures of the changed threads
+  beside the Swift app's; specs 193 of 193 on Tinker Desk's Mac and on Linux
+  (`cloud`), the Swift app 191 of 191 there, the new `banner.limit` scenario
+  passing on both apps; `cargo test -p threadbear-core` 163 of 163.
+
+### 2026-11-10 Dragging the window, and smooth scrolling at 120 Hz
+
+- Mike couldn't move the installed app's window by its top. The strips that
+  start the OS's window drag on the press worked; the panels' bars and the
+  thread's title didn't, as they only know it's a drag once the pointer moves,
+  and AppKit won't start a window drag from a move event. On the Mac those now
+  move the window by hand, as Swift's dock does (`platform::grab_window`), and
+  a drag from the title no longer starts a rename (`DockView::press_moved`).
+- Scrolling: every frame rebuilt the whole window, thread list included. The
+  Threads panel and the side pane are cached views now, the Inbox sorts by
+  keys worked out once, and the menu bar and the Inbox badge are worked out
+  only when the app changes. Tinker Desk (M2, 60 Hz), 6,000 rows and 60
+  threads, real flings: work per frame 7.8 ms in the middle, 13.4 at 90% and
+  21.8 at 99% before; 6.3, 7.9 and 9.7 after (28 late frames to 1).
+- View > Show Frame Rate in the installed build (`frame-stats`, GPUI's frame
+  profiler) shows frames a second, late frames and the slowest frame.
+- Files: `desktop/dock/src/{platform,view,windows}.rs`, `desktop/gpui/src/
+  {frame_stats,sidebar,shell,app,rails,header,composer_chips}.rs`,
+  `desktop/core/src/inbox.rs`, `features/tools/{window-drag,scroll-perf,
+  real-screen}.ts`.
+- Remaining: the root, the dock's bars and the thread pane still draw again on
+  every frame of a scroll (the dock would have to hand out its bars as views).
+- Verification: `features/tools/window-drag.ts` on Tinker Desk's desktop,
+  every part of the top moves the window and a click on the title renames;
+  `features/tools/scroll-perf.ts` for the numbers above; specs 192 of 192 on
+  Tinker Desk's Mac and 191 of 192 on Linux (`cloud`). The one was a step
+  that took an older reply for the streaming one when the stream was slow to
+  start; it now tells them apart, and passes 4 of 4 on Linux and on both apps
+  on the Mac.
 
 ### 2026-11-10 Every spec on real Windows
 
@@ -337,9 +676,9 @@ built parsers and gates with no launch of the app, which is the trap.)
 - Files: `desktop/gpui/src/slash_palette.rs`, `desktop/gpui/src/composer.rs`,
   `desktop/core/src/slash.rs`, `features/slash-palette.feature`,
   `app/Sources/Threadbear/AppDump.swift` and `ComposerView.swift` (debug only).
-- Remaining: `composer.slash.resize` (dragging its edges and columns); Open file
-  opens the system's app until file previews land; descriptions read as plain text
-  rather than inline markdown.
+- Remaining: `composer.slash.resize` (dragging its edges and columns);
+  descriptions read as plain text rather than inline markdown. (Open file now
+  previews the skill in the pane, as the Swift app does: see the 10 Nov entry.)
 - Verification: `@composer.slash` and `@composer.slash.keys`, 9 of 9 on both apps
   on Tinker Desk, and in the whole-suite runs under the new-thread page's entry
   below; `cargo test -p threadbear-core` (the palette's own rules, 18 tests); a

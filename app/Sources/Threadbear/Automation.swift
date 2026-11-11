@@ -225,6 +225,8 @@ enum Automation {
                 "followMain": settings.followMain,
                 "bulletReplies": settings.bulletReplies,
                 "oneReply": settings.oneReply,
+                "labReview": settings.labReview,
+                "keepAwake": settings.keepAwake.map { $0 as Any } ?? NSNull(),
                 // "" is none (small jobs off), or an older runner with no pools.
                 "smallJobsPool": settings.models.pool ?? "",
                 "privateFolders": settings.models.privateFolders,
@@ -1039,14 +1041,15 @@ enum Automation {
             try? await Task.sleep(for: .milliseconds(400))
             return "ok"
         case "project":
-            // {"cmd":"project","id":"p_…"} opens a project's page in the
+            // {"cmd":"project","id":"p_…"} (or "title") opens a project's page in the
             // detail area; {"cmd":"project","close":true} closes it, and
             // "newThread" true is the page's New Thread button.
             if c["close"] as? Bool == true {
                 app.openProjectId = nil
                 return "ok"
             }
-            guard let id = c["id"] as? String else {
+            // "title" finds it by name instead, for the specs.
+            guard let id = (c["id"] as? String) ?? (c["title"] as? String).flatMap({ title in app.projects.first { $0.title == title }?.id }) else {
                 return "error give an id: \(app.projects.map(\.id).joined(separator: ", "))"
             }
             guard app.project(id) != nil else { return "error no project \(id); there are \(app.projects.map(\.id).joined(separator: ", "))" }
@@ -1095,6 +1098,16 @@ enum Automation {
                     return "error scheduleSection must be one of \(ScheduleSection.allCases.map(\.rawValue).joined(separator: ", "))"
                 }
                 if name == "expand" { app.collapsedScheduleSections.remove(section) } else { app.collapsedScheduleSections.insert(section) }
+                return "ok"
+            }
+            if let key = c["projectRow"] as? String {
+                // A project's row in the folded Projects view (projectDecisions
+                // experiment), by title or id, as its chevron does; "-" or
+                // "Not in a project" for the threads in none.
+                let id = key == "Not in a project" ? ProjectFolds.unfiledId
+                    : app.projects.first(where: { $0.id == key || $0.title == key })?.id ?? (key == ProjectFolds.unfiledId ? key : nil)
+                guard let id else { return "error no project \(key)" }
+                if (name == "expand") != app.openProjectRows.contains(id) { app.toggleProjectRow(id) }
                 return "ok"
             }
             if let raw = c["section"] as? String {
@@ -1190,6 +1203,8 @@ enum Automation {
             return await pageSwipe(c, app: app)
         case "decide":
             return decide(c, app: app)
+        case "decision":
+            return decision(c, app: app)
         case "hints":
             ShortcutHints.shared.setShowing(c["on"] as? Bool ?? true)
             try? await Task.sleep(for: .milliseconds(100))
@@ -1447,7 +1462,7 @@ enum Automation {
             if c["toggle"] as? Bool == true { app.toggleTerminal() }
             let target = TerminalTarget.for(app.selectedThread) { app.runnerName(of: $0) }
             if let text = c["type"] as? String { Terminals.shared.open(target).type(text) }
-            if let command = c["put"] as? String { app.putInTerminal(ShellBlock(command: command)) { _ in } }
+            if let command = c["put"] as? String { app.putInTerminal(ShellBlock(command: command), from: app.selection) { _ in } }
             if let ms = c["wait"] as? Int { try? await Task.sleep(for: .milliseconds(ms)) }
             let focused = (NSApp.mainWindow?.firstResponder as? NSView).map { String(describing: type(of: $0)) } ?? "none"
             return "ok shown=\(app.terminalShown) focus=\(focused) cwd=\(target.cwd) shells=\(Terminals.shared.debugSummary)"
@@ -1679,6 +1694,38 @@ extension Automation {
             if let found = findMenuItem(title, in: item.submenu) { return found }
         }
         return nil
+    }
+
+    /// A decision on the open project's page (the projectDecisions
+    /// experiment), through the card's own calls: `thread` (its id or
+    /// title), `pick` "ask:choice" (both 1-based, 0 for Something else),
+    /// `write` "ask:words" in its Something else box, `send` as ⌘Return
+    /// there. Says the page's decisions after, as `dump` does.
+    @MainActor
+    static func decision(_ c: [String: Any], app: AppModel) -> String {
+        guard app.projectDecisionsOn else { return "error the projectDecisions experiment is off" }
+        guard let project = app.openProject else { return "error no project page open" }
+        let shown = AppDump.projectDecisionThreads(project, app: app)
+        guard let key = c["thread"] as? String else { return "error give a thread: " + shown.map(\.title).joined(separator: ", ") }
+        guard let thread = shown.first(where: { $0.id == key || $0.title == key }) else { return "error no decision from \(key); there are " + shown.map(\.title).joined(separator: ", ") }
+        if let pick = c["pick"] as? String {
+            let parts = pick.split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2, thread.asks.indices.contains(parts[0] - 1),
+                  parts[1] == 0 || Decisions.choices(for: thread.asks[parts[0] - 1]).indices.contains(parts[1] - 1) else { return "error no choice \(pick)" }
+            app.pickDecision(thread: thread, ask: parts[0] - 1, option: parts[1] == 0 ? Decisions.ownAnswer : parts[1] - 1)
+        }
+        if let value = c["write"] as? String {
+            guard let colon = value.firstIndex(of: ":"), let n = Int(value[..<colon]), thread.asks.indices.contains(n - 1) else { return "error no ask in \(value)" }
+            let ask = n - 1
+            if let now = app.threads[thread.id], app.picks(for: now)[ask] != Decisions.ownAnswer { app.pickDecision(thread: now, ask: ask, option: Decisions.ownAnswer) }
+            if let now = app.threads[thread.id] {
+                var note = app.notes(for: now)[ask] ?? AskNote()
+                note.text = String(value[value.index(after: colon)...])
+                app.setNote(thread: now, ask: ask, note: note)
+            }
+        }
+        if c["send"] as? Bool == true { app.decisionBoxReturn(threadId: thread.id, command: true) }
+        return "ok " + (AppDump.projectDecisionLines(project, app: app) ?? []).joined(separator: "\n")
     }
 
     /// The open thread's card of asks, picked as its buttons pick:

@@ -384,7 +384,7 @@ export class Relay {
       lastSeenSeq: 0,
       runnerId: t.runnerId,
     };
-    for (const k of ['model', 'createdAt', 'lastActivityAt', 'snoozedUntil', 'archivedAt', 'starredAt', 'startedBy', 'asked', 'recap'] as const) {
+    for (const k of ['model', 'createdAt', 'lastActivityAt', 'snoozedUntil', 'archivedAt', 'starredAt', 'startedBy', 'asked', 'keywords'] as const) {
       if (t[k] !== undefined) thread[k] = t[k];
     }
     if (t.lastActivityAt) thread.updatedAt = t.lastActivityAt;

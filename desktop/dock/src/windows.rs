@@ -44,7 +44,14 @@ impl FloatingWindows {
         let gone: Vec<PanelId> = self.windows.keys().filter(|p| !floating.iter().any(|f| &f.panel == *p)).cloned().collect();
         for panel in gone {
             if let Some(handle) = self.windows.remove(&panel) {
-                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                let gone_activation = options.window_activation.clone();
+                let _ = handle.update(cx, |_, window, cx| {
+                    // Gone, it isn't in front, whether it said so first or not.
+                    if let Some(told) = &gone_activation {
+                        told(false, window, cx);
+                    }
+                    window.remove_window();
+                });
             }
         }
         let focus = model.read(cx).controller.focus_next.clone();
@@ -236,13 +243,16 @@ struct FloatPress {
     mode: FloatMode,
     frame_at_start: dl::Rect,
     mouse_at_start: dl::Point,
+    /// For moving the window by hand, on the Mac (`FloatMode::WindowMove`).
+    grab: Option<platform::WindowGrab>,
     _timer: Option<Task<()>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum FloatMode {
     Waiting,
-    /// The OS is moving it; the release ends it, and there's nothing to track.
+    /// Just moving the window: by hand on the Mac (`grab`), otherwise the OS
+    /// is doing it and the release ends it.
     WindowMove,
     /// Moving it by hand, with the drop targets showing.
     Panel,
@@ -263,7 +273,12 @@ impl FloatingPanelView {
             let panel = this.panel.clone();
             this.model.update(cx, |m, cx| m.update_controller(cx, |c| c.remember_window_frame(&panel, frame)));
         });
-        Self { panel, model, content, options, press: None, _subscriptions: vec![observed, bounds] }
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            if let Some(told) = this.options.window_activation.clone() {
+                told(window.is_window_active(), window, cx);
+            }
+        });
+        Self { panel, model, content, options, press: None, _subscriptions: vec![observed, bounds, activation] }
     }
 
     /// Where the window is, and where the pointer is on screen.
@@ -296,6 +311,7 @@ impl FloatingPanelView {
             mode: FloatMode::Waiting,
             frame_at_start: Self::window_frame(window),
             mouse_at_start: Self::mouse_on_screen(event.position, window),
+            grab: platform::grab_window(window),
             _timer: timer,
         });
         cx.notify();
@@ -331,7 +347,7 @@ impl FloatingPanelView {
         // The button came up without a release (between two frames): over.
         if event.pressed_button != Some(MouseButton::Left) {
             if self.press.is_some() {
-                self.pointer_up(window, cx);
+                self.pointer_up(false, window, cx);
             }
             return;
         }
@@ -349,10 +365,16 @@ impl FloatingPanelView {
                 // window still goes where it's dragged.
                 p.mode = FloatMode::WindowMove;
                 p._timer = None;
-                window.start_window_move();
+                if p.grab.is_none() {
+                    window.start_window_move();
+                }
             }
         }
         let Some(p) = &self.press else { return };
+        if let (FloatMode::WindowMove, Some(grab)) = (p.mode, p.grab) {
+            platform::move_grabbed_window(window, grab);
+            return;
+        }
         if p.mode == FloatMode::Panel {
             // Fresh from the OS rather than the event's own position, which
             // was worked out before we last moved the window (see platform.rs).
@@ -367,9 +389,16 @@ impl FloatingPanelView {
         }
     }
 
-    fn pointer_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// `released`: a real mouse-up ended the press. Otherwise the button was
+    /// found up on a later move (it was let go over another app), and the
+    /// pointer has gone on since, so the window stays where the drag left it.
+    fn pointer_up(&mut self, released: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(p) = self.press.take() else { return };
         cx.notify();
+        if let (FloatMode::WindowMove, Some(grab), true) = (p.mode, p.grab, released) {
+            // Once more where it let go, as the main window's does.
+            platform::move_grabbed_window(window, grab);
+        }
         if p.mode == FloatMode::Panel {
             platform::set_window_alpha(window, 1.);
             let frame = Self::window_frame(window);
@@ -464,6 +493,15 @@ impl Render for FloatingPanelView {
             .size_full()
             .flex()
             .flex_col()
+            // A press in a window that was never told it's in front (an X
+            // server with no window manager) is still someone at it.
+            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                if !window.is_window_active() {
+                    if let Some(told) = this.options.window_activation.clone() {
+                        told(true, window, cx);
+                    }
+                }
+            }))
             .bg(theme.panel)
             .text_color(theme.header_text)
             .child(bar)
@@ -519,7 +557,7 @@ fn float_listeners(view: WeakEntity<FloatingPanelView>, dragging: bool) -> impl 
             let released = view.clone();
             window.on_mouse_event(move |_: &MouseUpEvent, phase, window, cx| {
                 if phase == DispatchPhase::Capture {
-                    let _ = released.update(cx, |v, cx| v.pointer_up(window, cx));
+                    let _ = released.update(cx, |v, cx| v.pointer_up(true, window, cx));
                 }
             });
         },

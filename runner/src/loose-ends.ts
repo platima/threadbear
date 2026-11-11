@@ -6,6 +6,8 @@
 // and he wanted someone's word that nothing was left first. The one real
 // loose end in the threads it looked at was a branch not on main
 // (938c1cd1), so these are the things a runner can see for itself.
+import fs from 'node:fs';
+import path from 'node:path';
 import type { LooseEnd, Schedule } from './protocol.ts';
 import { git, MAIN, type WorktreeRecord } from './worktrees.ts';
 
@@ -22,6 +24,61 @@ export async function worktreeLooseEnds(w: WorktreeRecord): Promise<LooseEnd[]> 
   const files = status.ok ? status.stdout.split('\n').filter((l) => l.trim()).length : 0;
   if (files > 0) out.push({ kind: 'uncommitted', text: `${files === 1 ? '1 file' : `${files} files`} in its worktree ${files === 1 ? "isn't" : "aren't"} committed` });
   return out;
+}
+
+// Files the thread changed (its Highlights' edited list) outside a
+// worktree of its own: a thread in ~/dev/me/misc or a repo without
+// worktrees shares its checkout, so only its own files count, not the
+// whole folder's status, which holds other threads' work too. And the
+// commits it made there that no remote has, in a repo that has one: his
+// own repos push straight to main. The check-in of 11 Nov found most of
+// his typed "anything else?" asks came from threads like these, where
+// the card could only see threads and check-ins. `skip` is the thread's
+// own worktree, which worktreeLooseEnds covers.
+export async function editedLooseEnds(edited: string[], commits: string[], skip?: string): Promise<LooseEnd[]> {
+  const repos = new Map<string, string[]>();
+  const tops = new Map<string, string | undefined>();
+  const topOf = async (file: string): Promise<string | undefined> => {
+    let dir = path.dirname(file);
+    // A file since deleted, in a folder since deleted: its nearest folder.
+    while (!fs.existsSync(dir) && path.dirname(dir) !== dir) dir = path.dirname(dir);
+    if (!tops.has(dir)) {
+      const r = await git(dir, ['rev-parse', '--show-toplevel']);
+      tops.set(dir, r.ok ? r.stdout.trim() : undefined);
+    }
+    return tops.get(dir);
+  };
+  const inside = (file: string, dir: string) => file === dir || file.startsWith(dir + path.sep);
+  for (const file of edited) {
+    if (!path.isAbsolute(file) || (skip && inside(file, skip))) continue;
+    const top = await topOf(file);
+    if (!top || (skip && inside(top, skip))) continue;
+    repos.set(top, [...(repos.get(top) ?? []), path.relative(top, file)]);
+  }
+  const out: LooseEnd[] = [];
+  for (const [top, files] of repos) {
+    const name = path.basename(top);
+    const status = await git(top, ['status', '--porcelain', '--untracked-files=all', '--', ...files]);
+    const n = status.ok ? status.stdout.split('\n').filter((l) => l.trim()).length : 0;
+    if (n > 0) out.push({ kind: 'uncommitted', text: `${n === 1 ? '1 file' : `${n} files`} it changed in ${name} ${n === 1 ? "isn't" : "aren't"} committed` });
+    // A commit the thread made is in this repo if git knows it here.
+    const remotes = await git(top, ['remote']);
+    if (!remotes.ok || !remotes.stdout.trim()) continue;
+    let unpushed = 0;
+    for (const sha of commits) {
+      if (!(await git(top, ['cat-file', '-e', `${sha}^{commit}`])).ok) continue;
+      const on = await git(top, ['branch', '-r', '--contains', sha]);
+      if (on.ok && !on.stdout.trim()) unpushed++;
+    }
+    if (unpushed > 0) out.push({ kind: 'unpushed', text: `${unpushed === 1 ? '1 commit' : `${unpushed} commits`} it made in ${name} ${unpushed === 1 ? "isn't" : "aren't"} pushed` });
+  }
+  return out;
+}
+
+// What the agent said is still open (end_turn's open): things only it
+// knows, like a reply worth sending or a decision waiting elsewhere.
+export function agentLooseEnds(open: string[] | undefined): LooseEnd[] {
+  return (open ?? []).map((text) => ({ kind: 'open' as const, text }));
 }
 
 // A thread this one started that hasn't finished: still working, or

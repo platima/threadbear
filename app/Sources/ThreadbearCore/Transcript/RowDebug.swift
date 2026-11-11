@@ -47,11 +47,12 @@ public enum RowDebug {
             let state = switch card.state { case .waiting: "waiting"; case .approved: "approved"; case .sentBack: "sent back" }
             return "plan (\(state))" + (card.entries.isEmpty ? ": " + PlanCardText.summary(card.text) : ", " + card.entries.map(\.text).joined(separator: "; "))
         case .asks(let card):
+            let review = card.review.map { r in ", review: " + r.heading + r.findings.map { "; #\($0.id) \($0.outcome ?? "no answer"): \($0.claim)" }.joined() } ?? ""
             if card.isDone {
                 let loose = card.looseEnds.map { $0.isEmpty ? ", loose ends: none" : ", loose ends: " + $0.map(\.text).joined(separator: "; ") } ?? ""
-                return "\(card.isOpen ? "open" : "closed"), nothing needed" + loose + (card.next.isEmpty ? "" : ", next: " + card.next.enumerated().map { (card.pickedNext.contains($0.offset) ? "[x] " : "") + $0.element }.joined(separator: "; "))
+                return "\(card.isOpen ? "open" : "closed"), nothing needed" + loose + (card.next.isEmpty ? "" : ", next: " + card.next.enumerated().map { (card.pickedNext.contains($0.offset) ? "[x] " : "") + $0.element }.joined(separator: "; ")) + review
             }
-            return "\(card.isOpen ? "open" : "closed"), \(card.tickedCount) of \(card.asks.count) ticked: " + card.asks.map(\.action).joined(separator: "; ")
+            return "\(card.isOpen ? "open" : "closed"), \(card.tickedCount) of \(card.asks.count) ticked: " + card.asks.map(\.action).joined(separator: "; ") + review
         case .footer(let completion):
             var text = RelativeTime.duration(milliseconds: completion.durationMs)
             if let cost = CostText.format(completion.costUsd) { text += ", " + cost }

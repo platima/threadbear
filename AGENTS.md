@@ -14,6 +14,8 @@ anything. The Convex mirror, the iPhone app (`ios/`) and the website (`web/`)
 are in `docs/convex-backend.md` and `docs/website.md`. The public landing
 page (threadbear.mikecann.app) is `site/`, a separate
 static site with its own `package.json`; its comments say how to build it.
+Its What's new page (`/changelog`) gets an entry per release, with pictures:
+`docs/changelog.md`.
 
 This file is written for Mike's own copy. The machines it names (the M5,
 `bruce`, `cloud`, `tinker-desk`) and paths under `~/dev/me` are his: in

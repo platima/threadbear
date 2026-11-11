@@ -95,7 +95,15 @@ async fn run(app: &WeakEntity<Threadbear>, window: AnyWindowHandle, cmd: &Value,
     let from_new = cmd["cmd"] == "send" && app.read_with(cx, |t, _| t.selected.is_none()).map_err(|e| e.to_string())?;
     let weak = app.clone();
     let Some(app) = app.upgrade() else { return Err("the app has gone".into()) };
-    let out = cx.update_window(window, |_, window, cx| step(&app, cmd, window, cx)).map_err(|e| e.to_string())??;
+    // `"settings": true`: in the Settings window, as the Swift app's `click`
+    // and `shot --settings` reach it.
+    let window = if cmd["settings"].as_bool() == Some(true) && cmd["cmd"] != "settings" {
+        app.read_with(cx, |t, _| t.settings_window.as_ref().map(|(handle, _)| *handle)).ok_or("the Settings window isn't open")?
+    } else {
+        window
+    };
+    // Its clicks and keys are the script's, not Mike being at the window.
+    let out = cx.update_window(window, |_, window, cx| crate::thread::scripted_input(|| step(&app, cmd, window, cx))).map_err(|e| e.to_string())??;
     if !from_new {
         return Ok(out);
     }
@@ -131,12 +139,32 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             Ok(app.read(cx).dump(cx))
         }
         "status" => Ok(json!("ok")),
+        // The Settings window, as the Swift command: opened (on `tab`), or
+        // `"close": true` closes it.
+        "settings" => {
+            if cmd["close"].as_bool() == Some(true) {
+                let open = app.update(cx, |t, _| t.settings_window.take());
+                if let Some((handle, _)) = open {
+                    crate::thread::set_looking(handle.window_id().as_u64(), false);
+                    handle.update(cx, |_, window, _| window.remove_window()).ok();
+                }
+                return Ok(json!("ok closed"));
+            }
+            let tab = match cmd["tab"].as_str() {
+                Some(name) => Some(crate::settings_window::Tab::from_name(name).ok_or_else(|| format!("tab must be one of {}", crate::settings_window::Tab::ALL.map(|t| t.name()).join(", ")))?),
+                None => None,
+            };
+            app.update(cx, |t, cx| t.open_settings(tab, cx));
+            Ok(json!("ok"))
+        }
         // The sidebar's commands (sidebar.rs). Guarded ones only take the forms
         // that name a section, a row or a tip; the others fall through below.
         "hover" | "sort" | "archive-more" | "star" | "unstar" | "unarchive" | "realMenu" | "menu-popover" => crate::sidebar::automation(app, cmd, window, cx),
         "new" | "options" => crate::new_thread::automation(app, cmd, window, cx),
         "move" => crate::move_sheet::automation(app, cmd, window, cx),
         "expand" | "collapse" if cmd.get("section").is_some() => crate::sidebar::automation(app, cmd, window, cx),
+        "expand" | "collapse" if cmd.get("scheduleSection").is_some() => crate::scheduled::automation(app, cmd, cx),
+        "schedule" | "close-schedule" => crate::scheduled::editor_automation(app, cmd, window, cx),
         "archive" | "snooze" if cmd.get("id").is_some() || cmd.get("said").is_some() => crate::sidebar::automation(app, cmd, window, cx),
         "click" if cmd.get("tip").is_some() || cmd.get("tipPrefix").is_some() => crate::sidebar::automation(app, cmd, window, cx),
         // The pane beside the thread (highlights.rs): the Swift app's names.
@@ -155,13 +183,20 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             let side = app.read(cx).side.clone();
             crate::viewer::viewer_command(&side, &json!({}), cx)
         }
-        "open" | "select" => {
+        "open" => {
             let id = app.read(cx).thread_id_from(text(cmd, "id"))?;
             app.update(cx, |t, cx| {
                 t.reveal_thread(&id, cx);
                 t.open(id.clone(), window, cx)
             });
             Ok(json!(format!("open ok {id}")))
+        }
+        // As the Swift app's: picks it and nothing more, so the sidebar stays
+        // on the view it's showing (a schedule's target does this).
+        "select" => {
+            let id = app.read(cx).thread_id_from(text(cmd, "id"))?;
+            app.update(cx, |t, cx| t.open(id.clone(), window, cx));
+            Ok(json!(format!("ok {id}")))
         }
         // The window shell (shell.rs, rails.rs, header.rs), the Swift
         // app's commands of the same names.
@@ -293,6 +328,18 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             }
             Ok(json!("ok"))
         }
+        // How smoothly it's been drawing (frame_stats.rs), in a build with
+        // `frame-stats`; `reset` starts the count again from now.
+        "frame-stats" => {
+            #[cfg(feature = "frame-stats")]
+            {
+                Ok(crate::frame_stats::report(window, cmd["reset"].as_bool().unwrap_or(false)))
+            }
+            #[cfg(not(feature = "frame-stats"))]
+            {
+                Err("this build can't measure frames: build it with --features frame-stats".into())
+            }
+        }
         "menu-key" => {
             let mut key = String::new();
             for m in cmd["modifiers"].as_array().into_iter().flatten().filter_map(Value::as_str) {
@@ -364,9 +411,17 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             let words = cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default();
             Ok(json!(format!("ok {}", serde_json::to_string(&words).unwrap_or_default())))
         }
-        // Nothing to do: this app marks a thread read when it's open, and the
-        // Swift app only does when it's in front, which a scripted one never is.
-        "focus" => Ok(json!("ok")),
+        // As if the window had come to the front: both apps read a thread
+        // only while it is, and a scripted one never is.
+        "focus" => {
+            crate::thread::set_looking(crate::thread::SCRIPTED, true);
+            app.update(cx, |t, cx| {
+                if let Some(pane) = t.pane.clone() {
+                    pane.read(cx).mark_seen();
+                }
+            });
+            Ok(json!("ok"))
+        }
         // Everything the thread has, not just its newest page, then how long a
         // frame takes to draw while it's scrolled (the risk check in stage 0).
         "load-all" => {
@@ -392,6 +447,10 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         }
         "screenshot" => {
             let path = text(cmd, "path");
+            // A fresh frame first, as `dump` draws one: a covered window gets
+            // no frames from the system, so a picture that's finished loading
+            // since the last one (a project's icon) was missing from the shot.
+            window.render_frame(cx);
             let image = window.render_to_image().map_err(|e| e.to_string())?;
             image.save(path).map_err(|e| e.to_string())?;
             Ok(json!("ok"))
@@ -602,11 +661,10 @@ fn shell_step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &m
         // sets NSApp.appearance. Lasts until the system changes.
         "appearance" => {
             let mode = cmd["mode"].as_str().ok_or("mode is light, dark or system")?;
-            use gpui_kit::component::{Theme, ThemeMode};
+            // The preference too, so the Mac's own change doesn't undo it; a
+            // script's choice isn't saved.
             match mode {
-                "light" => Theme::change(ThemeMode::Light, Some(window), cx),
-                "dark" => Theme::change(ThemeMode::Dark, Some(window), cx),
-                "system" => Theme::sync_system_appearance(Some(window), cx),
+                "light" | "dark" | "system" => crate::style::set_appearance(crate::style::Appearance::from_name(mode), window, cx),
                 other => return Err(format!("mode is light, dark or system, not {other:?}")),
             }
             Ok(json!(format!("ok {mode}")))

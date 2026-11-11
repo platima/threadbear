@@ -331,6 +331,23 @@ impl<'a> ChipSettings<'a> {
     }
 
     /// The model chip (ThreadSettings.modelChipTitle): "Claude · Fable 5.1 · High".
+    /// `ThreadSettings.modelChipBadge`: with pools, the pool's badge when
+    /// every login in it is running out, or a pinned login's own.
+    pub fn model_chip_badge(&self) -> Option<crate::new_thread::ChipBadge> {
+        if !self.uses_pools() {
+            return None;
+        }
+        match self.pool() {
+            Some(pool) => crate::new_thread::pool_chip_badge(pool, &self.logins.accounts),
+            None => crate::new_thread::chip_badge(self.logins.account(&self.account)),
+        }
+    }
+
+    /// `ThreadSettings.accountBadge`: the account chip's "· 12%" or "Limit reached".
+    pub fn account_badge(&self) -> Option<crate::new_thread::ChipBadge> {
+        crate::new_thread::chip_badge(self.logins.account(&self.account))
+    }
+
     pub fn model_chip_title(&self) -> String {
         let rest = chip_title(self.effective_model().as_deref(), self.effective_effort().as_deref(), self.choices());
         match self.owner().filter(|o| !o.is_empty()) {

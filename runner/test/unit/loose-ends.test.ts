@@ -9,7 +9,9 @@ import { makeHarness, tmpDir } from '../helpers/fakes.ts';
 import { sh, shPath } from '../helpers/platform.ts';
 import { checkSummary } from '../helpers/protocol-check.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
-import { anyOpen, childLooseEnds, scheduleLooseEnds, worktreeLooseEnds } from '../../src/loose-ends.ts';
+import { agentLooseEnds, anyOpen, childLooseEnds, editedLooseEnds, scheduleLooseEnds, worktreeLooseEnds } from '../../src/loose-ends.ts';
+import { needsFromTool } from '../../src/needs.ts';
+import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { EXPERIMENTS } from '../../src/experiments.ts';
 import type { Schedule } from '../../src/protocol.ts';
 import type { WorktreeRecord } from '../../src/worktrees.ts';
@@ -161,4 +163,71 @@ test('looseEnds: not checked when off, when the turn needs Mike, or when it arch
   assert.equal(h.runner.get(b).looseEnds, undefined);
   assert.equal(h.runner.get(c).looseEnds, undefined);
   assert.deepEqual(h.runner.get(d).looseEnds?.ends, []);
+});
+
+// The check-in of 11 Nov: most typed "anything else?" asks came from
+// threads with no worktree of their own (misc, tandem, the video folders),
+// and the answers were things only the agent knew (a reply worth sending,
+// PRs waiting on a decision, an export being redone).
+test('looseEnds: files a thread changed in a shared checkout count, not the rest of its status; unpushed commits too', async () => {
+  const root = fs.realpathSync(tmpDir('tb-loose-shared-'));
+  const remote = path.join(root, 'remote.git');
+  sh(root, `git init -q --bare -b main ${remote}`);
+  const repo = path.join(root, 'tandem');
+  fs.mkdirSync(repo);
+  sh(repo, `git init -q -b main && git remote add origin ${remote} && echo one > a.txt && echo one > b.txt && git add -A && git commit -qm init && git push -q -u origin main`);
+  const a = path.join(repo, 'a.txt');
+  // Another thread's work in the same checkout isn't this one's.
+  sh(repo, 'echo theirs > b.txt');
+  assert.deepEqual(await editedLooseEnds([a], []), []);
+  sh(repo, 'echo mine > a.txt && mkdir -p new && echo x > new/c.txt');
+  assert.deepEqual(await editedLooseEnds([a, path.join(repo, 'new', 'c.txt'), '/nowhere/gone.txt', 'relative.txt'], []), [
+    { kind: 'uncommitted', text: "2 files it changed in tandem aren't committed" },
+  ]);
+  sh(repo, 'git add a.txt new && git commit -qm mine');
+  const sha = sh(repo, 'git rev-parse HEAD');
+  assert.deepEqual(await editedLooseEnds([a], [sha, 'f'.repeat(40)]), [{ kind: 'unpushed', text: "1 commit it made in tandem isn't pushed" }]);
+  sh(repo, 'git push -q');
+  assert.deepEqual(await editedLooseEnds([a], [sha]), []);
+  // Its own worktree is worktreeLooseEnds' to say.
+  sh(repo, 'echo again > a.txt');
+  assert.deepEqual(await editedLooseEnds([a], [], repo), []);
+  // No remote: nothing to push to, so no unpushed line.
+  const local = path.join(root, 'local');
+  fs.mkdirSync(local);
+  sh(local, 'git init -q -b main && echo x > x.txt && git add -A && git commit -qm x');
+  assert.deepEqual(await editedLooseEnds([path.join(local, 'x.txt')], [sh(local, 'git rev-parse HEAD')]), []);
+});
+
+test("looseEnds: end_turn's open is the agent's word, kept when empty, offered only while on", () => {
+  assert.deepEqual(needsFromTool({ needs: 'nothing', open: [] }), { needs: 'nothing', open: [] });
+  assert.deepEqual(needsFromTool({ needs: 'nothing' }), { needs: 'nothing' });
+  const said = needsFromTool({ needs: 'nothing', open: ['Yuriy asked for this on X: worth a reply', 'Yuriy asked for this on X: worth a reply', '', 'b', 'c', 'd'] });
+  assert.deepEqual(said?.open, ['Yuriy asked for this on X: worth a reply', 'b', 'c']);
+  assert.deepEqual(agentLooseEnds(said?.open).map((e) => e.kind), ['open', 'open', 'open']);
+  assert.equal(anyOpen(agentLooseEnds(['x'])), true);
+  const h = setup();
+  const { thread } = h.runner.create({ text: 'Fix it', accountId: 'claude-main' });
+  const shape = (on: boolean) => (buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { oneReply: () => true, looseEnds: () => on }).find((x) => x.name === 'end_turn')!.inputSchema as unknown as { shape: Record<string, unknown> }).shape;
+  assert.ok('open' in shape(true));
+  assert.ok(!('open' in shape(false)));
+});
+
+test('looseEnds: what the agent said is open, and files it changed outside a worktree, go on the card', async () => {
+  const h = setup();
+  const repo = fs.realpathSync(tmpDir('tb-loose-misc-'));
+  sh(repo, 'git init -q -b main && echo one > notes.md && git add -A && git commit -qm init');
+  const { thread } = h.runner.create({ text: 'Fix it', accountId: 'claude-main', cwd: repo });
+  const id = thread.id;
+  const s = h.adapter.sessions.filter((x) => x.opts.threadId === id).at(-1)!;
+  s.init();
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'w1', name: 'Edit', kind: 'edit', title: 'Edit notes.md', input: { file_path: path.join(repo, 'notes.md') } } });
+  sh(repo, 'echo two > notes.md');
+  finish(h, id, { needs: 'nothing', open: ['Yuriy asked for this on X: worth a reply'] });
+  await until(() => Boolean(h.runner.get(id).looseEnds), 'the check');
+  const ends = h.runner.get(id).looseEnds!.ends;
+  assert.deepEqual(ends.map((e) => e.kind), ['uncommitted', 'open']);
+  assert.match(ends[0].text, /1 file it changed in .* isn't committed/);
+  assert.equal(ends[1].text, 'Yuriy asked for this on X: worth a reply');
+  assert.deepEqual(checkSummary(h.runner.get(id)), []);
 });

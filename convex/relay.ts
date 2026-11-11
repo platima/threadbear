@@ -12,7 +12,7 @@
 import { ConvexError, v } from 'convex/values';
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Id } from './_generated/dataModel';
-import { checkRunnerId, forbidden, pageLimit, runnerAuth, sha256 } from './lib';
+import { checkRunnerId, forbidden, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
 import { docBytes } from './runnerAccess';
 import { messageButton } from './schema';
 import { deleteIfUnused, MAX_COMMAND_FILES, MAX_RUNNER_UPLOAD_BYTES, storageInUse } from './sync';
@@ -126,6 +126,13 @@ function moveInfoArg(raw: unknown): Record<string, unknown> {
   const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const out: Record<string, unknown> = {};
   for (const k of MOVE_INFO_STRINGS) if (typeof o[k] === 'string' && (o[k] as string).length <= 2000) out[k] = o[k];
+  // Which repo, never a password or token in its address: the runner the
+  // preview asks reads this row (an older main Mac's runner sends it whole).
+  if (typeof out.origin === 'string') out.origin = withoutCredentials(out.origin);
+  // Nor what no target plans from: an older main Mac's runner sends the
+  // thread's title (made from its first message) and session whole.
+  if ('title' in out) out.title = '';
+  delete out.sessionId;
   if (typeof o.worktree === 'boolean') out.worktree = o.worktree;
   if (typeof o.schedules === 'number' && Number.isFinite(o.schedules)) out.schedules = o.schedules;
   return out;

@@ -604,6 +604,11 @@ export class ThreadRouter implements ThreadControl {
     return this.runner.openSubagentCards(threadId);
   }
 
+  // Always this runner's, for the session it runs itself, as above.
+  reviewOwes(threadId: string): ReturnType<Runner['reviewOwes']> {
+    return this.runner.reviewOwes(threadId);
+  }
+
   async list(include: Bucket[] = ['inbox']): Promise<ThreadSummary[]> {
     const local = this.runner.list(include);
     const e = this.elsewhere();
@@ -739,6 +744,7 @@ export function phoneCommands(runner: Runner, remote?: Pick<Peers, 'owns' | 'cal
     interrupt: (id) => at(id, 'threads.interrupt', {}, () => runner.interrupt(id, { byMike: true })),
     quickAsk: (p) => runner.quickAsk(p),
     pressButton: (id, buttonId) => at(id, 'buttons.press', { buttonId }, () => runner.pressButton(id, buttonId)),
+    listButtons: (id) => at(id, 'buttons.list', {}, () => runner.listButtons(id)),
     threadCommands: (id) => at(id, 'threads.commands', {}, () => runner.threadCommands(id)),
   };
 }

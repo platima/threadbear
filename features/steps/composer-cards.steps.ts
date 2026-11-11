@@ -12,10 +12,6 @@ function decisions(d: Dump): string[] {
   return (d as WithCard).decisions ?? [];
 }
 
-Then('the recap box says {string}', async function (this: ThreadbearWorld, line: string) {
-  await this.until(`the recap box saying "${line}"`, (d) => ((d.composer as { recap?: string[] | null }).recap ?? []).includes(line));
-});
-
 Then('the card in the composer says {string}', async function (this: ThreadbearWorld, heading: string) {
   await this.until(`the card saying "${heading}"`, (d) => cardLines(d)[0] === heading);
 });
@@ -26,6 +22,11 @@ Then('the card in the composer asks {string}', async function (this: ThreadbearW
 
 Then('the card offers the follow-up {string}', async function (this: ThreadbearWorld, followUp: string) {
   await this.until(`the card offering "${followUp}"`, (d) => cardLines(d).some((l) => l.includes(followUp)));
+});
+
+// Any line of the card: a review's heading or one of its findings.
+Then('the card shows {string}', async function (this: ThreadbearWorld, words: string) {
+  await this.until(`the card showing "${words}"`, (d) => cardLines(d).some((l) => l.includes(words)));
 });
 
 Then('the follow-up {string} is ticked', async function (this: ThreadbearWorld, followUp: string) {

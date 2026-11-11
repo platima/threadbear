@@ -505,7 +505,7 @@ private struct WindowMeter: View {
             // is charted the same way.
             if window.kind == "weekly" || window.kind == "weekly_model" {
                 WeekChart(window: window, samples: samples, pace: stale ? nil : pace, colour: colour, now: now)
-                    .frame(height: zoomed(44))
+                    .frame(height: zoomed(58))
             } else {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
@@ -557,8 +557,11 @@ private struct WindowMeter: View {
     }
 }
 
-/// The weekly window from its start to its reset: what was left over time
-/// (full at the start, by definition), then this pace dashed on from now.
+/// The last seven days of a weekly window, rolling: what was left over
+/// time, last week's readings too, breaking at each reset, then this pace
+/// dashed on from now to the reset. Days along the bottom. A week that
+/// hasn't started since its reset (no reset time yet) still shows the
+/// week before, rather than an empty box (Mike, 11 Nov).
 private struct WeekChart: View {
     let window: UsageWindow
     let samples: [LimitSample]
@@ -567,56 +570,70 @@ private struct WeekChart: View {
     let now: Date
 
     var body: some View {
-        if let reset = window.resetsAt {
-            let start = reset.addingTimeInterval(-7 * 86400)
-            let points = [LimitSample(at: start, remainingPercent: 100)]
-                + samples.filter { $0.at > start && $0.at < now }
-                + [LimitSample(at: now, remainingPercent: window.remainingPercent)]
-            let ahead: [LimitSample] = pace.map { pace in
-                [LimitSample(at: now, remainingPercent: window.remainingPercent),
-                 pace.runsOutAt.map { LimitSample(at: $0, remainingPercent: 0) } ?? LimitSample(at: reset, remainingPercent: pace.leftAtReset ?? window.remainingPercent)]
-            } ?? []
-            let short = pace?.runsOutAt != nil
-            Chart {
-                // A faint line at each day of the week, so how far in it is
-                // and when it runs out read without a hover.
-                ForEach(1..<7, id: \.self) { day in
-                    RuleMark(x: .value("Day", start.addingTimeInterval(Double(day) * 86400)))
-                        .foregroundStyle(Color.primary.opacity(0.06))
-                        .lineStyle(StrokeStyle(lineWidth: 1))
-                }
-                ForEach(Array(points.enumerated()), id: \.offset) { _, point in
-                    AreaMark(x: .value("Time", point.at), yStart: .value("Floor", 0), yEnd: .value("Left", point.remainingPercent), series: .value("Part", "past"))
+        let from = now.addingTimeInterval(-RollingWeek.span)
+        let reset = window.resetsAt.flatMap { $0 > now ? $0 : nil }
+        let to = reset ?? now
+        let runs = RollingWeek.runs(samples: samples, current: window.remainingPercent, windowStart: reset?.addingTimeInterval(-RollingWeek.span), now: now)
+        let midnights = RollingWeek.midnights(from: from, to: to)
+        // Each day's name under the middle of its day, where that's on the chart.
+        let noons = RollingWeek.midnights(from: Calendar.current.startOfDay(for: from), to: to)
+            .map { $0.addingTimeInterval(12 * 3600) }
+            .filter { $0 > from && $0 < to }
+        let ahead: [LimitSample] = (reset != nil ? pace : nil).map { pace in
+            [LimitSample(at: now, remainingPercent: window.remainingPercent),
+             pace.runsOutAt.map { LimitSample(at: $0, remainingPercent: 0) } ?? LimitSample(at: to, remainingPercent: pace.leftAtReset ?? window.remainingPercent)]
+        } ?? []
+        let short = pace?.runsOutAt != nil
+        Chart {
+            ForEach(Array(runs.enumerated()), id: \.offset) { index, run in
+                ForEach(Array(run.enumerated()), id: \.offset) { _, point in
+                    AreaMark(x: .value("Time", point.at), yStart: .value("Floor", 0), yEnd: .value("Left", point.remainingPercent), series: .value("Part", "past \(index)"))
                         .foregroundStyle(colour.opacity(0.07))
                         .interpolationMethod(.monotone)
-                    LineMark(x: .value("Time", point.at), y: .value("Left", point.remainingPercent), series: .value("Part", "past"))
+                    LineMark(x: .value("Time", point.at), y: .value("Left", point.remainingPercent), series: .value("Part", "past \(index)"))
                         .foregroundStyle(colour)
                         .lineStyle(StrokeStyle(lineWidth: 1.5))
                         .interpolationMethod(.monotone)
                 }
-                ForEach(Array(ahead.enumerated()), id: \.offset) { _, point in
-                    LineMark(x: .value("Time", point.at), y: .value("Left", point.remainingPercent), series: .value("Part", "ahead"))
-                        .foregroundStyle(short ? Color.orange.opacity(0.8) : colour.opacity(0.6))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                }
-                PointMark(x: .value("Time", now), y: .value("Left", window.remainingPercent))
-                    .foregroundStyle(colour)
-                    .symbolSize(zoomed(18))
-                if let out = pace?.runsOutAt {
-                    PointMark(x: .value("Time", out), y: .value("Left", 0))
-                        .foregroundStyle(Color.orange)
-                        .symbolSize(zoomed(18))
-                }
             }
-            .chartXScale(domain: start...reset)
-            // A little room top and bottom, so the dots at full and empty
-            // aren't cut in half by the edge.
-            .chartYScale(domain: 0...100, range: .plotDimension(padding: zoomed(3)))
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .chartPlotStyle { $0.background(Color.primary.opacity(0.025)) }
-        } else {
-            Color.clear
+            ForEach(Array(ahead.enumerated()), id: \.offset) { _, point in
+                LineMark(x: .value("Time", point.at), y: .value("Left", point.remainingPercent), series: .value("Part", "ahead"))
+                    .foregroundStyle(short ? Color.orange.opacity(0.8) : colour.opacity(0.6))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+            PointMark(x: .value("Time", now), y: .value("Left", window.remainingPercent))
+                .foregroundStyle(colour)
+                .symbolSize(zoomed(18))
+            if let out = pace?.runsOutAt, reset != nil {
+                PointMark(x: .value("Time", out), y: .value("Left", 0))
+                    .foregroundStyle(Color.orange)
+                    .symbolSize(zoomed(18))
+            }
         }
+        .chartXScale(domain: from...to)
+        // A little room top and bottom, so the dots at full and empty
+        // aren't cut in half by the edge.
+        .chartYScale(domain: 0...100, range: .plotDimension(padding: zoomed(3)))
+        .chartXAxis {
+            // A faint line at each midnight, the day's name under its middle.
+            AxisMarks(values: midnights) { _ in
+                AxisGridLine().foregroundStyle(Color.primary.opacity(0.06))
+            }
+            AxisMarks(values: noons) { value in
+                AxisValueLabel(collisionResolution: .greedy) {
+                    if let date = value.as(Date.self) { Text(Self.day(date)) }
+                }
+                .font(.system(size: zoomed(9.5)))
+                .foregroundStyle(Color.secondary)
+            }
+        }
+        .chartYAxis(.hidden)
+        .chartPlotStyle { $0.background(Color.primary.opacity(0.025)) }
+    }
+
+    /// "Mon", "Tue".
+    static func day(_ date: Date) -> String {
+        let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        return names[(Calendar.current.component(.weekday, from: date) - 1) % 7]
     }
 }

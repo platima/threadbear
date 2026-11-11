@@ -226,7 +226,7 @@
 //    only to a backend of 50 or later; an older runner always sends them, as
 //    before. phone:project still returns them whole.
 // 51: an owned schedule can carry `check`, a shell command its runner runs
-//    before each run (experiment scheduleChecks). An older runner sends none.
+//    before each run. An older runner sends none.
 // 52: full sync (docs/full-convex.md step 4). eventBodies, sync:appendBodies,
 //    sync:remoteBody and phone:eventBody: a tool's output, input and diffs under
 //    the seq of its row, only from a runner with sync.full on. heldPictures,
@@ -319,4 +319,21 @@
 //    since 44. An older phone has no Stop.
 // 70: threads and threadIndex rows carry `recap`, the librarian's recap for
 //    the recap box. A runner sends it only from 70.
-export const API_VERSION = 70;
+// 71: an open card's asks can carry `run`, a command and the id of the Run
+//    button that runs it (phone:press). A runner sends it only from 71; an
+//    older phone just doesn't show it.
+// 72: a message row can be `plan` (a Plan first plan in full, up to 24,000
+//    characters), and phone:messages returns it, so the phone draws a plan
+//    card and reads the whole plan before Go ahead. An older backend's
+//    validator refuses the field, so a runner sends it only from 72 and as
+//    an ordinary reply before; an older phone shows it as one too.
+// 73: threads rows carry `looseEnds`, the done card's loose ends (what the
+//    runner found still open: a branch, files, a thread it started, a
+//    check-in, or the agent's own word), so the phone's done card lists
+//    them as the Mac's does. A runner sends it only from 73.
+// 74: threads and threadIndex rows carry `keywords`, the librarian's search
+//    words (runner/src/keywords.ts), which a runner sends only from 74.
+//    phone:search matches them too, and with `everywhere` every view's
+//    threads and every message's text, so a newer phone finds a thread by a
+//    word said anywhere in it. An older phone's search is as before.
+export const API_VERSION = 74;

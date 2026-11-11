@@ -7,7 +7,6 @@ use crate::composer::Composer;
 use crate::style;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Enter, InputEvent, Textarea, TextareaState};
-use gpui_kit::component::text::TextView;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
@@ -276,9 +275,12 @@ impl Composer {
         let card = self.open_card(cx)?;
         self.sync_card(&card);
         let body = if card.is_done() { self.render_done_card(&card, cx) } else { self.render_asks_card(&card, window, cx) };
-        let max_height = (f32::from(window.viewport_size().height) * 0.45).max(200.);
-        let column = div().id("composer-card").w_full().px(px(style::COMPOSER_PADDING)).pt(px(8.)).pb(px(10.)).max_h(px(max_height)).overflow_y_scroll().child(body);
-        Some(v_flex().w_full().child(column).child(div().w_full().h(px(1.)).bg(style::hairline(cx))).into_any_element())
+        // Under half the window (ComposerCardHost.maxHeight), for the card
+        // itself: its padding comes on top, as the Swift box adds it outside.
+        let max_height = gpui_kit::px((f32::from(window.viewport_size().height) * 0.45).max(style::zoomed(200.))) + px(18.);
+        let column = div().id("composer-card").w_full().px(px(style::COMPOSER_PADDING)).pt(px(8.)).pb(px(10.)).max_h(max_height).overflow_y_scroll().child(body);
+        // The separator under it, half a point as the Swift box's is.
+        Some(v_flex().w_full().child(column).child(div().w_full().h(px(0.5)).bg(style::hairline(cx))).into_any_element())
     }
 
     /// RowRenderer.doneText: Done, with Archive at the right, and the agent's
@@ -289,9 +291,9 @@ impl Composer {
         column = column.child(
             h_flex()
                 .w_full()
-                .h(px(38.))
+                .h(px(metrics::PAGED_HEADING))
                 .justify_between()
-                .child(h_flex().gap(px(6.)).text_size(px(style::size::CARD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(Icon::from(IconName::Check).with_size(px(14.)).text_color(hsla(0.38, 0.65, 0.5, 1.))).child("Done"))
+                .child(card_title(crate::icons::tall_checkmark().with_size(px(16.)).text_color(style::tick_green(cx)).into_any_element(), 2.5, "Done", cx))
                 .child(card_button(("done-archive", 0usize), "Archive", ButtonLook::Plain, "Archive this thread", cx).on_click({
                     let this = this.clone();
                     move |_, window, cx| {
@@ -305,8 +307,20 @@ impl Composer {
             if !ends.is_empty() {
                 let open = ends.iter().any(|e| e.kind != "booked");
                 column = column.child(small_label(if open { "Still open" } else { "Coming back" }, cx));
-                for end in ends {
-                    column = column.child(div().pt(px(4.)).pl(px(8.)).text_size(px(style::size::COMPOSER)).child(end.text.clone()));
+                // Open ones first, then the check-ins (looseEndsText), each a
+                // body line 4 under the last, its mark where a row's circle goes.
+                for end in ends.iter().filter(|e| e.kind != "booked").chain(ends.iter().filter(|e| e.kind == "booked")) {
+                    let booked = end.kind == "booked";
+                    let mark = if booked { crate::icons::symbol("clock").text_color(style::secondary_text(cx)) } else { crate::icons::symbol("exclamationmark.circle").text_color(style::needs_you_text(cx)) };
+                    column = column.child(
+                        h_flex()
+                            .w_full()
+                            .items_start()
+                            .mt(px(8.))
+                            .pl(px(metrics::ROW_INSET))
+                            .child(div().flex_none().w(px(metrics::ROW_WORDS - metrics::ROW_INSET)).h(px(style::size::BODY_LINE)).flex().items_center().child(mark.with_size(px(15.))))
+                            .child(div().flex_1().min_w_0().text_size(px(style::size::BODY)).line_height(px(style::size::BODY_LINE)).text_color(style::label_text(cx)).child(end.text.clone())),
+                    );
                 }
             }
         }
@@ -316,14 +330,17 @@ impl Composer {
                 let (ticked, explained) = (self.card.next_picks.contains(&(index as i64)), self.card.explain.contains(&(index as i64)));
                 let this2 = this.clone();
                 let this3 = this.clone();
+                // A row is a body line, 8 over and 8 under; its hover fill
+                // reaches 5 past the line each way (drawHoveredRow), so the
+                // fills sit 6 apart.
                 column = column.child(
                     h_flex()
                         .id(("follow-up", index))
                         .w_full()
                         .items_start()
-                        .gap(px(8.))
-                        .px(px(8.))
-                        .py(px(4.))
+                        .mt(px(if index == 0 { 3. } else { 6. }))
+                        .pl(px(metrics::ROW_INSET))
+                        .py(px(5.))
                         .rounded(px(6.))
                         .cursor_pointer()
                         .hover(|s| s.bg(style::hover_fill(cx)))
@@ -333,11 +350,13 @@ impl Composer {
                                 this.update(cx, |this, cx| this.toggle_follow_up(index, window, cx));
                             }
                         })
-                        .child(div().pt(px(4.)).child(tick_circle(ticked, cx)))
-                        .child(div().flex_1().min_w_0().text_size(px(style::size::COMPOSER)).line_height(px(style::size::BODY_LINE)).child(follow_up.clone()))
+                        .child(div().flex_none().w(px(metrics::ROW_WORDS - metrics::ROW_INSET)).h(px(style::size::BODY_LINE)).flex().items_center().child(tick_circle(ticked, cx)))
+                        .child(div().flex_1().min_w_0().text_size(px(style::size::BODY)).line_height(px(style::size::BODY_LINE)).text_color(style::label_text(cx)).child(follow_up.clone()))
                         .child(
                             div()
                                 .id(("follow-up-explain", index))
+                                .flex_none()
+                                .mx(px(8.))
                                 .size(px(22.))
                                 .flex()
                                 .items_center()
@@ -361,7 +380,9 @@ impl Composer {
     }
 
     /// RowRenderer.asksText: the heading, then each ask with its answers. Over
-    /// the height a card can take, one ask at a time with ‹ 1 of 3 ›.
+    /// the height a card can take, one ask at a time with ‹ 1 of 3 ›, the card
+    /// as tall as its tallest page so the box doesn't jump as he pages
+    /// (ComposerCardHost.render).
     fn render_asks_card(&mut self, card: &AsksCard, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let collapsed = self.card.collapsed;
         let paged = !collapsed && is_paged(card);
@@ -376,10 +397,15 @@ impl Composer {
         };
         let this = cx.entity().downgrade();
         let collapse_this = this.clone();
-        let mut heading = h_flex().w_full().min_h(px(28.)).justify_between().child(
-            h_flex().gap(px(6.)).text_size(px(style::size::CARD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(Icon::from(IconName::Hand).with_size(px(14.)).text_color(style::needs_you(cx))).child(words),
-        );
-        let mut right = h_flex().gap(px(2.));
+        // The heading line (asksHeading): a work line, or on a paged card a
+        // button tall for the arrows, with the chevron at its right.
+        let mut heading = h_flex()
+            .w_full()
+            .h(px(if paged { metrics::PAGED_HEADING } else { metrics::HEADING }))
+            .items_center()
+            .justify_between()
+            .child(card_title(crate::icons::symbol("hand.raised.fill").with_size(px(16.5)).text_color(style::needs_you(cx)).into_any_element(), 3.5, words, cx));
+        let mut right = h_flex().flex_none().items_center();
         if paged {
             let (this_back, this_next) = (this.clone(), this.clone());
             right = right
@@ -388,24 +414,31 @@ impl Composer {
                         this.update(cx, |this, cx| this.set_page(page.saturating_sub(1), cx));
                     }
                 }))
-                .child(div().px(px(4.)).text_size(px(style::size::LABEL)).text_color(style::quiet_text(cx)).child(format!("{} of {}", page + 1, card.asks.len())))
+                .child(div().px(px(metrics::PAGER_PAD)).text_size(px(style::size::LABEL)).line_height(px(16.)).text_color(style::secondary_label(cx)).child(format!("{} of {}", page + 1, card.asks.len())))
                 .child(pager_arrow("›", page + 1 < card.asks.len(), "Next ask", ("page-next", 0usize), cx, move |_, _, cx| {
                     if let Some(this) = this_next.upgrade() {
                         this.update(cx, |this, cx| this.set_page(page + 1, cx));
                     }
-                }));
+                }))
+                // The arrows end 7 short of the chevron (the heading's tab stop).
+                .child(div().w(px(7.)));
         }
         right = right.child(
             div()
                 .id("card-collapse")
-                .size(px(22.))
+                .flex_none()
+                .size(px(metrics::TOGGLE))
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(6.))
+                .rounded(px(5.))
                 .cursor_pointer()
-                .hover(|s| s.bg(style::hover_fill(cx)))
-                .child(Icon::from(if collapsed { IconName::ChevronUp } else { IconName::ChevronDown }).with_size(px(12.)).text_color(style::quiet_text(cx)))
+                .text_color(style::secondary_text(cx))
+                .hover(|s| s.bg(style::primary_opacity(cx, 0.08)).text_color(style::label_text(cx)))
+                .active(|s| s.bg(style::primary_opacity(cx, 0.14)))
+                // SF's chevron at 11 pt semibold is about 10 by 6; Lucide's,
+                // a 12 by 6 stroke in 24, comes to that at 17.
+                .child(Icon::from(if collapsed { IconName::ChevronUp } else { IconName::ChevronDown }).with_size(px(17.)))
                 .tooltip(move |window, cx| Tooltip::new(if collapsed { "Expand" } else { "Collapse" }).build(window, cx))
                 .on_click(move |_, window, cx| {
                     if let Some(this) = collapse_this.upgrade() {
@@ -413,17 +446,28 @@ impl Composer {
                     }
                 }),
         );
-        heading = heading.child(right);
-        let mut column = v_flex().w_full().child(heading);
+        // On a work line the chevron, a little taller than the line, hangs
+        // from its top (placeToggle).
+        heading = heading.child(right.when(!paged, |r| r.self_start()));
         if collapsed {
-            return column.into_any_element();
+            // Never shorter than the chevron beside it.
+            return v_flex().w_full().min_h(px(metrics::TOGGLE)).child(heading).into_any_element();
         }
+        let mut column = v_flex().w_full().child(heading.when(!paged, |h| h.mb(px(metrics::HEADING_SPACING))));
         let numbered = card.asks.len() > 1;
-        for (index, ask) in card.asks.iter().enumerate() {
-            if paged && index != page {
-                continue;
+        if paged {
+            // Every page in the same cell, so the cell is the tallest one's
+            // height; only the page showing is drawn, and it goes last so
+            // it's the one on top for the pointer.
+            let mut pages = div().w_full().grid().grid_cols(1);
+            for (index, ask) in card.asks.iter().enumerate().filter(|(i, _)| *i != page).chain(card.asks.iter().enumerate().filter(|(i, _)| *i == page)) {
+                pages = pages.child(div().w_full().min_w_0().col_start(1).row_start(1).when(index != page, |d| d.invisible()).child(self.render_ask(index, ask, numbered, window, cx)));
             }
-            column = column.child(self.render_ask(index, ask, numbered, window, cx));
+            column = column.child(pages);
+        } else {
+            for (index, ask) in card.asks.iter().enumerate() {
+                column = column.child(self.render_ask(index, ask, numbered, window, cx));
+            }
         }
         column.into_any_element()
     }
@@ -431,17 +475,46 @@ impl Composer {
     fn render_ask(&mut self, index: usize, ask: &Ask, numbered: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let picked = self.card.picks.get(&(index as i64)).copied();
         let choices = composer::choices(ask);
-        let indent = if numbered { px(20.) } else { px(0.) };
-        let paragraph = ask_paragraph(ask, index, numbered);
-        let mut block = v_flex().w_full().pt(px(8.));
-        block = block.child(div().text_size(px(style::size::COMPOSER)).line_height(px(style::size::BODY_LINE)).child(TextView::markdown(("ask-text", index), paragraph)));
+        // A numbered ask's text starts past its number, as in a list in a
+        // message; its buttons line up with the text, not the number.
+        let indent = if numbered { px(metrics::INDENT) } else { px(0.) };
+        // Its links through the open gate, from the thread's folder; with no
+        // thread to say, or another runner's, no file of it opens here.
+        let thread = self.chip_data(cx).summary;
+        let origin = if thread.as_ref().is_some_and(|t| !t.is_remote()) { crate::open_gate::Origin::ThisMac } else { crate::open_gate::Origin::OtherMac };
+        let cwd = thread.map(|t| t.cwd).unwrap_or_default();
+        // The paragraph, 12 under what's above, in a message's markdown, so a
+        // list in the why looks the way it would in the message.
+        let text = crate::open_gate::reading_markdown_view(("ask-text", index), ask_paragraph(ask), origin, &cwd).style(self.card_reading_style(cx));
+        let paragraph = if numbered {
+            // The number where a list's goes (MarkdownRenderer.markerStart).
+            h_flex()
+                .w_full()
+                .items_start()
+                .child(div().flex_none().w(indent).pl(px(metrics::NUMBER_AT)).text_color(style::label_text(cx)).child(format!("{}.", index + 1)))
+                .child(div().flex_1().min_w_0().child(text))
+                .into_any_element()
+        } else {
+            div().w_full().child(text).into_any_element()
+        };
+        let mut block = v_flex().w_full().pt(px(metrics::ASK_BEFORE)).child(div().w_full().text_size(px(style::size::BODY)).line_height(px(style::size::BODY_LINE)).child(paragraph));
+        // A quiet line of its own, 2 under the paragraph.
         if let Some(place) = ask.where_.as_deref().filter(|w| !w.is_empty()) {
-            block = block.child(div().pl(indent).text_size(px(12.)).text_color(style::faint_text(cx)).child(place.to_owned()));
+            block = block.child(div().pl(indent).mt(px(metrics::ASK_AFTER)).text_size(px(style::size::SMALL)).line_height(px(metrics::WHERE_LINE)).text_color(style::faint_text(cx)).child(place.to_owned()));
         }
         let this = cx.entity().downgrade();
         if ask.option_notes.is_empty() {
-            // Buttons in a row that wraps, with Something else… after them.
-            let mut buttons = h_flex().pl(indent).pt(px(6.)).gap(px(8.)).flex_wrap();
+            // Buttons on 38 pt lines that wrap, 2 and then 6 under what's
+            // above, four spaces apart, with Something else… after them.
+            let half = (metrics::BUTTON_LINE - metrics::BUTTON_HEIGHT) / 2.;
+            let mut buttons = h_flex()
+                .w_full()
+                .pl(indent)
+                .mt(px(metrics::ASK_AFTER + metrics::BUTTONS_BEFORE))
+                .py(px(half))
+                .flex_wrap()
+                .gap_x(px(metrics::BUTTON_GAP))
+                .gap_y(px(half * 2.));
             for (n, choice) in choices.iter().enumerate() {
                 let is_picked = picked == Some(n as i64);
                 let look = if is_picked {
@@ -473,6 +546,7 @@ impl Composer {
         if picked == Some(OWN_ANSWER) {
             let input = self.answer_box(index, window, cx);
             let this3 = this.clone();
+            // AskAnswerBox: 8 under the buttons, 10 and 6 in from its edge.
             block = block.child(
                 div()
                     .pl(indent)
@@ -494,15 +568,30 @@ impl Composer {
                             .border_1()
                             .border_color(style::hairline(cx))
                             .bg(style::answer_box_fill(cx))
-                            .child(Textarea::new(&input).appearance(false).bordered(false).text_size(px(style::size::COMPOSER)).line_height(px(style::size::BODY_LINE))),
+                            .child(crate::composer::bare_textarea(Textarea::new(&input)).text_size(px(style::size::COMPOSER)).line_height(px(style::size::BODY_LINE))),
                     ),
             );
         }
         block.into_any_element()
     }
 
+    /// The reading column's text style for the card's paragraphs, one per
+    /// appearance and text size, as its sizes are zoomed when it's built
+    /// (see `rows::reading_style`).
+    fn card_reading_style(&mut self, cx: &App) -> gpui_kit::base::TextViewStyle {
+        let key = (cx.theme().is_dark(), style::zoom_percent());
+        match &self.card_style {
+            Some((k, style)) if *k == key => style.clone(),
+            _ => {
+                let built = crate::rows::reading_style(cx);
+                self.card_style = Some((key, built.clone()));
+                built
+            }
+        }
+    }
+
     /// An ask's answers as rows (RowRenderer.answerRows): a circle, the label,
-    /// "my pick" on the agent's, what it does under it, then "Something else…".
+    /// a star and "Recommended" on the agent's, what it does under it, then "Something else…".
     fn render_answer_rows(&mut self, index: usize, ask: &Ask, picked: Option<i64>, indent: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let choices = composer::choices(ask);
         let this = cx.entity().downgrade();
@@ -539,7 +628,12 @@ impl Composer {
                             .min_w_0()
                             .child(
                                 h_flex().gap(px(8.)).child(div().text_size(px(style::size::COMPOSER)).text_color(if own { style::quiet_text(cx) } else { cx.theme().foreground }).child(label)).when(suggested, |s| {
-                                    s.child(div().text_size(px(12.)).text_color(style::accent(cx)).child("my pick"))
+                                    s.child(
+                                        h_flex()
+                                            .gap(px(3.))
+                                            .child(div().text_size(px(10.)).text_color(style::recommended_star(cx)).child("★"))
+                                            .child(div().text_size(px(12.)).text_color(style::quiet_text(cx)).child("Recommended")),
+                                    )
                                 }),
                             )
                             .when_some(note, |s, note| s.child(div().text_size(px(12.)).text_color(style::quiet_text(cx)).child(note))),
@@ -665,7 +759,8 @@ impl Composer {
 
 /// Over this, a card of several asks shows one at a time (ComposerCardHost.
 /// pagedOver is 240 pt). The Swift app measures the laid-out text; this
-/// estimates it, and the first frame can't be measured any other way.
+/// estimates it from the same line heights, and the first frame can't be
+/// measured any other way.
 pub(crate) fn is_paged(card: &AsksCard) -> bool {
     if !card.is_open || card.asks.len() < 2 {
         return false;
@@ -676,19 +771,20 @@ pub(crate) fn is_paged(card: &AsksCard) -> bool {
         .asks
         .iter()
         .map(|ask| {
-            let lines: f32 = ask_paragraph(ask, 0, card.asks.len() > 1).split('\n').map(|line| (line.chars().count() as f32 / width_chars).ceil().max(1.)).sum();
-            let place = if ask.where_.as_deref().is_some_and(|w| !w.is_empty()) { 21. } else { 0. };
-            let answers = if ask.option_notes.is_empty() { 44. } else { 38. * (ask.options.len() as f32 + 1.) };
-            12. + lines * style::size::BODY_LINE + place + answers
+            let lines: f32 = ask_paragraph(ask).split('\n').map(|line| (line.chars().count() as f32 / width_chars).ceil().max(1.)).sum();
+            let place = if ask.where_.as_deref().is_some_and(|w| !w.is_empty()) { metrics::ASK_AFTER + metrics::WHERE_LINE } else { 0. };
+            let answers = if ask.option_notes.is_empty() { metrics::ASK_AFTER + metrics::BUTTONS_BEFORE + metrics::BUTTON_LINE } else { 38. * (ask.options.len() as f32 + 1.) };
+            metrics::ASK_BEFORE + lines * style::size::BODY_LINE + place + answers
         })
         .sum();
-    22. + height > 240.
+    metrics::HEADING + metrics::HEADING_SPACING + height > 240.
 }
 
-/// An ask's paragraph, as the agent would have written it (Decisions.paragraph),
-/// numbered when the card has several, under the same bold number the Swift
-/// card puts by it.
-fn ask_paragraph(ask: &Ask, index: usize, numbered: bool) -> String {
+/// An ask's paragraph, as the agent would have written it (Decisions.paragraph):
+/// its action, then its why. The number a card of several puts by it is drawn
+/// beside it, where a list's number goes, so words that would start a heading,
+/// quote or list of their own ("- ", "2. ") are kept as words (askParagraph).
+fn ask_paragraph(ask: &Ask) -> String {
     let action: String = ask.action.split('\n').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
     let why = ask.why.as_deref().unwrap_or("").trim();
     let body = if why.is_empty() {
@@ -697,22 +793,83 @@ fn ask_paragraph(ask: &Ask, index: usize, numbered: bool) -> String {
         let ends = action.chars().rev().find(|c| !"\"'”’)]*_`".contains(*c)).is_some_and(|c| ".?!…:".contains(c));
         format!("{action}{} {why}", if ends { "" } else { "." })
     };
-    if numbered {
-        format!("{}. {}", index + 1, composer_continued(&body, 3))
-    } else {
-        body
-    }
+    escape_block_start(&body)
 }
 
-/// Decisions.continued: later lines indented past a list marker, so a list
-/// in the why stays inside the item.
-fn composer_continued(text: &str, width: usize) -> String {
-    let pad = " ".repeat(width);
-    text.split('\n')
-        .enumerate()
-        .map(|(i, line)| if i == 0 || line.is_empty() { line.to_owned() } else { format!("{pad}{line}") })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// `text` with what would start a block of its own escaped: a backslash
+/// before the marker's punctuation, which for a number is after its digits,
+/// as markdown can't escape a digit ("2\. Deploy", not "\2. Deploy").
+fn escape_block_start(text: &str) -> String {
+    if !starts_a_block(text) {
+        return text.to_owned();
+    }
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    format!("{}\\{}", &text[..digits], &text[digits..])
+}
+
+/// Whether markdown would read `text`'s start as a block of its own: a
+/// heading, quote, list item, fence or HTML (askParagraph's pattern).
+fn starts_a_block(text: &str) -> bool {
+    let hashes = text.chars().take_while(|c| *c == '#').count();
+    if (1..=6).contains(&hashes) && text[hashes..].starts_with(char::is_whitespace) {
+        return true;
+    }
+    if text.starts_with('>') || text.starts_with("```") || text.starts_with("~~~") || text.starts_with('<') {
+        return true;
+    }
+    let mut chars = text.chars();
+    if matches!(chars.next(), Some('-' | '+' | '*')) && chars.next().is_some_and(char::is_whitespace) {
+        return true;
+    }
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    (1..=9).contains(&digits) && text[digits..].starts_with(['.', ')']) && text[digits + 1..].starts_with(char::is_whitespace)
+}
+
+/// The card's measures (RowRenderer.asksText and doneText, which build it as
+/// TextKit lines, each a line height with spacing round it).
+mod metrics {
+    /// A paged card's heading, and the done card's: a button tall.
+    pub const PAGED_HEADING: f32 = 38.;
+    /// Otherwise the heading is a work line, 6 over the first ask.
+    pub const HEADING: f32 = 20.;
+    pub const HEADING_SPACING: f32 = 6.;
+    /// The chevron (ComposerCardHost.toggleSize).
+    pub const TOGGLE: f32 = 22.;
+    /// Over an ask's paragraph, and under it and under its where line.
+    pub const ASK_BEFORE: f32 = 12.;
+    pub const ASK_AFTER: f32 = 2.;
+    pub const WHERE_LINE: f32 = 19.;
+    /// A line of buttons, 6 under what's over it: rows that wrap keep this apart.
+    pub const BUTTON_LINE: f32 = 38.;
+    pub const BUTTONS_BEFORE: f32 = 6.;
+    /// A button's box (drawButton): the label font's ascender to descender
+    /// and 7 over and under it.
+    pub const BUTTON_HEIGHT: f32 = 29.3;
+    /// Three no-break spaces at 13 pt each side of a button's title, two for
+    /// the pager's, and four between buttons.
+    pub const BUTTON_PAD: f32 = 10.75;
+    pub const PAGER_PAD: f32 = 7.15;
+    pub const BUTTON_GAP: f32 = 14.3;
+    /// A list's indent, and where its number starts (MarkdownRenderer.listIndent, markerStart).
+    pub const INDENT: f32 = 30.;
+    pub const NUMBER_AT: f32 = 8.;
+    /// A done card's row: its circle in by the hover fill's padding
+    /// (rowInset), its words past the circle.
+    pub const ROW_INSET: f32 = 8.;
+    pub const ROW_WORDS: f32 = 34.;
+}
+
+/// A card's title: its mark, then the words in the title font (14 pt medium),
+/// three quarters of a point lower than centring puts them, where TextKit's
+/// rounded-down baseline offset leaves the Swift card's.
+/// `gap` puts the words where the Swift title's space after its symbol does.
+fn card_title(mark: AnyElement, gap: f32, words: &'static str, cx: &App) -> impl IntoElement {
+    h_flex()
+        .flex_none()
+        .items_center()
+        .gap(px(gap))
+        .child(mark)
+        .child(div().relative().top(px(0.75)).text_size(px(style::size::CARD_TITLE)).line_height(px(17.)).font_weight(FontWeight::MEDIUM).text_color(style::label_text(cx)).child(words))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -722,44 +879,70 @@ enum ButtonLook {
     Picked,
 }
 
-/// The card's button (AskButton): a rounded pill, filled when picked, its
-/// border in the accent on the agent's suggestion.
+/// The soft shadow a card's button sits up on (drawButton).
+fn button_shadow() -> Vec<BoxShadow> {
+    vec![BoxShadow::new(px(0.), px(1.), hsla(0., 0., 0., 0.25)).blur_radius(px(1.5))]
+}
+
+/// The card's button (AskButtonStyle): a rounded box with a soft shadow, the
+/// picked one in the accent with white words, the agent's pick with an
+/// accent edge, the rest a raised grey.
 fn card_button(id: impl Into<ElementId>, title: &str, look: ButtonLook, tip: &'static str, cx: &App) -> Stateful<Div> {
-    let (bg, fg, border) = match look {
-        ButtonLook::Picked => (cx.theme().foreground, cx.theme().background, cx.theme().foreground),
-        ButtonLook::Suggested => (Hsla::transparent_black(), cx.theme().foreground, style::accent(cx)),
-        ButtonLook::Plain => (style::button_fill(cx), cx.theme().foreground, style::button_edge(cx)),
+    let (fill, text, edge) = match look {
+        ButtonLook::Picked => (style::control_accent(cx), gpui_kit::white(), gpui_kit::transparent_black()),
+        ButtonLook::Suggested => (style::button_fill(cx), style::label_text(cx), style::control_accent(cx).opacity(0.8)),
+        ButtonLook::Plain => (style::button_fill(cx), style::label_text(cx), style::button_edge(cx)),
     };
     div()
         .id(id.into())
-        .h(px(28.))
-        .px(px(11.))
+        .flex_none()
+        .h(px(metrics::BUTTON_HEIGHT))
+        // The edge is inside the box here, where the Swift one is on it.
+        .px(px(metrics::BUTTON_PAD - 1.))
         .flex()
         .items_center()
-        .rounded(px(7.))
+        .rounded(px(7.5))
         .border_1()
-        .border_color(border)
-        .bg(bg)
-        .text_color(fg)
+        .border_color(edge)
+        .bg(fill)
+        .shadow(button_shadow())
+        .text_color(text)
         .text_size(px(style::size::LABEL))
+        .line_height(px(16.))
         .cursor_pointer()
         .hover(|s| s.opacity(0.85))
         .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
         .child(title.to_owned())
 }
 
+/// ‹ and › on a paged card (asksHeading's arrows): boxed as a plain button
+/// while there's a page that way, faint words otherwise, the same width either way.
 fn pager_arrow(glyph: &'static str, enabled: bool, tip: &'static str, id: impl Into<ElementId>, cx: &App, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> impl IntoElement {
     div()
         .id(id.into())
-        .size(px(24.))
+        .flex_none()
+        .h(px(metrics::BUTTON_HEIGHT))
         .flex()
         .items_center()
-        .justify_center()
-        .rounded(px(6.))
+        .rounded(px(7.5))
         .text_size(px(style::size::LABEL))
-        .text_color(if enabled { cx.theme().foreground } else { style::faint_text(cx) })
+        .line_height(px(16.))
         .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
-        .when(enabled, |s| s.cursor_pointer().hover(|s| s.bg(style::hover_fill(cx))).on_click(on_click))
+        .map(|s| {
+            if enabled {
+                s.px(px(metrics::PAGER_PAD - 1.))
+                    .border_1()
+                    .border_color(style::button_edge(cx))
+                    .bg(style::button_fill(cx))
+                    .shadow(button_shadow())
+                    .text_color(style::label_text(cx))
+                    .cursor_pointer()
+                    .hover(|s| s.opacity(0.85))
+                    .on_click(on_click)
+            } else {
+                s.px(px(metrics::PAGER_PAD)).text_color(style::faint_text(cx))
+            }
+        })
         .child(glyph)
 }
 
@@ -772,6 +955,26 @@ fn tick_circle(ticked: bool, cx: &App) -> impl IntoElement {
     }
 }
 
+/// "Or carry on" and the like: small, secondary, on a 19 pt line 10 under
+/// what's above, in by the rows' inset.
 fn small_label(text: &'static str, cx: &App) -> impl IntoElement {
-    div().pt(px(10.)).pl(px(8.)).text_size(px(style::size::DETAIL)).text_color(style::quiet_text(cx)).child(text)
+    div().mt(px(10.)).pl(px(metrics::ROW_INSET)).text_size(px(style::size::SMALL)).line_height(px(metrics::WHERE_LINE)).text_color(style::secondary_label(cx)).child(text)
+}
+
+#[cfg(test)]
+mod tests {
+    // By name: the kit's prelude has a `test` of its own.
+    use super::{ask_paragraph, starts_a_block};
+    use threadbear_core::reducer::Ask;
+
+    #[test]
+    fn an_ask_that_reads_as_markdown_structure_stays_words() {
+        for (text, escaped) in [("- remove the old key", "\\- remove the old key"), ("2. then this", "2\\. then this"), ("10) or this", "10\\) or this"), ("# not a heading", "\\# not a heading"), ("> quoted", "\\> quoted"), ("<b>", "\\<b>")] {
+            assert!(starts_a_block(text), "{text}");
+            assert_eq!(ask_paragraph(&Ask::new(text)), escaped);
+        }
+        for text in ["Accept the new agreement", "2026 was busy", "-1 is fine", "#hashtag", "10.5 points"] {
+            assert!(!starts_a_block(text), "{text}");
+        }
+    }
 }

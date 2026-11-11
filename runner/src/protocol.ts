@@ -193,6 +193,20 @@ export type ArchivedBy = 'mike' | 'agent' | 'threadbear';
 export type ArchiveVerdict = 'worked' | 'didntWork' | 'notNeeded';
 export const ARCHIVE_VERDICTS: readonly ArchiveVerdict[] = ['worked', 'didntWork', 'notNeeded'];
 
+// What fills a thread's context, in Claude's own words (threads.contextUsage,
+// docs/protocol.md "Context breakdown"). Rows are the CLI's /context rows:
+// `id` names a row (absent from a CLI that predates it, and a later CLI may
+// add ids), `kind` says whether it counts: 'used' is in the window, 'buffer'
+// the autocompact reserve, 'free' the rest, 'deferred' tool schemas kept out
+// of the window until loaded.
+export type ContextUsage = {
+  at: string; // when Claude answered
+  model?: string;
+  totalTokens: number; // in the window now
+  maxTokens: number; // the window it's measured against
+  categories: { id?: string; name: string; tokens: number; kind: string }[];
+};
+
 export type ThreadSummary = {
   id: string;
   title: string;
@@ -200,6 +214,9 @@ export type ThreadSummary = {
   accountId: string;
   poolId?: string; // absent: pinned to accountId
   waitingForRoom?: WaitingForRoom;
+  // Off: a turn that hits its login's limit doesn't wait for room and
+  // carry on by itself (Mike turned it off on the limit box). Absent: on.
+  carryOnAtReset?: false;
   // Its last turn couldn't reach the API; it carries on by itself once
   // the runner reaches it again (Runner.onNetworkLost).
   waitingForNetwork?: { since: string };
@@ -272,9 +289,9 @@ export type ThreadSummary = {
   // Mike's last message to it, one line, for the sidebar's "You: ..."
   // (docs/protocol.md, "What Mike last asked"). Absent until he's sent one.
   asked?: string;
-  // The librarian's recap of it: what it's for, then bullets on where it
-  // stands (docs/protocol.md, "The recap box"). The recapBox experiment.
-  recap?: string;
+  // The librarian's search words for it, space-separated (docs/protocol.md,
+  // "Search"): searches match them as well as the title and preview.
+  keywords?: string;
   // A panel the agent asked to show Mike (show_panel), waiting for him to
   // look at the thread (docs/protocol.md, "Showing panels").
   panelRequest?: PanelRequest;
@@ -298,7 +315,7 @@ export type ThreadSummary = {
 // its worktree. thread: one it started, still working or waiting on Mike.
 // scheduled: a schedule that will message it again (at: when), which
 // doesn't stop an archive. Clients show any other kind as its text.
-export type LooseEndKind = 'unlanded' | 'uncommitted' | 'thread' | 'scheduled';
+export type LooseEndKind = 'unlanded' | 'uncommitted' | 'unpushed' | 'thread' | 'open' | 'scheduled';
 export type LooseEnd = { kind: LooseEndKind; text: string; threadId?: string; at?: string };
 
 export type ShareAccess = 'off' | 'link';
@@ -663,6 +680,28 @@ export type TurnOutcome = 'completed' | 'interrupted' | 'failed';
 // connection), so the runner carries the turn on once it's back.
 export type TurnErrorKind = 'usageLimit' | 'contextWindow' | 'auth' | 'network';
 
+// Review by another lab's ledger (runner/lab-review.ts). Each finding has
+// an id that stays the same across rounds; outcome is the reviewed
+// agent's answer (end_turn's findings), absent until it gives one.
+export type ReviewSeverity = 'high' | 'medium' | 'low';
+export type ReviewOutcome = 'fixed' | 'disputed' | 'left';
+export type ReviewFinding = { id: number; round: number; severity: ReviewSeverity; claim: string; where?: string; case?: string; outcome?: ReviewOutcome; note?: string };
+export type LabReviewLedger = {
+  reviewer: string; // "Codex (codex-1)"
+  independent: boolean; // another lab, not a fresh session of the same one
+  rounds: number;
+  threadId: string; // the latest round's review thread
+  // The latest round found nothing that holds up.
+  passed: boolean;
+  // A round whose reviewer gave no verdict in end_turn: its reply is all
+  // there is, so it has no findings here.
+  unstructured?: true;
+  // Fixes made since the latest round that no review has looked at: the
+  // rounds ran out.
+  unchecked?: true;
+  findings: ReviewFinding[];
+};
+
 // turn.completed's `usage`, per provider.
 export type ClaudeTurnUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
 export type CodexTurnUsage = {
@@ -687,7 +726,7 @@ export type DesignReview = {
   id: string;
   title: string;
   note?: string;
-  // The option id the agent would pick, marked "my pick" in the window.
+  // The option id the agent would pick, marked with a star and "Recommended" in the window.
   recommended?: string;
   // image is the option's first shot, kept for clients that only show one.
   // shots, when given, is every shot in order, image included. url: the
@@ -717,6 +756,9 @@ export type ReplyButtonStart = {
   why?: string;
 };
 export type ReplyButtonSend = { threadId: string; threadTitle: string; text: string };
+// A command on an ask card (end_turn's asks[].run): only the runner makes
+// one, from the ask, and its press runs the command once in `cwd`.
+export type ReplyButtonRun = { command: string; cwd: string };
 export type ReplyButton = {
   id: string;
   title: string;
@@ -724,6 +766,12 @@ export type ReplyButton = {
   turnId?: string;
   start?: ReplyButtonStart;
   send?: ReplyButtonSend;
+  run?: ReplyButtonRun;
+  // A run's command is going now.
+  running?: { at: string };
+  // How a run's command came out (with `pressed`). exitCode is absent when
+  // it was stopped, as a timeout does.
+  ran?: { ok: boolean; exitCode?: number; durationMs: number };
   pressed?: { at: string; threadId: string };
   failed?: { at: string; error: string };
 };
@@ -764,6 +812,8 @@ export type EventBody =
       title: string;
       input: Record<string, unknown>;
       options: ApprovalOption[];
+      // Why it's asking (Auto's safety check, a rule, a hook), when the CLI says.
+      reason?: string;
     }
   // The agent's other calls from the same reply, waiting behind this card
   // (docs/protocol.md, "Queued calls"). A later one replaces the list.
@@ -793,6 +843,10 @@ export type EventBody =
       // With needs "nothing": end_turn's suggested follow-ups.
       next?: string[];
       needsFrom?: 'tool' | 'text';
+      // Review by another lab: what the reviewer found so far and what the
+      // agent did about each, on the turn that answered them
+      // (runner/lab-review.ts; docs/protocol.md, "Review by another lab").
+      review?: LabReviewLedger;
     }
   // The ticks on a card of asks, the whole set each time. Outside any turn.
   | { type: 'asks.ticked'; asksSeq: number; ticked: number[] }
@@ -843,7 +897,10 @@ export type NeedsWho = 'you' | 'nothing';
 // (suggested, an index into options) marked; he can always write his own.
 // optionNotes: with one reply, what each option does if Mike picks it, in
 // the options' order ("" for none); the card draws them under the labels.
-export type Ask = { action: string; where?: string; reply?: string; why?: string; options?: string[]; optionNotes?: string[]; suggested?: number; links?: AskLink[] };
+// run: a command the card offers to run (docs/protocol.md, "Run on the card").
+export type Ask = { action: string; where?: string; reply?: string; why?: string; options?: string[]; optionNotes?: string[]; suggested?: number; links?: AskLink[]; run?: AskRun };
+// buttonId, cwd and the states are the runner's, added once the card is made.
+export type AskRun = { command: string; buttonId?: string; cwd?: string; running?: true; failed?: string };
 // Somewhere to go to do or judge an ask: a web page, or a file or folder
 // on this Mac (an absolute or ~ path). The app shows each as a button.
 export type AskLink = { title: string; url: string };
@@ -907,8 +964,14 @@ export type Schedule = {
   model?: string;
   effort?: EffortLevel;
   permissionMode?: PermissionMode;
+  // Set by the runner when there's no permissionMode: the mode its runs start
+  // with, this runner's default (runner.json's defaults.permissionMode, else
+  // full). Absent for another runner's schedule, whose default isn't known
+  // here. Raising a schedule's mode is checked against it (threadbear-mcp.ts,
+  // scheduleModes); never stored.
+  defaultMode?: PermissionMode;
   // A shell command run first, in its folder; a run whose check prints
-  // nothing is skipped (experiment scheduleChecks, schedule-check.ts).
+  // nothing is skipped (schedule-check.ts).
   check?: string;
   // How long the check may take, in seconds (at most 300); absent, 60.
   checkTimeoutSecs?: number;

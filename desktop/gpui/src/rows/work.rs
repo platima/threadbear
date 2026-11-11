@@ -207,7 +207,7 @@ impl ThreadPane {
             if !diffs.is_empty() {
                 col = col.child(self.diff_box(ix, row, &diffs, tool.root.as_deref(), cx));
             } else {
-                col = col.child(tool_body_box(ix, tool, cx));
+                col = col.child(tool_body_box(ix, tool, self.summary.is_remote(), cx));
             }
         }
         row_wrap(row, col)
@@ -334,8 +334,8 @@ pub(crate) fn stats_text(added: i64, removed: i64, added_color: Hsla, removed_co
 }
 
 /// `toolBody` in its code box.
-fn tool_body_box(ix: usize, tool: &ToolItem, cx: &App) -> Div {
-    div().ml(px(TITLE_INDENT)).mt(px(2.)).mb(px(8.)).p(px(BOX_PAD)).rounded(px(8.)).bg(style::code_background(cx)).border_1().border_color(style::card_border(cx)).child(tool_body(ix, tool, cx))
+fn tool_body_box(ix: usize, tool: &ToolItem, remote: bool, cx: &App) -> Div {
+    div().ml(px(TITLE_INDENT)).mt(px(2.)).mb(px(8.)).p(px(BOX_PAD)).rounded(px(8.)).bg(style::code_background(cx)).border_1().border_color(style::card_border(cx)).child(tool_body(ix, tool, remote, cx))
 }
 
 /// One monospaced run in the output font.
@@ -349,7 +349,7 @@ pub(crate) fn mono_block(id: impl Into<ElementId>, cx: &App) -> Stateful<Div> {
 
 /// What an expanded tool shows: a command and its output, a file with line
 /// numbers, a search and its matches, or the input as fields.
-fn tool_body(ix: usize, tool: &ToolItem, cx: &App) -> AnyElement {
+fn tool_body(ix: usize, tool: &ToolItem, remote: bool, cx: &App) -> AnyElement {
     let (label, quiet, faint, failed) = (style::label_text(cx), style::quiet_text(cx), style::faint_text(cx), style::failed_text(cx));
     // A generated image's revised prompt is prose: the reading font, wrapped
     // at words, in the output font it broke mid-word.
@@ -398,10 +398,12 @@ fn tool_body(ix: usize, tool: &ToolItem, cx: &App) -> AnyElement {
         let blob = tool.result.as_ref().and_then(|r| r.blob_path.clone()).filter(|p| !p.is_empty());
         col = col.child(match blob {
             Some(path) => {
-                let url = format!("file://{path}");
+                // The runner names the file, so it goes through the open gate
+                // like any other path: another Mac's isn't on this one.
+                let origin = if remote { crate::open_gate::Origin::OtherMac } else { crate::open_gate::Origin::ThisMac };
                 note.child(
                     h_flex().child("Output shortened · ").child(
-                        div().id(("show-all", ix)).cursor_pointer().text_color(style::link_text(cx)).tooltip(tip("The whole output, in a file")).on_click(move |_, _, cx| cx.open_url(&url)).child("Show all"),
+                        div().id(("show-all", ix)).cursor_pointer().text_color(style::link_text(cx)).tooltip(tip("The whole output, in a file")).on_click(move |_, _, cx| crate::open_gate::open_file(&path, origin, cx)).child("Show all"),
                     ),
                 )
             }

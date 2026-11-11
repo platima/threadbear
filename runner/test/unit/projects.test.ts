@@ -8,7 +8,7 @@ import { checkSummary } from '../helpers/protocol-check.ts';
 import { Projects, drainProjectMethods, projectMethods, BRIEF_MAX, NOTES_LONG, type ProjectHost } from '../../src/projects.ts';
 import { projectRouter, type PrimaryLink } from '../../src/handover.ts';
 import type { PocketCardInput, PocketCardSummary } from '../../src/sync.ts';
-import { Librarian, type LibrarianPocket, librarianMethods, saysNoFit, disclaims, mainCheckout, PICK_CHECKS_PER_LOOK, SETTLE_MS, CATCH_UP_MS, CATCH_UP_MIN_CHARS, FIRST_MESSAGE_MS, SWEEP_MS } from '../../src/librarian.ts';
+import { Librarian, type LibrarianPocket, librarianMethods, saysNoFit, disclaims, mainCheckout, PICK_CHECKS_PER_LOOK, SETTLE_MS, CATCH_UP_MS, CATCH_UP_MIN_CHARS, FIRST_MESSAGE_MS, SWEEP_MS, KEYWORDS_SYSTEM } from '../../src/librarian.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger, type Logger } from '../../src/log.ts';
@@ -39,6 +39,8 @@ function setup(opts: { pocket?: () => LibrarianPocket | undefined; models?: (p: 
   const models = opts.models
     ? {
         generate: async (p: GenerateParams) => {
+          // The keyword sweep's batches (keywords.test.ts), apart from the looks.
+          if (p.system === KEYWORDS_SYSTEM) return { ok: true, value: '{}', model: 'haiku' } as ModelResult<string>;
           if (p.strong) {
             checks.push(p);
             return opts.check ? opts.check(p) : ({ ok: true, value: '{"belongs":true}', model: 'opus' } as ModelResult<string>);
@@ -838,8 +840,94 @@ test('a git worktree counts as its main checkout, never as a folder of its own',
   assert.equal(librarian.status().queue[0].reason, 'catch-up');
 });
 
+test("the librarian never gives a project another project's repo, a folder holding others, or a worktree's subfolder", async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer) });
+  const { h, repo, root, create, finish, librarian, projects } = s;
+  const tb = repo('dev/threadbear');
+  const videos = repo('dev/videos');
+  const interview = repo('dev/videos/interview');
+  const fresh = repo('dev/browserbear');
+  const wtMain = repo('dev/app');
+  const wt = path.join(root, 'dev/app-wt');
+  fs.mkdirSync(path.join(wtMain, '.git/worktrees/wt'), { recursive: true });
+  fs.mkdirSync(path.join(wt, 'ios'), { recursive: true });
+  fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(wtMain, '.git/worktrees/wt')}\n`);
+  fs.writeFileSync(path.join(wt, 'ios/Package.swift'), '');
+  const threadbear = projects.create({ title: 'Threadbear', folders: [tb], by: 'mike' });
+  projects.create({ title: 'Interview', folders: [interview], by: 'mike' });
+  // A new project on another project's repo alone isn't made: the thread is
+  // that project's (Threadbear Android app, 10 Nov).
+  answer = { projects: [], new: { title: 'Threadbear Android', folders: ['~/dev/threadbear'], goals: 'x', state: 'y' } };
+  const one = create('Build the Android client').thread;
+  await finish(one.id);
+  h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(projects.list().length, 2);
+  assert.equal(h.runner.get(one.id).projects, undefined);
+  // One with a free repo is made, keeping only that: not the other
+  // project's repo, nor the folder holding Interview's.
+  answer = { projects: [], new: { title: 'BrowserBear', folders: ['~/dev/browserbear', '~/dev/threadbear', '~/dev/videos'], goals: 'x', state: 'y' } };
+  const two = create('A Chrome extension').thread;
+  await finish(two.id);
+  h.clock.advance(SETTLE_MS);
+  await tick(8);
+  const bb = projects.list().find((p) => p.title === 'BrowserBear')!;
+  assert.deepEqual(bb.folders, [fresh]);
+  // A project with no folders at all (a house job) is still made.
+  answer = { projects: [], new: { title: 'Crypto', folders: [], goals: 'x', state: 'y' } };
+  const three = create('Move the crypto').thread;
+  await finish(three.id);
+  h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.ok(projects.list().some((p) => p.title === 'Crypto'));
+  // Nor one whose only folder is in a worktree of another project's repo
+  // (the main checkout's copy is Threadbear's), or reaches its repo by a
+  // symlink or another casing.
+  const tbWt = path.join(root, 'dev/tb-wt');
+  fs.mkdirSync(path.join(tb, '.git/worktrees/tw'), { recursive: true });
+  fs.mkdirSync(path.join(tbWt, 'android'), { recursive: true });
+  fs.writeFileSync(path.join(tbWt, '.git'), `gitdir: ${path.join(tb, '.git/worktrees/tw')}\n`);
+  fs.writeFileSync(path.join(tbWt, 'android/package.json'), '{}');
+  fs.symlinkSync(tb, path.join(root, 'dev/tb-link'));
+  const caseBlind = fs.existsSync(path.join(root, 'DEV/threadbear'));
+  // A worktree whose .git file names its main checkout through a symlink,
+  // and one of a repo no project has, with a folder only on its branch.
+  const viaLink = path.join(root, 'dev/link-wt');
+  fs.mkdirSync(path.join(viaLink, 'web'), { recursive: true });
+  fs.writeFileSync(path.join(viaLink, '.git'), `gitdir: ${path.join(root, 'dev/tb-link/.git/worktrees/tw')}\n`);
+  fs.writeFileSync(path.join(viaLink, 'web/package.json'), '{}');
+  const loose = repo('dev/loose');
+  const looseWt = path.join(root, 'dev/loose-wt');
+  fs.mkdirSync(path.join(loose, '.git/worktrees/lw'), { recursive: true });
+  fs.mkdirSync(path.join(looseWt, 'branch-only'), { recursive: true });
+  fs.writeFileSync(path.join(looseWt, '.git'), `gitdir: ${path.join(loose, '.git/worktrees/lw')}\n`);
+  fs.writeFileSync(path.join(looseWt, 'branch-only/package.json'), '{}');
+  for (const folder of ['~/dev/tb-wt/android', '~/dev/tb-link', '~/dev/link-wt/web', '~/dev/loose-wt/branch-only', ...(caseBlind ? ['~/dev/Threadbear'] : [])]) {
+    answer = { projects: [], new: { title: `Copy ${folder}`, folders: [folder], goals: 'x', state: 'y' } };
+    const t = create('More Threadbear work').thread;
+    await finish(t.id);
+    h.clock.advance(SETTLE_MS);
+    await tick(8);
+    assert.ok(!projects.list().some((p) => p.title === `Copy ${folder}`), `${folder} made a project`);
+  }
+  // addFolders: the same ones are refused (a repo cloned inside a worktree
+  // doesn't hide it), and a free repo is added.
+  const free = repo('dev/sentry-watch');
+  repo('dev/app-wt/vendor/tool');
+  answer = { projects: [bb.id], reasons: { [bb.id]: 'Works on the extension' }, addFolders: { [bb.id]: ['~/dev/threadbear', '~/dev/videos', '~/dev/app-wt/ios', '~/dev/app-wt/vendor/tool', '~/dev/tb-link', '~/dev/sentry-watch'] } };
+  h.runner.send(two.id, 'more');
+  await tick();
+  await finish(two.id, [path.join(fresh, 'x.ts')]);
+  h.clock.advance(CATCH_UP_MS + SETTLE_MS);
+  await tick(8);
+  assert.deepEqual(projects.record(bb.id)?.folders, [fresh, free]);
+  assert.deepEqual(projects.record(threadbear.id)?.folders, [tb]);
+  assert.ok(librarian.status().recent.some((e) => e.text.includes('Added ~/dev/sentry-watch to BrowserBear')));
+});
+
 test('the librarian keeps its line on where the thread is up to as the thread\'s brief', async () => {
-  const s = setup({ models: () => reply({ projects: [], new: null, state: {}, thread: 'Waiting on Mike to pick a layout.', purpose: 'A mockup for the landing page.', why: 'A one-off' }) });
+  const s = setup({ models: () => reply({ projects: [], new: null, state: {}, thread: 'Waiting on Mike to pick a layout.', why: 'A one-off' }) });
   const { h, create, finish, librarian } = s;
   const { thread } = create('Make a mockup');
   await finish(thread.id, []);
@@ -847,7 +935,6 @@ test('the librarian keeps its line on where the thread is up to as the thread\'s
   await tick(6);
   assert.equal(librarian.status().recent[0]?.text, 'Nothing to change: a one-off', 'the brief is not a project change');
   assert.equal(h.runner.highlights(thread.id).brief?.text, 'Waiting on Mike to pick a layout.');
-  assert.equal((h.runner.highlights(thread.id).brief as { purpose?: string }).purpose, 'A mockup for the landing page.', 'what the recap box says it is for');
   assert.ok(h.runner.get(thread.id).highlightsAt);
 });
 

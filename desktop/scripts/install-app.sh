@@ -23,16 +23,20 @@ if ! /usr/bin/python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.a
   exit 1
 fi
 
+# View > Show Frame Rate (desktop/gpui/src/frame_stats.rs), for seeing how
+# smoothly it draws on this Mac.
+features=frame-stats
+
 work="$(mktemp -d "${TMPDIR:-/tmp}/threadbear-gpui-XXXX")"
 trap 'rm -rf "$work"' EXIT
 
 if [ -n "$build_on" ]; then
-  "$root/desktop/scripts/remote.sh" "$build_on" -- bash -c 'cd desktop && nice cargo build --release -p threadbear-gpui 2>&1 | tail -2'
+  "$root/desktop/scripts/remote.sh" "$build_on" -- bash -c "cd desktop && nice cargo build --release -p threadbear-gpui --features $features 2>&1 | tail -2"
   key="$(printf '%s' "$root" | shasum | cut -c1-10)"
   scp -q "$build_on:.cache/threadbear-check/gpui/target-$key/release/threadbear-gpui" "$work/threadbear-gpui"
 else
   export CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10
-  (cd "$root/desktop" && taskpolicy -b "$root/scripts/one-build.sh" cargo build --release -p threadbear-gpui)
+  (cd "$root/desktop" && taskpolicy -b "$root/scripts/one-build.sh" cargo build --release -p threadbear-gpui --features "$features")
   cp "$root/desktop/target/release/threadbear-gpui" "$work/threadbear-gpui"
 fi
 

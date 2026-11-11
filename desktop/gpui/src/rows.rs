@@ -43,7 +43,8 @@ pub(crate) struct RowsState {
     /// parse it again and a streaming reply only parses what's new.
     pub(crate) documents: HashMap<String, Entity<gpui_kit::base::TextViewState>>,
     pub(crate) document_order: Vec<String>,
-    pub(crate) reading_style: Option<(bool, gpui_kit::base::TextViewStyle)>,
+    /// Keyed by appearance and zoom: its sizes are zoomed when it's built.
+    pub(crate) reading_style: Option<((bool, u32), gpui_kit::base::TextViewStyle)>,
     /// Question cards' "Something else" fields, and their typed text.
     pub(crate) others: HashMap<String, Entity<gpui_kit::component::input::InputState>>,
     /// Secret cards' masked fields. Never kept past the card's own answer.
@@ -92,7 +93,7 @@ impl ThreadPane {
     pub(crate) fn render_item(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(row) = self.feed.model().rows().get(ix).cloned() else { return div().into_any_element() };
         let body: AnyElement = match &row.content {
-            RowContent::User(message) => self.user_row(ix, &row, message, cx),
+            RowContent::User(message) => self.user_row(ix, &row, message, window, cx),
             RowContent::Assistant(item) => self.assistant_row(ix, &row, item, cx),
             RowContent::Reasoning(item) => self.thinking_row(ix, &row, item, cx),
             RowContent::Tool(tool) => self.tool_row(ix, &row, tool, cx),
@@ -136,7 +137,7 @@ impl ThreadPane {
 
     /// `userText`: Mike's words, or for a message answering asks or a review
     /// each question small and quiet with his answer under it.
-    fn user_row(&mut self, ix: usize, row: &Row, message: &UserMessage, cx: &mut Context<Self>) -> AnyElement {
+    fn user_row(&mut self, ix: usize, row: &Row, message: &UserMessage, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         if message.shows_as_note() {
             return self.runner_note_row(message, cx);
         }
@@ -165,8 +166,19 @@ impl ThreadPane {
             }
             let text = if message.text.is_empty() { " ".to_string() } else { message.text.clone() };
             let answered = !message.answers.is_empty() || message.review.is_some();
+            // As wide as its widest line, as the Swift bubble is (its text's
+            // used width): GPUI's wrapped text takes all the width it's
+            // given. The text keeps room for a wrapped line's trailing space,
+            // reaching into the padding, so it wraps where it was measured.
+            // The column as `row_wrap` lays it out, in the window's pixels
+            // (its inset and width zoom; the list's width is already real).
+            let list = self.rows.list_width;
+            let column = if list > 0. { (list - style::zoomed(SIDE_INSET) * 2.).min(style::zoomed(MAX_CONTENT_WIDTH)).max(0.) } else { style::zoomed(MAX_CONTENT_WIDTH) };
+            let max_text = gpui_kit::px((column * BUBBLE_SHARE).floor()) - px(BUBBLE_PAD_H * 2.);
+            let fit = (!answered).then(|| widest_line(&text, max_text, window));
             let bubble = div()
                 .max_w(relative(BUBBLE_SHARE))
+                .when_some(fit, |d, (ink, _)| d.w(ink + px(BUBBLE_PAD_H * 2.)))
                 .px(px(BUBBLE_PAD_H))
                 .py(px(BUBBLE_PAD_V))
                 .rounded(px(BUBBLE_RADIUS))
@@ -175,7 +187,9 @@ impl ThreadPane {
                 .line_height(px(size::BODY_LINE))
                 .text_color(label)
                 .when(faded, |d| d.opacity(0.5))
-                .when(!answered, |d| d.child(SelectableText::new(("user-text", ix), text)))
+                // A point over, as the layout rounds widths and a line that
+                // fits exactly would wrap.
+                .when_some(fit, |d, (ink, span)| d.child(div().w(span + px(1.)).mr(ink - span - px(1.)).child(SelectableText::new(("user-text", ix), text))))
                 .when(answered, |d| d.child(answers_body(ix, message, cx)));
             col = col.child(line.child(bubble));
         }
@@ -232,8 +246,20 @@ impl ThreadPane {
             .border_1()
             .border_color(border)
             .child(div().mb(px(8.)).text_size(px(size::SMALL)).line_height(px(17.)).text_color(faint).child(title))
-            .when_some(doc, |d, doc| d.child(div().text_size(px(size::BODY)).line_height(px(size::BODY_LINE)).child(TextView::new(&doc).selectable(true).style(text_style).code_block_highlighter(plain_code_blocks))));
+            .when_some(doc, |d, doc| d.child(div().text_size(px(size::BODY)).line_height(px(size::BODY_LINE)).child(self.linked_text(&doc, &format!("agent-{ix}"), cx).selectable(true).style(text_style).code_block_highlighter(plain_code_blocks))));
         h_flex().w_full().px(px(SIDE_INSET)).justify_center().child(div().w_full().max_w(px(MAX_CONTENT_WIDTH)).pt(px(USER_TOP)).pb(px(USER_BOTTOM)).child(card)).into_any_element()
+    }
+
+    /// A row's markdown, its links going to `link_clicked` (and from there
+    /// through the open gate), never to the system's opener as gpui's own
+    /// text view would send them.
+    pub(crate) fn linked_text(&self, doc: &Entity<gpui_kit::base::TextViewState>, row_id: &str, cx: &mut Context<Self>) -> TextView {
+        let weak = cx.weak_entity();
+        let row_id = row_id.to_owned();
+        crate::open_gate::text_view(doc, self.origin(), &self.summary.cwd).on_link_click(move |url: &SharedString, _event: &ClickEvent, window: &mut Window, cx: &mut App| {
+            let (url, row_id) = (url.to_string(), row_id.clone());
+            let _ = weak.update(cx, |this, cx| this.link_clicked(&url, &row_id, window, cx));
+        })
     }
 
     /// The reading column's text: markdown, selectable, links going where they
@@ -243,13 +269,11 @@ impl ThreadPane {
         let source = markdown::prepare(&item.text);
         let doc = self.markdown_state(&item.item_id, &source, cx);
         let text_style = self.reading_style(cx);
-        let weak = cx.weak_entity();
-        let row_id = row.id.clone();
-        let text = TextView::new(&doc).selectable(true).style(text_style).code_block_highlighter(plain_code_blocks).on_link_click(move |url: &SharedString, _event: &ClickEvent, window: &mut Window, cx: &mut App| {
-            let (url, row_id) = (url.to_string(), row_id.clone());
-            let _ = weak.update(cx, |this, cx| this.link_clicked(&url, &row_id, window, cx));
-        });
-        row_wrap(row, div().pt(px(ROW_TOP)).pb(px(10.)).text_size(px(size::BODY)).line_height(px(size::BODY_LINE)).text_color(style::label_text(cx)).child(text))
+        let text = self.linked_text(&doc, &row.id, cx).selectable(true).style(text_style).code_block_highlighter(plain_code_blocks);
+        // TextKit leaves out the space over a text's first paragraph, so a
+        // reply that opens with a heading starts without the heading's 6.
+        let top = if markdown::starts_with_heading(&source) { ROW_TOP - 6. } else { ROW_TOP };
+        row_wrap(row, div().pt(px(top)).pb(px(10.)).text_size(px(size::BODY)).line_height(px(size::BODY_LINE)).text_color(style::label_text(cx)).child(text))
     }
 
     /// The plan an agent is working through (`planText`): a title and its
@@ -312,12 +336,12 @@ impl ThreadPane {
 
     /// The reading column's text style, one per appearance (see `reading_style`).
     pub(crate) fn reading_style(&mut self, cx: &mut Context<Self>) -> gpui_kit::base::TextViewStyle {
-        let dark = cx.theme().is_dark();
+        let key = (cx.theme().is_dark(), style::zoom_percent());
         match &self.rows.reading_style {
-            Some((d, style)) if *d == dark => style.clone(),
+            Some((k, style)) if *k == key => style.clone(),
             _ => {
                 let built = markdown::reading_style(cx);
-                self.rows.reading_style = Some((dark, built.clone()));
+                self.rows.reading_style = Some((key, built.clone()));
                 built
             }
         }
@@ -342,7 +366,7 @@ impl ThreadPane {
         for (ai, ask) in asks.asks.iter().enumerate() {
             let mut block = v_flex().gap_1().child(div().font_semibold().child(ask.action.clone()));
             if let Some(why) = &ask.why {
-                block = block.child(div().text_sm().text_color(muted).child(gpui_kit::component::text::TextView::markdown(("why", ix * 10 + ai), why.clone())));
+                block = block.child(div().text_sm().text_color(muted).child(crate::open_gate::markdown_view(("why", ix * 10 + ai), why.clone(), self.origin(), &self.summary.cwd)));
             }
             if asks.is_open && !ask.options.is_empty() {
                 let mut buttons = h_flex().gap_2().flex_wrap().pt_1();
@@ -359,6 +383,45 @@ impl ThreadPane {
         }
         column(card).into_any_element()
     }
+}
+
+/// The widest line `text` makes wrapped at `max`, in the bubble's font, as
+/// (its ink, its span): the ink stops at the last letter, the span takes in a
+/// wrapped line's trailing space. Shaped and wrapped as GPUI's own text is,
+/// so text given the span wraps where it was measured.
+fn widest_line(text: &str, max: Pixels, window: &Window) -> (Pixels, Pixels) {
+    let style = window.text_style();
+    let run = TextRun { len: text.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
+    let Ok(lines) = window.text_system().shape_text(text.to_owned().into(), px(size::BODY), &[run], Some(max), None) else { return (max, max) };
+    let (mut ink, mut span) = (Pixels::ZERO, Pixels::ZERO);
+    for line in &lines {
+        let layout = &line.unwrapped_layout;
+        let glyphs: Vec<(Pixels, usize)> = layout.runs.iter().flat_map(|r| r.glyphs.iter().map(|g| (g.position.x, g.index))).collect();
+        let mut run_starts = Vec::with_capacity(layout.runs.len());
+        let mut total = 0;
+        for r in &layout.runs {
+            run_starts.push(total);
+            total += r.glyphs.len();
+        }
+        // Each wrapped line's first glyph: a boundary's glyph starts the next.
+        let mut starts = vec![0];
+        starts.extend(line.wrap_boundaries.iter().map(|b| run_starts[b.run_ix] + b.glyph_ix));
+        starts.push(glyphs.len());
+        let source = line.text.as_ref();
+        for pair in starts.windows(2) {
+            let (first, end) = (pair[0], pair[1]);
+            if first >= end {
+                continue;
+            }
+            let x0 = glyphs[first].0;
+            let right = |g: usize| if g + 1 < glyphs.len() { glyphs[g + 1].0 } else { layout.width };
+            span = span.max(right(end - 1) - x0);
+            if let Some(last) = (first..end).rev().find(|&g| source.get(glyphs[g].1..).and_then(|s| s.chars().next()).is_some_and(|c| !c.is_whitespace())) {
+                ink = ink.max(right(last) - x0);
+            }
+        }
+    }
+    (ink.min(max), span.min(max).max(ink.min(max)))
 }
 
 /// The left mark's box, as tall as the bubble's last line.

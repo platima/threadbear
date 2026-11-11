@@ -776,6 +776,24 @@ test('a message row is capped whole, and a runner key keeps a bounded number of 
   for (const m of s.rows('messages')) assert.ok(bytes(m) <= 12_288, String(bytes(m)));
 });
 
+test("a runner key's plan row goes whole up to a plan's cap, only an agent's text gets that room, and it can still be paged", async () => {
+  const s = await setup();
+  await s.bruce.upsert(thread('B', BRUCE));
+  const plan = '# Plan\n' + 'step\n'.repeat(4000); // 20 KB, past a message's 10,000 bytes
+  const send = (seq: number, role: string, extra: Record<string, unknown> = {}) => call(s.ctx, sync.appendMessages, { key: BRUCE_KEY, messages: [{ threadId: 'B', seq, role, text: plan, plan: true, at: 'a', ...extra }] });
+  await send(1, 'assistant');
+  await send(2, 'tool');
+  const row = (seq: number) => s.rows('messages').find((m) => m.seq === seq)!;
+  assert.equal(row(1).text, plan, 'the plan whole');
+  assert.ok(Buffer.byteLength(row(2).text) <= 10_000, 'a tool row marked plan is cut as any message is');
+  // An old phone's "Load earlier" marks the row it already has.
+  await send(1, 'assistant', { pagedAt: 5 });
+  assert.equal(row(1).pagedAt, 5);
+  const huge = 'é'.repeat(60_000);
+  await call(s.ctx, sync.appendMessages, { key: BRUCE_KEY, messages: [{ threadId: 'B', seq: 3, role: 'assistant', text: huge, plan: true, at: 'a' }] });
+  assert.ok(bytes(row(3)) <= 84_000 + 1_000);
+});
+
 test('den threads and pushes have per-key budgets, and old thread tombstones go', async () => {
   const s = await setup();
   const before = s.scheduled.length;

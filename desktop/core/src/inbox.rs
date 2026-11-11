@@ -39,6 +39,11 @@ pub struct ThreadSummary {
     pub starred_at: Option<String>,
     pub archived_at: Option<String>,
     pub waiting_for_room: Option<Value>,
+    /// Whether a turn that hits its login's limit waits for room and carries
+    /// on by itself: on unless Mike turned it off on the limit box, when the
+    /// runner sends `false` (and nothing otherwise).
+    #[serde(default = "carry_on_by_default")]
+    pub carry_on_at_reset: bool,
     pub waiting_for_network: Option<Value>,
     /// Kept as it came: the reducer reads its own `BackgroundTask` from these.
     pub background: Option<Vec<Value>>,
@@ -93,6 +98,10 @@ impl OpenAsk {
     }
 }
 
+fn carry_on_by_default() -> bool {
+    true
+}
+
 /// One of a thread's projects (`ThreadProject`): who put it there, and the
 /// librarian's reason, behind the project's ⓘ in Highlights.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -112,8 +121,11 @@ impl ThreadSummary {
         self.last_seq > self.last_seen_seq
     }
     /// A turn is running or starting (ThreadStatus.isBusy).
+    /// A turn is underway or about to be (Swift `ThreadStatus.isBusy`),
+    /// waiting on a permission card included: that turn can still be stopped,
+    /// and the composer offered Send instead of Stop for one (10 Nov).
     pub fn busy(&self) -> bool {
-        self.status == "running" || self.status == "starting"
+        matches!(self.status.as_str(), "running" | "starting" | "waiting")
     }
     /// The background list, read leniently: a malformed entry is left out.
     pub fn background_tasks(&self) -> Vec<BackgroundTask> {
@@ -308,18 +320,23 @@ pub fn sections_ordered<'a>(threads: impl IntoIterator<Item = &'a ThreadSummary>
             inbox.push(t.clone());
         }
     }
-    let newest_first = |a: &ThreadSummary, b: &ThreadSummary| b.activity_ms().cmp(&a.activity_ms()).then_with(|| a.id.cmp(&b.id));
+    // Sorted by keys worked out once per thread: a time is text to be read,
+    // and comparing two threads by reading theirs again each time cost the
+    // app more than drawing a frame does (the activity bar's badge counts the
+    // Inbox with this on every frame).
+    use std::cmp::Reverse;
+    let newest_first = |t: &ThreadSummary| (Reverse(t.activity_ms()), t.id.clone());
     starred.sort_by(|a, b| a.starred_at.cmp(&b.starred_at).then_with(|| a.id.cmp(&b.id)));
     match order {
-        InboxOrder::NeedsYou => inbox.sort_by(|a, b| a.urgency().cmp(&b.urgency()).then_with(|| newest_first(a, b))),
-        InboxOrder::Newest => inbox.sort_by(newest_first),
-        InboxOrder::Oldest => inbox.sort_by(|a, b| newest_first(b, a)),
+        InboxOrder::NeedsYou => inbox.sort_by_cached_key(|t| (t.urgency(), newest_first(t))),
+        InboxOrder::Newest => inbox.sort_by_cached_key(newest_first),
+        InboxOrder::Oldest => inbox.sort_by_cached_key(|t| (t.activity_ms(), Reverse(t.id.clone()))),
     }
-    running.sort_by(newest_first);
+    running.sort_by_cached_key(newest_first);
     // A snooze's time; back on restart has none, so it goes last.
     let wakes = |t: &ThreadSummary| t.snoozed_until_ms().filter(|_| t.snoozed_until_restart != Some(true)).unwrap_or(i64::MAX);
-    hibernating.sort_by(|a, b| wakes(a).cmp(&wakes(b)).then_with(|| newest_first(a, b)));
-    archived.sort_by(|a, b| b.archived_ms().cmp(&a.archived_ms()).then_with(|| a.id.cmp(&b.id)));
+    hibernating.sort_by_cached_key(|t| (wakes(t), newest_first(t)));
+    archived.sort_by_cached_key(|t| (Reverse(t.archived_ms()), t.id.clone()));
     [("starred", "Starred", starred), ("inbox", "Inbox", inbox), ("running", "Running", running), ("hibernating", "Hibernating", hibernating), ("archived", "Archived", archived)]
         .into_iter()
         .filter(|(key, _, rows)| !rows.is_empty() || *key == "inbox")
@@ -461,6 +478,15 @@ mod tests {
         assert_eq!(ids(&s, "running"), ["t2"]);
         assert_eq!(ids(&s, "hibernating"), ["t4"]);
         assert_eq!(ids(&s, "starred"), ["t5"]);
+    }
+
+    #[test]
+    fn a_turn_waiting_on_a_permission_card_is_still_busy() {
+        // As Swift's ThreadStatus.isBusy: it can be stopped, and isn't idle.
+        assert!(thread(1, json!({ "status": "waiting" })).busy());
+        assert!(thread(1, json!({ "status": "running" })).busy());
+        assert!(!thread(1, json!({ "status": "idle" })).busy());
+        assert!(!thread(1, json!({ "status": "error" })).busy());
     }
 
     #[test]

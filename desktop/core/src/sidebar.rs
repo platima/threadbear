@@ -312,10 +312,31 @@ fn waiting_time<Tz: TimeZone>(until_ms: i64, now: &DateTime<Tz>) -> String {
     if until_ms <= now.timestamp_millis() {
         return "any moment now".into();
     }
+    match waiting_parts(until_ms, now) {
+        (Some(day), clock_text) => format!("{day} {clock_text}"),
+        (None, clock_text) => clock_text,
+    }
+}
+
+/// When the limit box says a thread carries on by itself: "at 4:41 pm",
+/// "tomorrow 5:00 am" (a day goes without the "at", which read badly), or
+/// "any moment now" once it's passed (`LimitBox.when`).
+pub fn carries_on_when<Tz: TimeZone>(until_ms: i64, now: &DateTime<Tz>) -> String {
+    let time = waiting_time(until_ms, now);
+    if time.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("at {time}")
+    } else {
+        time
+    }
+}
+
+/// "5:00 am", and the day when it isn't today ("tomorrow", "Thu")
+/// (`Pools.waitingParts`).
+fn waiting_parts<Tz: TimeZone>(until_ms: i64, now: &DateTime<Tz>) -> (Option<&'static str>, String) {
     let date = local(until_ms, &now.timezone());
     let clock_text = clock(&date);
     if same_day(&date, now) {
-        return clock_text;
+        return (None, clock_text);
     }
     let tomorrow = now.clone() + Duration::days(1);
     let yesterday = now.clone() - Duration::days(1);
@@ -326,7 +347,7 @@ fn waiting_time<Tz: TimeZone>(until_ms: i64, now: &DateTime<Tz>) -> String {
     } else {
         weekday_name(&date)
     };
-    format!("{day} {clock_text}")
+    (Some(day), clock_text)
 }
 
 /// Short, for the sidebar: "3 sub-agents", "1 job", "Finishing" when all
@@ -929,6 +950,9 @@ mod tests {
         assert_eq!(waiting_line(ms("2026-11-10T05:00:00+11:00"), &now), "Waiting for room · tomorrow 5:00 am");
         assert_eq!(waiting_line(ms("2026-11-12T05:00:00+11:00"), &now), "Waiting for room · Thu 5:00 am");
         assert_eq!(waiting_line(ms("2026-11-09T19:00:00+11:00"), &now), "Waiting for room · any moment now");
+        assert_eq!(carries_on_when(ms("2026-11-09T21:25:00+11:00"), &now), "at 9:25 pm");
+        assert_eq!(carries_on_when(ms("2026-11-10T05:00:00+11:00"), &now), "tomorrow 5:00 am");
+        assert_eq!(carries_on_when(ms("2026-11-09T19:00:00+11:00"), &now), "any moment now");
     }
 
     #[test]

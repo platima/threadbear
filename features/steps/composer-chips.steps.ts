@@ -41,3 +41,19 @@ Then('the {string} menu says {string} and {string}', async function (this: Threa
   const lines = await menuLines(this, menu);
   assert.deepEqual(lines.slice(0, 2), [first, second]);
 });
+
+When('I open the context ring\'s popover', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'composer-menu', menu: 'context', show: true });
+});
+
+// The breakdown comes after the runner answers, a moment after the popover
+// opens, so this waits for the line.
+Then('the context popover shows {string}', async function (this: ThreadbearWorld, line: string) {
+  let lines: string[] = [];
+  for (let tries = 0; tries < 40; tries += 1) {
+    lines = await menuLines(this, 'context');
+    if (lines.includes(line)) return;
+    await sleep(150);
+  }
+  assert.fail(`the context popover has no "${line}":\n${lines.join('\n')}`);
+});

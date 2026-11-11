@@ -71,6 +71,8 @@ pub struct Composer {
     pub(crate) model_picker: Option<Entity<ModelPickerView>>,
     /// What's picked on the open card, and how the card's showing.
     pub(crate) card: CardState,
+    /// The card's text style, one per appearance (`card_reading_style`).
+    pub(crate) card_style: Option<((bool, u32), gpui_kit::base::TextViewStyle)>,
     shown_placeholder: &'static str,
     /// The slash palette's own state (`PaletteState`), and whether this
     /// opening of it has asked for the thread's commands yet.
@@ -130,6 +132,7 @@ impl Composer {
             restore: None,
             model_picker: None,
             card: CardState::default(),
+            card_style: None,
             shown_placeholder: "Message",
             palette: PaletteState::default(),
             palette_asked: false,
@@ -156,6 +159,101 @@ impl Composer {
             self.pictures.clear();
         }
         cx.notify();
+    }
+
+    /// What Schedule… takes from the box: its words, without the pictures'
+    /// marks (a schedule sends only text), and how many pictures there are.
+    pub(crate) fn schedule_draft(&self, cx: &App) -> (String, usize) {
+        let (text, images) = self.draft(cx);
+        (text.replace(PICTURE_MARK, "").trim().to_owned(), images.len())
+    }
+
+    /// The schedule's made from the box's words: they leave it. Pictures are
+    /// chips in the text, so a box with any is left as it is.
+    pub(crate) fn clear_scheduled_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.draft(cx).1.is_empty() {
+            self.input.update(cx, |s, cx| s.set_value("", window, cx));
+            self.pictures.clear();
+            cx.notify();
+        }
+    }
+
+    /// `LimitBox`: the thread's login is at its limit, or its last turn
+    /// stopped on it. At the top of the box, over a line like the card of
+    /// asks: what happened, Switch to (a pool thread's Pin to) the login with
+    /// the most room, and whether it carries on by itself once the limit
+    /// resets. Mike asked for it here on 10 Nov, in place of a bar across the
+    /// top of the thread that read as an error and offered only the switch.
+    fn render_limit_box(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use gpui_kit::base::TestSupportExt as _;
+        use gpui_kit::component::button::{Button, ButtonVariants as _};
+        use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+        let thread_id = self.thread_id.clone()?;
+        let app = self.app.upgrade()?;
+        let (thread, advice) = {
+            let t = app.read(cx);
+            let thread = t.threads.get(&thread_id)?.clone();
+            // While it moves to another Mac there's nothing to switch.
+            if thread.moving.is_some() {
+                return None;
+            }
+            let advice = t.limit_advice(&thread, cx)?;
+            (thread, advice)
+        };
+        let now = threadbear_core::sidebar::local_now();
+        let when = advice.carries_on_at.map(|at| threadbear_core::sidebar::carries_on_when(at, &now));
+        // Waiting to carry on reads as a quiet clock, not the red gauge.
+        let waiting = advice.carries_on_at.is_some() && thread.carry_on_at_reset;
+        let text = match (&when, waiting) {
+            (Some(when), true) => format!("{} Carries on by itself {when}.", advice.text),
+            _ => advice.text.clone(),
+        };
+        let secondary = style::secondary_text(cx);
+        let mark = if waiting { crate::icons::symbol("clock").with_size(px(13.)).text_color(secondary) } else { crate::icons::symbol("gauge.with.dots.needle.100percent").with_size(px(13.)).text_color(cx.theme().danger) };
+        let mut column = v_flex()
+            .w_full()
+            .gap(px(8.))
+            .px(px(style::COMPOSER_PADDING))
+            .pt(px(10.))
+            .pb(px(10.))
+            .text_size(px(style::size::LABEL))
+            .line_height(px(16.))
+            .child(h_flex().items_start().gap(px(8.)).child(div().flex_none().pt(px(1.)).child(mark)).child(crate::highlights::tipped(div().id("limit-text").flex_1().min_w_0(), text.clone()).child(text)));
+        if advice.target.is_some() || advice.stopped {
+            let mut row = h_flex().gap(px(10.)).items_center();
+            if let Some((account, title)) = advice.target.clone() {
+                let title = crate::header::limit_button_title(title, advice.pool);
+                let tip = "Carry on this thread on that login now, from where it is";
+                let (app, id) = (self.app.clone(), thread.id.clone());
+                row = row.child(
+                    div().id("limit-switch").test_support().aria_label(tip).child(Button::new("limit-switch-button").label(title).small().secondary().tooltip(tip).on_click(move |_, _, cx| {
+                        app.update(cx, |a, cx| a.switch_account(&id, account.clone(), cx)).ok();
+                    })),
+                );
+            }
+            if advice.stopped {
+                let on = thread.carry_on_at_reset;
+                let tip: String = if on {
+                    format!("It carries on from where it stopped {}. No to leave it until you send a message", when.clone().unwrap_or_else(|| "once its limit resets".into()))
+                } else {
+                    "It waits for you to send a message. Yes to carry on from where it stopped once there's room".into()
+                };
+                let (app, id) = (self.app.clone(), thread.id.clone());
+                let menu = Button::new("limit-carry-on-button").label(if on { "Yes" } else { "No" }).small().secondary().dropdown_caret(true).tooltip(tip.clone()).dropdown_menu(move |menu: PopupMenu, _, _| {
+                    let mut menu = menu;
+                    for (label, value) in [("Yes", true), ("No", false)] {
+                        let (app, id) = (app.clone(), id.clone());
+                        menu = menu.item(PopupMenuItem::new(label).checked(on == value).on_click(move |_, _, cx| {
+                            app.update(cx, |a, cx| a.set_carry_on_at_reset(&id, value, cx)).ok();
+                        }));
+                    }
+                    menu
+                });
+                row = row.child(h_flex().gap(px(6.)).items_center().child(div().text_color(secondary).child("Carry on by itself")).child(div().id("limit-carry-on").test_support().aria_label(tip).child(menu)));
+            }
+            column = column.child(row);
+        }
+        Some(v_flex().w_full().child(column).child(div().w_full().h(gpui_kit::px(1.)).bg(style::hairline(cx))).into_any_element())
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
@@ -461,6 +559,9 @@ impl Composer {
         let params = json!({ "path": path.to_string_lossy() });
         cx.spawn_in(window, async move |this, cx| {
             let result = crate::call(client, "media.import", params).await;
+            // The runner keeps its own copy (or said no): a pasted picture's
+            // staged file goes now, whatever happens to the chip.
+            unstage(&path);
             this.update_in(cx, |this, window, cx| this.settle_picture(id, result, window, cx)).ok();
         })
         .detach();
@@ -747,9 +848,7 @@ impl Composer {
                 }
             })
             .child(
-                Textarea::new(&self.input)
-                    .appearance(false)
-                    .bordered(false)
+                bare_textarea(Textarea::new(&self.input))
                     .disabled(creating)
                     .text_size(px(style::size::COMPOSER))
                     .line_height(px(style::size::BODY_LINE))
@@ -804,11 +903,21 @@ impl Render for Composer {
         let creating = self.creating(cx);
         let send_button = self.render_send_button(running, creating, cx);
         let controls = self.render_controls(send_button, window, cx);
-        // The box: the open card over a line, then the message.
+        // The box: the limit box and the open card, each over a line, then
+        // the message.
+        let limit = self.render_limit_box(cx);
         let card = self.render_card(window, cx);
         let needs_you = self.open_card(cx).is_some_and(|c| !c.is_done());
         let palette = self.render_palette(window, cx);
         let width = self.card_width.clone();
+        // The folder's actions, on shelves on the box's top edge, in from its
+        // rounded corner (ActionChips), as wide as the box leaves them.
+        let shelves = self.pane().and_then(|pane| {
+            let summary = pane.read(cx).summary.clone();
+            let icons = self.app.upgrade().map(|a| a.read(cx).sidebar.project_icons.clone()).unwrap_or_default();
+            let room = (self.card_width.get() - style::zoomed(style::COMPOSER_RADIUS) * 2.).max(0.);
+            crate::viewer::action_chips(&summary, room, &icons, window, cx)
+        });
         let body = v_flex().w_full().gap(px(style::COMPOSER_GAP)).p(px(style::COMPOSER_PADDING)).when_some(strip, |s, strip| s.child(strip)).child(self.render_text_field(creating, cx)).child(controls);
         // The transcript's reading column: 780 wide at most, centred, with
         // the same side insets once the window is narrower.
@@ -819,25 +928,47 @@ impl Render for Composer {
             .pt(px(4.))
             .pb(px(20.))
             .child(
+                v_flex()
+                    .w_full()
+                    .max_w(px(style::MAX_CONTENT_WIDTH))
+                    // Overlapping the box's border, so the two read as one piece.
+                    .when_some(shelves, |s, shelves| s.child(div().px(px(style::COMPOSER_RADIUS)).mb(gpui_kit::px(-0.5)).child(shelves)))
+                    .child(
                 div()
                     .relative()
                     .w_full()
-                    .max_w(px(style::MAX_CONTENT_WIDTH))
                     .rounded(px(style::COMPOSER_RADIUS))
                     .bg(style::composer_fill(cx))
-                    .border_1()
-                    .border_color(if needs_you { style::accent(cx) } else { style::hairline(cx) })
                     .when(!cx.theme().is_dark(), |s| s.shadow_md())
+                    // The edge, drawn over the box rather than taking room in
+                    // it, as the Swift card's strokeBorder is: what's inside
+                    // sits its 14 in from the box's own edge, and the needs-you
+                    // edge (1 pt in the accent, otherwise a 0.5 hairline)
+                    // moves nothing. First, so the rest draws over it.
+                    .child(div().absolute().inset_0().rounded(px(style::COMPOSER_RADIUS)).border(px(if needs_you { 1. } else { 0.5 })).border_color(if needs_you { style::accent(cx) } else { style::hairline(cx) }))
                     // Clicking the card's padding puts the cursor in the text.
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window, cx| this.focus(window, cx)))
+                    .children(limit)
                     .children(card)
                     .child(body)
-                    // Measures the box for the palette, which sits on its top edge.
+                    // Measures the box for the palette, which sits on its top
+                    // edge, and for the shelves, which get as many chips as fit.
                     .child(canvas(move |bounds, _, _| width.set(f32::from(bounds.size.width)), |_, _, _, _| {}).absolute().size_full())
                     .children(palette),
+                    ),
             )
             .children(self.render_peek(cx))
     }
+}
+
+/// A text box with no frame and none of the kit's padding inside it, so its
+/// text starts where the box does, as an NSTextView with no inset and no
+/// line fragment padding does (ComposerTextField, the Something else box).
+/// The kit's smallest size still pads 4 either side (its own 4, whatever the
+/// text size), so the box reaches 4 out past each side to put the text back
+/// on the edge.
+pub(crate) fn bare_textarea(textarea: Textarea) -> Textarea {
+    textarea.appearance(false).bordered(false).xsmall().mx(gpui_kit::px(-4.))
 }
 
 /// The token a chip draws from. The token's text is the mark the draft holds
@@ -870,11 +1001,119 @@ fn save_pasted_image(image: &gpui_kit::Image) -> Option<PathBuf> {
         ImageFormat::Tiff => "tiff",
         _ => return None,
     };
-    let folder = std::env::temp_dir().join("threadbear-paste");
-    std::fs::create_dir_all(&folder).ok()?;
-    let path = folder.join(format!("pasted-{:x}.{ext}", image.id));
-    std::fs::write(&path, &image.bytes).ok()?;
+    stage_private(&paste_base(), &format!("pasted-{:x}.{ext}", image.id), &image.bytes)
+}
+
+/// Where pasted pictures wait for the runner: the session's own runtime
+/// folder on Linux (`XDG_RUNTIME_DIR`, which only this user can open), else
+/// the temp folder (already this user's own on a Mac and Windows; `/tmp` on
+/// a Linux without one, which everyone can list).
+fn paste_base() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|d| d.is_absolute() && d.is_dir()).unwrap_or_else(std::env::temp_dir)
+}
+
+/// Writes `bytes` as `name` in a folder of its own under `base`: made fresh
+/// with a random name and 0700, the file new with 0600, so on a shared
+/// `/tmp` nobody else can read it, list it, or make the folder first and
+/// have it written into theirs (Daybreak, 10 Nov 2026, finding 63). The
+/// folder goes once the runner has its own copy (`import_picture`).
+fn stage_private(base: &std::path::Path, name: &str, bytes: &[u8]) -> Option<PathBuf> {
+    use std::io::Write as _;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("threadbear-paste-");
+    // Without a mode the folder would take the umask's (0755 under 022).
+    // Windows has none: a folder there takes the user's temp folder's access.
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let folder = builder.tempdir_in(base).ok()?.keep();
+    let path = folder.join(name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let written = options.open(&path).and_then(|mut f| f.write_all(bytes));
+    if written.is_err() {
+        let _ = std::fs::remove_dir_all(&folder);
+        return None;
+    }
+    STAGED.lock().unwrap_or_else(|e| e.into_inner()).push(folder);
     Some(path)
+}
+
+/// The folders `stage_private` made and hasn't removed: only these are
+/// ever deleted, never a folder that just has the same kind of name (Codex
+/// review, 10 Nov 2026: a picture dropped from `/tmp/threadbear-paste-x/`
+/// would have taken that whole folder with it).
+static STAGED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// A staged picture's folder, once the runner has copied it (or couldn't).
+/// A dropped or pasted file's own folder is never touched.
+fn unstage(path: &std::path::Path) {
+    let Some(folder) = path.parent() else { return };
+    let mut staged = STAGED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(at) = staged.iter().position(|f| f == folder) {
+        staged.remove(at);
+        drop(staged);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::{stage_private, unstage};
+    use std::fs;
+
+    /// Finding 63: under umask 022 the old folder was 0755 and the file
+    /// 0644, in a fixed `/tmp/threadbear-paste` anyone could list or make
+    /// first. Each paste now gets a fresh folder only its owner can open.
+    #[cfg(unix)]
+    #[test]
+    fn a_pasted_picture_is_kept_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().unwrap();
+        let path = stage_private(base.path(), "pasted-1.png", b"png bytes").unwrap();
+        let folder = path.parent().unwrap();
+        assert_eq!(fs::metadata(folder).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::read(&path).unwrap(), b"png bytes");
+        // Not a name anyone can guess: the same picture twice goes to two folders.
+        let again = stage_private(base.path(), "pasted-1.png", b"png bytes").unwrap();
+        assert_ne!(again.parent(), path.parent());
+        assert!(folder.file_name().unwrap().to_string_lossy().len() > "threadbear-paste-".len() + 4);
+    }
+
+    /// A folder someone else made first, under the old fixed name, is never
+    /// written into.
+    #[test]
+    fn a_folder_made_first_isnt_used() {
+        let base = tempfile::tempdir().unwrap();
+        let planted = base.path().join("threadbear-paste");
+        fs::create_dir(&planted).unwrap();
+        let path = stage_private(base.path(), "pasted-2.png", b"x").unwrap();
+        assert!(!path.starts_with(&planted));
+        assert_eq!(fs::read_dir(&planted).unwrap().count(), 0);
+    }
+
+    /// Once the runner has its copy, the staged folder goes, and only a
+    /// folder this made: a dropped file's own folder stays, even one with
+    /// the same kind of name.
+    #[test]
+    fn the_staged_copy_goes_after_the_import() {
+        let base = tempfile::tempdir().unwrap();
+        let path = stage_private(base.path(), "pasted-3.png", b"x").unwrap();
+        let folder = path.parent().unwrap().to_owned();
+        unstage(&path);
+        assert!(!folder.exists());
+        for name in ["Desktop", "threadbear-paste-project"] {
+            let dropped_dir = base.path().join(name);
+            fs::create_dir(&dropped_dir).unwrap();
+            fs::write(dropped_dir.join("other.txt"), b"keep").unwrap();
+            let dropped = dropped_dir.join("shot.png");
+            fs::write(&dropped, b"x").unwrap();
+            unstage(&dropped);
+            assert!(dropped.exists() && dropped_dir.join("other.txt").exists(), "{name}");
+        }
+    }
 }
 
 /// The JSON a picture goes as (`ImageRef` in docs/protocol.md).

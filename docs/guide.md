@@ -66,7 +66,9 @@ bring it back and it's starred again.
 The search box at the top, beside the New thread button, looks through
 every thread, the put-away ones too. Type part of a title, or of a thread's
 last reply, and each section shows only the threads that match, with folded
-ones opened. The x clears it.
+ones opened. It also matches a few search words the librarian gives each
+thread, so "dentist" finds a thread called "Wisdom tooth meeting location".
+The x clears it.
 
 ### What a row tells you
 
@@ -113,7 +115,9 @@ At the right of the row:
 - **Stopped**: the runner restarted while the thread was busy.
 - **Waiting for room**, with a time: every login it could use has hit its
   limit (see [Accounts, pools and Usage](#accounts)). It carries on by
-  itself when one has room again.
+  itself when one has room again. A box at the top of the message field
+  says so, with a button to switch to the login with the most room, and
+  Carry on by itself (Yes or No) to have it wait for you instead.
 
 ### Reading a reply
 
@@ -192,6 +196,17 @@ unanswered, press ⌘Return.
 
 When an ask is about pictures the agent put up to compare, its button can
 open that comparison window straight from the card.
+
+A reply can have buttons partway through it, beside the line they're
+about, so you can set jobs off as you read without typing: one starts a
+new thread with a brief the agent wrote ("Fill in the form"), another
+sends a message to a thread that's already going. Hover over a button to
+see the brief and where it runs. Nothing happens until you press it, and
+it only runs once: after that it turns green and opens the thread it
+started. The agent hears which you pressed with your next
+message, so a go ahead in your reply doesn't set the same job off twice. It works the same on your phone and the website. A thread
+without Full access can't make a button that does more than it could
+itself, and that's checked again when you press it.
 
 The comparison window starts on the first option's first picture. An option
 can have several (its overview, how it looks mid-drag, a detail), shown in a
@@ -293,7 +308,8 @@ in the side pane, or the picture or video showing there. It drops as the file it
 drag a clip straight into a post on X, or onto the Finder. A web link drags
 out as its address.
 To paste a picture instead, right-click it in the side pane and choose
-Copy Image.
+Copy Image. The same menu has Show in Finder and Copy Path, as a file
+link's right-click menu in a reply does.
 
 ## Full access or Ask before edits
 <!-- slug: full-access -->
@@ -320,7 +336,9 @@ shown on the composer (the box you type in) and changed by clicking it.
   refuses them all. The iPhone shows the first and asks about the rest one
   at a time.
 - **Auto** (Claude threads only): a separate safety check approves or blocks
-  each action, and a card shows only when it can't decide. It's for work on
+  each action, and a card shows only when it can't decide. The card says
+  why it couldn't, in the check's own words, and an action it stops
+  outright leaves a note in the thread saying why. It's for work on
   text you didn't write, like an error report or a web page. It catches a lot
   but it's no guarantee, and on a Codex thread it behaves like Ask before edits.
 - **Plan first**: the agent looks around and writes a plan, but changes
@@ -328,6 +346,10 @@ shown on the composer (the box you type in) and changed by clicking it.
   ahead (or Return in an empty message box) lets it start, back in the mode
   the thread had before. Send back, or just writing what you'd change, has
   it plan again. Once it's working, the same card ticks off its steps.
+  On the iPhone app the plan shows as a card in the thread: tap it to read
+  the whole plan, copy it, or share it as a Markdown file (Save to Files,
+  Notes, AirDrop). Typing what should change sends it back. Go ahead is
+  on the Mac.
 
 In Ask before edits and Auto, an edit to a file Threadbear runs by itself
 (a patch, a file a patch uses, or Claude Code's settings) always asks, with
@@ -363,9 +385,10 @@ time, as the repo can change what it runs.
 
 A card shows the whole command. On the phone, one that's too long to read
 there in full, one with anything but plain ASCII in it (an accent, an
-emoji, an invisible or text-reversing character), or one asking for more
-access has only Deny: allow it in the Mac app, whose card writes an
-invisible character out by name (like `⟨U+2028⟩`).
+emoji, an invisible or text-reversing character), one asking for more
+access, or any file edit (the phone shows only its path) has only Deny:
+allow it in the Mac app, which shows every line an edit writes and
+writes an invisible character out by name (like `⟨U+2028⟩`).
 
 ### When an agent needs a password or a key
 
@@ -478,8 +501,8 @@ box, so the change sticks. On their own they say what the thread is on and
 what you can pick. `/clear` starts the agent on a fresh session; the
 transcript above stays for you to read.
 
-Type `/` in a thread's message box and a palette opens above it with
-every command the thread can run: Threadbear's, the CLI's and your
+Type `/` in a thread's message box, a new thread's included, and a
+palette opens above it with every command the thread can run: Threadbear's, the CLI's and your
 skills, with Recent for the ones you picked lately. What you type narrows
 it, and the one picked is described on the right: how to use it, its
 other names, what `/model` and `/effort` are set to now, and where it
@@ -493,6 +516,13 @@ border lights up where it will drag), as wide as the window, and the
 lines between its columns to size them. It keeps the sizes for next
 time. Right-click it for its default size or column widths, or
 double-click a line to put that column back.
+
+Type `/` partway through a message ("then use /td") and the palette
+lists the skills the agent can run when it reads one named there. Return
+or Tab puts the skill in your words, and nothing is sent until you send
+the message. Claude Code's own commands, and skills set to run only when
+you type them (`disable-model-invocation: true`), work only at the start
+of a message, so they aren't listed there.
 
 The iPhone app has it too: type `/` in a thread's reply box and a list of
 its commands opens above it, with the categories as buttons along the top.
@@ -622,6 +652,10 @@ the one you're reading, right-click it in the list and pick Open in New
 Panel.
 
 The View menu has the rest: Show or Hide Threads (⌃⌘S) for the list,
+Collapse or Expand Threads (⌘/), which folds the list away while the bar
+of icons on the left stays, gives its room to the thread, and brings it
+back at the same width (clicking Threads, Scheduled, Projects or
+Librarian in that bar brings it back too),
 Show or Hide Panels (⌥⌘P) for the panels beside the thread, Show or Hide
 Terminal (⌘J), and Reset Panel Layout, which puts everything back how it
 started. Threadbear remembers your layout between launches.
@@ -683,8 +717,15 @@ already running in that shell, or you've typed on its prompt, nothing gets
 added: the command goes on the clipboard and a bubble says so (a shell
 without bracketed paste, like macOS's old bash, always copies). Play isn't there on a thread
 on another Mac or the cloud, or an archived one, as this Mac's shell
-wouldn't be in the right place; Copy still is. It's on the Mac app only.
+wouldn't be in the right place; Copy still is. Nor is it on a thread open
+in a panel of its own, as the Terminal shows the main panel's thread's
+shell: open the thread in the main panel to use it. It's on the Mac app only.
 A block with control or invisible characters in it has no play icon.
+
+A link in the Terminal (one a program prints, or a path you click) opens
+the way a link in a reply does: a web page in your browser, a document in
+its app, and anything that would run something, or start another app,
+only once you've said yes.
 
 ## Highlights
 <!-- slug: highlights -->
@@ -855,6 +896,20 @@ runs. If the run ends with nothing for you, the thread goes back into the
 archive, so a watcher you've put away only lands in your inbox when it has
 something you need to act on.
 
+A schedule can have a check: a shell command that runs first, in its
+folder, each time it's due. If the check prints nothing, that run is
+skipped and no agent starts, so a schedule that looks for new Sentry
+issues every five minutes only uses a login when there's something to look
+at. What it prints is added to the message. If the check itself fails, the
+run goes ahead with the error, so you hear about it. A check has a minute
+to finish, or up to five if its schedule says so, for one that reads
+something slow like Slack. What a check prints is kept until a run
+carrying it has been sent, so a runner restart in between doesn't lose it.
+Ask a thread to "only run when there's something new" and it writes the
+check. Run now skips it. It's bound to what it runs: if a script it
+reaches changes, it doesn't run until the same check is passed to the
+schedule again, and the thread is told once.
+
 If you run Threadbear on more than one Mac (or on a Linux server as well,
 INSTALL.md section 6), a schedule that starts a new
 thread can run on any of them: pick the Mac under Runs on. It runs there
@@ -953,7 +1008,14 @@ how full its context is: how much of the model's window the conversation
 takes up. It turns orange when it's nearly full, as Claude and Codex
 compact the conversation by themselves soon after. Click it for the
 tokens used out of the window, the model and login the thread really ran
-on, and what it has cost so far.
+on, and what it has cost so far. On a Claude thread it also shows what
+fills the context, as Claude's `/context` counts it: the conversation,
+memory files, skills, tools, the system prompt, MCP servers, the room
+Claude keeps for compacting and what's free, with the tool definitions it
+loads only when needed listed below. Claude is asked when you open it and
+when you click its refresh button. Once a thread has sat idle for half an
+hour its Claude has stopped, so it shows the last breakdown and how old
+it is until your next message.
 
 To add another login, such as a second Claude subscription, give it a
 folder of its own under `accounts` in Threadbear's data folder, named
@@ -992,7 +1054,10 @@ lost rather than draining the login with the most room. When the one it's on get
 another login in the pool with room, and carries on from where it was. When
 none has room, the thread waits and carries on by itself once a limit
 resets. With only one login, that means it waits for that login's limit to
-reset.
+reset. A thread pinned to one login does the same on that login. Either
+way, the box at the top of the message field says what happened and offers
+Switch to another login now; set its Carry on by itself to No and the
+thread waits for your next message instead.
 The first time a pool has a second login, a card by the composer says
 what pools do.
 
@@ -1026,7 +1091,9 @@ first read takes a minute or so after the runner updates.
 Below that, each pool is a card, with each login in it: what it's spent
 today, and its weekly window (plus the 5-hour one where the login has it).
 The weekly one has a small chart
-of the week so far, with your current pace dashed on to the reset. Under
+of the last seven days, rolling, with the days along the bottom: last
+week's readings stay on it after a reset, and your current pace is dashed
+on to the next reset. Under
 each window is what that pace means: in orange, when it runs out and how
 long before the reset; in green, how much of the week will go unused, so
 it's worth leaning on that login; otherwise that it's on track, or when it
@@ -1037,6 +1104,35 @@ A Claude login with a limit of its own on Fable shows that week too,
 `/usage` does. Running out of it only stops Fable: the login can still run
 other models, so it never makes a login look full.
 
+### Review by another lab
+
+When a thread changes code (five lines or more, not counting docs) and
+finishes with nothing for you to do, Threadbear has your other provider try
+to break the change: Codex reviews a Claude thread's change, and Claude a
+Codex one's. The review runs in a thread of its own in the same folder, with
+the same permissions as the thread it reviews, and is told not to edit
+anything. Your thread says who is reviewing and waits. The reviewer gives a
+verdict: a list of concrete findings, or nothing that holds up. Then your
+thread wakes with them numbered, and it can't finish until it has answered
+each one: fixed, disputed (saying why), or left for you to decide, which
+comes to you as a question. Anything it fixed gets reviewed again, just the
+new change, until a round finds nothing. The done card shows who reviewed,
+how it came out, and each finding with what was done about it; the line
+over them opens the review thread. The review thread is archived when it's
+done, so it stays out of your inbox. A thread gets at most three reviews
+between your messages, and if the last one's fixes weren't looked at, the
+card says so. For now the findings only show on the Mac whose runner ran
+the thread; the phone, the website and your other Macs see the agent's
+reply, which says the same in words.
+
+With no login of another provider, a fresh session of the same one
+reviews, and the note says it isn't another lab. A thread shut in a sandbox
+is reviewed in the sandbox too, so its review is always a fresh Claude
+session (Codex can't run there), or none, with a note saying why. A folder a pool is kept
+for is only ever reviewed on that pool's logins. Reviews cost tokens on the
+reviewing login, so if you'd rather not have them, turn off Settings >
+General > Code review (`"labReview": false` in `runner.json`).
+
 Claude threads run through Claude Code's Agent SDK, and Anthropic's 5-hour
 meter seems to count that traffic as more per token than the same work typed
 into `claude` in a terminal. People have measured anywhere from about 1.6 to
@@ -1044,6 +1140,25 @@ into `claude` in a terminal. People have measured anywhere from about 1.6 to
 while weekly limits come out about the same in most of their tests. Some apps
 change the label the SDK sends to get around it. Threadbear leaves the label
 as it is for now.
+
+## Standing instructions
+<!-- slug: instructions -->
+
+Settings > General > Instructions is for what every agent should always
+keep in mind: who you are, how you like things written, what you build
+with. Every new session gets it, on every login, Claude and Codex alike,
+and a chat that's already going hears a change before your next message,
+with a line in the thread saying so. It saves as you type; empty is none.
+A login's own `CLAUDE.md` or `AGENTS.md` still applies, and is the place
+for what's particular to that login or provider: this box is for what goes
+for all of them, without keeping several files in step.
+
+Only what you save in Settings counts. If anything else changes the file
+(an agent, say), no agent is given it, Threadbear warns you, and the box
+shows what the file holds so you can keep it or clear it. Agents can't
+change it for you, so ask one to draft some and paste them in yourself. On
+Full access an agent that goes after the runner's own key could still get
+past this, as it could with anything on your Mac.
 
 ## Keyboard shortcuts
 <!-- slug: keyboard -->
@@ -1088,10 +1203,12 @@ key:
 - Show Hibernating: `showHibernating`, no key
 - Show Archived: `showArchived`, no key
 - Settings: `settings`, ⌘,
+- Quit Threadbear: `quit`, ⌘Q
 - Zoom In: `zoomIn`, ⌘=
 - Zoom Out: `zoomOut`, ⌘-
 - Actual Size: `actualSize`, ⌘0
 - Show Threads: `toggleThreads`, ⌃⌘S
+- Collapse Threads: `collapseThreads`, ⌘/
 - Show Panels: `togglePanels`, ⌥⌘P
 - Show Terminal: `toggleTerminal`, ⌘J
 - Reset Panel Layout: `resetPanelLayout`, no key
@@ -1113,7 +1230,7 @@ Threadbear's data folder, read at every turn, so an agent can set them
 there too:
 
 ```json
-"experiments": { "labReview": true }
+"experiments": { "keepAwake": true }
 ```
 
 Once an experiment has proved itself it becomes a standard part of
@@ -1225,7 +1342,8 @@ the work. Swipe right on a thread's messages to go back, and left to go
 forward again to the thread you just left, with the Mac's card saying where
 letting go lands. A code block or table that can still scroll keeps the
 swipe. The search at the top of the inbox finds any thread, hibernating
-and archived ones too, by its title, last reply or project. What a thread needs from you shows under its reply with the
+and archived ones too, by its title, last reply, project, the librarian's
+search words for it, or a word said anywhere in it. What a thread needs from you shows under its reply with the
 likely answers as buttons (type in the box to say something else; the one you tap spins until the runner has it, and the card comes back if it's refused), and
 a thread that's done offers its suggested next steps and Archive, which takes you back to the inbox as its row slides away. Hibernate from a thread's ... menu does the same, with its row sinking towards the Hibernating heading. Clear the last thread from the inbox and the bear waves at you, the once. Pull the inbox down and let go to reconnect to your Mac's mirror, if the list ever looks stuck. A new thread from the phone starts in your default folder; pick its model and effort under the message, or leave them on Default. With more than one runner it starts on the first one that's online in your order, so a sleeping Mac doesn't hold it up; pick another under Runner, or change the order in Settings > Runners > Change the order. The sheet closes as soon as you tap Start, and a row at the top of the inbox says Starting until that Mac has made the thread, which then opens. If it couldn't start, the row says why; tap it to open it again as you left it, photos and choices too. While a thread is working and nothing's typed, Send turns into Stop, as on the Mac, here and on the website; it spins until the turn has stopped. Anything typed while it works goes into that turn instead. Paste a photo straight into any message box, or add one with the photo button: it goes in where the cursor is as a chip, "Picture 1", as on the Mac, and pictures in your messages show as chips too. The photos you sent show over your message, where the Mac uploaded them for your website (on unless `"sync": { "pastedPictures": false }`); one that stayed on the Mac leaves a "[1 picture]" line instead. Pictures an agent puts in its reply or pins show in the thread, and animated GIFs play; tap one to see it full screen and pinch to zoom. An MP4 or MOV video an agent pins shows its first frame with a play button, and plays when you tap it. Anything over 10 MB, or from a thread that's been quiet for over two weeks, says it's on your Mac. To point one thread at another, use Copy Thread ID in its ... menu or the menu when you press and hold its row, and paste it into a message, here or on the Mac: it goes in as a link to that thread, with its title. When the Mac a thread runs on is asleep or offline, its message box says so, and what you send waits for it: each message shows faded with a Cancel under it until that Mac takes it, and Cancel puts its words back in the box. It can send notifications too,
 though you don't need them for any of that. It pairs with your Mac by scanning a
@@ -1375,6 +1493,35 @@ can't reach it after a restart, run `./threadbear setup` again: it starts
 the backend, or makes it again on the same data. docs/self-hosting.md in the
 repo has how it's put together, backing up, upgrading and taking it out.
 
+### On this Mac only, without Tailscale
+
+If you won't use the phone, or you can't use Tailscale (your work keeps
+you on its tailnet, and Tailscale only has one on at a time), add
+`--local`:
+
+```sh
+./threadbear setup --self-hosted --local --yes
+```
+
+It's the same backend in Docker, on this Mac's `127.0.0.1` only: nothing
+on your network or any tailnet can reach it, and Tailscale isn't needed
+at all. That leaves out more:
+
+- **No iPhone app.** Nothing off this Mac can reach the backend, so
+  Settings › Phone & browser says why rather than showing a code, and
+  there are no notifications.
+- **No second Mac** joining this one.
+- **The website and share links only open on this Mac**, at
+  `http://127.0.0.1:13211`. "Anyone with the link" means anyone using
+  this Mac.
+- **Nothing works while your Mac sleeps** or Docker is stopped, as with
+  the tailnet one.
+
+The dashboard is at `http://127.0.0.1:16791`, with the same admin key.
+Running setup again keeps it local. If you get Tailscale later and want
+the phone, run `./threadbear setup --self-hosted --tailnet`: it moves the
+backend onto your tailnet and your threads stay. `--local` moves it back.
+
 ## Patches: your own buttons and panels
 <!-- slug: patches -->
 
@@ -1505,8 +1652,9 @@ first. If you edit it by hand and leave it broken (a trailing comma, say),
 the runner won't start until it's fixed, and never writes over it: `tb logs`
 names the file and what's wrong.
 
-Drag the Settings window wider for more room; each tab still sets how tall
-it is.
+Settings has its sections down a sidebar on the left, like System Settings,
+and each one scrolls when it's taller than the window. Drag the window wider
+or taller for more room.
 
 When something goes wrong, the app says so in an orange bar at the top of
 the thread. Investigate on that bar starts a thread in your Threadbear
@@ -1522,6 +1670,12 @@ you choose Restart to Update in the Threadbear menu, or by itself when you've
 left it alone for a while with nothing typed. The window stays where it is
 while it does: the new version opens the same thread underneath and takes
 over, so you shouldn't see it go.
+
+Whatever's typed in a message box and not sent is kept through a quit or a
+restart. A message you send while the runner is restarting waits under its
+bubble and goes once the new one is up. If one can't be sent, its words go
+back in that thread's box and a note above the thread says which thread,
+until you dismiss it.
 
 A runner update lets a job a thread left running in the background finish, for
 up to about 4 hours after the thread's last turn. If one goes on longer it's
@@ -1595,6 +1749,15 @@ Threadbear's data folder, a file a day, and each file is deleted after 30
 days. Threadbear never sends it anywhere, though once an agent has read
 some of it, that's part of its thread like anything else it reads.
 
+### Keeping the Mac awake
+
+While any thread is working, and for three minutes after, your Mac won't
+go to sleep on its own, so a long turn, or one you started from your
+phone, isn't cut off halfway. The screen still dims and locks as usual.
+It stops below 15% battery when you're not plugged in, and closing the
+lid on battery still puts the Mac to sleep. It's on unless you turn off
+Keep the Mac awake while threads work in Settings (⌘,) > General > Sleep.
+
 ## Privacy
 <!-- slug: privacy -->
 
@@ -1636,8 +1799,9 @@ you turn it on, and it stays on your Mac.
   its version, the threads that are busy, and any restart or update on the
   way.
 - `threadbear` in Terminal opens the app, and quitting it with ⌘Q is always
-  safe, since your threads keep running without it. If the app says it
-  can't reach the runner, click Start runner.
+  safe, since your threads keep running without it. Quit asks first, with
+  a Don't ask again box; Settings > General > Quitting turns asking back
+  on. If the app says it can't reach the runner, click Start runner.
 - Threadbear > About Threadbear says which commit your copy was built from,
   along with a few numbers about your threads.
 

@@ -28,6 +28,22 @@ fn pointer_is_scripted() -> bool {
     SCRIPTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Where a window and the pointer were when a press began, in the OS's own
+/// screen coordinates, for moving the window with the pointer from then on.
+///
+/// Why by hand: a bar can't start the OS's window drag on the press, as the
+/// press might be a click or a held panel drag, and by the time the pointer
+/// has moved AppKit won't start one (`performWindowDragWithEvent:` wants the
+/// mouse-down and does nothing with a later event). Swift's dock moves the
+/// window itself for the same reason (DockView's `.window` mode).
+#[derive(Clone, Copy)]
+pub struct WindowGrab {
+    #[cfg(target_os = "macos")]
+    origin: (f64, f64),
+    #[cfg(target_os = "macos")]
+    mouse: (f64, f64),
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
     use gpui_kit::{Pixels, Window};
@@ -121,6 +137,29 @@ mod mac {
         }
     }
 
+    /// In AppKit's global coordinates, not GPUI's: those are relative to the
+    /// window's current display, so they'd jump as it crossed to another.
+    pub fn grab_window(window: &Window) -> Option<super::WindowGrab> {
+        if super::pointer_is_scripted() {
+            return None;
+        }
+        let ns = ns_window(window)?;
+        unsafe {
+            let mouse: NSPoint = msg_send![objc2::class!(NSEvent), mouseLocation];
+            let frame: NSRect = msg_send![ns, frame];
+            Some(super::WindowGrab { origin: (frame.origin.x, frame.origin.y), mouse: (mouse.x, mouse.y) })
+        }
+    }
+
+    pub fn move_grabbed_window(window: &Window, grab: super::WindowGrab) {
+        let Some(ns) = ns_window(window) else { return };
+        unsafe {
+            let mouse: NSPoint = msg_send![objc2::class!(NSEvent), mouseLocation];
+            let origin = NSPoint { x: grab.origin.0 + mouse.x - grab.mouse.0, y: grab.origin.1 + mouse.y - grab.mouse.1 };
+            let _: () = msg_send![ns, setFrameOrigin: origin];
+        }
+    }
+
     /// Clicks go through the window to whatever is under it: the outline of a
     /// window about to open, which mustn't catch the pointer it follows.
     pub fn set_ignores_mouse_events(window: &Window, ignores: bool) {
@@ -132,7 +171,7 @@ mod mac {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::{pointer_in_window, set_ignores_mouse_events, set_window_alpha, set_window_origin};
+pub use mac::{grab_window, move_grabbed_window, pointer_in_window, set_ignores_mouse_events, set_window_alpha, set_window_origin};
 
 /// Everywhere else, the event's own position is the best there is.
 #[cfg(not(target_os = "macos"))]
@@ -141,6 +180,14 @@ pub fn pointer_in_window(_window: &Window) -> Option<Point<Pixels>> {
     None
 }
 
+/// None here means the caller hands the move to the OS (`start_window_move`),
+/// which on Windows and X11 is happy to start from a pointer move.
+#[cfg(not(target_os = "macos"))]
+pub fn grab_window(_window: &Window) -> Option<WindowGrab> {
+    None
+}
+#[cfg(not(target_os = "macos"))]
+pub fn move_grabbed_window(_window: &Window, _grab: WindowGrab) {}
 #[cfg(not(target_os = "macos"))]
 pub fn set_window_origin(_window: &Window, _origin: Point<Pixels>) {}
 #[cfg(not(target_os = "macos"))]

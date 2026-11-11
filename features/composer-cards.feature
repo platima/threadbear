@@ -65,8 +65,12 @@ Feature: The open card in the composer
     When I press Return
     Then the transcript shows my message "Turn on the lint rule that sorts imports"
 
-  @composer.recap @quiet-thread @gpui-pending
-  Scenario: A thread that has sat for a while says what it's for
-    When I open the thread "Ship the beta to TestFlight"
-    Then the recap box says "Gets the first beta out to testers."
-    And the recap box says "Waiting on you to accept the agreement"
+  # The mock has no thread a review by another lab has been through yet,
+  # so neither app is driven through this one (runner/test/unit/lab-review
+  # and NeedsYouTests cover the Swift card).
+  @card.review @gpui-pending @swift-pending
+  Scenario: A done card lists another lab's findings and what was done about each
+    When I open the thread "Fix the session refresh bug"
+    Then the card in the composer says "Done"
+    And the card shows "Reviewed by Codex"
+    And the card shows "Drops the session on refresh."

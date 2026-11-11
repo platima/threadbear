@@ -1293,7 +1293,7 @@ test("end_turn lists only today's form, whichever forms it takes", async () => {
   const h = makeHarness();
   const { thread } = start(h);
   const one = await mcpClient(h, thread.id, true).endTurnShown();
-  assert.deepEqual(Object.keys(one.inputSchema.properties).sort(), ['archive', 'asks', 'byline', 'headline', 'needs', 'next', 'snooze', 'waitFor']);
+  assert.deepEqual(Object.keys(one.inputSchema.properties).sort(), ['archive', 'asks', 'byline', 'findings', 'headline', 'needs', 'next', 'snooze', 'waitFor']);
   assert.ok(!one.inputSchema.required?.length, 'every field is optional');
   const ask = (one.inputSchema.properties.asks as { items: { required: string[]; properties: Record<string, { description?: string; items?: { type?: string } }> } }).items;
   assert.deepEqual(ask.required, ['question']);
@@ -1804,6 +1804,10 @@ test('move_thread with a runner asks the main Mac to move the thread whole, and 
   const control: RemoteControl = {
     list: async () => ({ runners: [], threads: [] }),
     call: async () => undefined,
+    runners: async () => [
+      { id: 'm5runner0001', name: 'M5' },
+      { id: 'legitcloud01', name: 'Hetzner Cloud' },
+    ],
     move: async (p) => {
       asked.push(p);
       return 'Moving it to Hetzner Cloud.';
@@ -1813,11 +1817,101 @@ test('move_thread with a runner asks the main Mac to move the thread whole, and 
   const r = await call('move_thread', { runner: 'cloud', folder: '/home/mike/x' });
   assert.equal(r.error, false, r.text);
   assert.match(r.text, /Moving it to Hetzner Cloud/);
-  assert.deepEqual(asked, [{ threadId: me.id, runner: 'cloud', cwd: '/home/mike/x' }]);
+  assert.deepEqual(asked, [{ threadId: me.id, runnerId: 'legitcloud01', runnerName: 'Hetzner Cloud', cwd: '/home/mike/x' }]);
   // `then` is for folder moves; neither folder nor runner is an error.
   assert.equal((await call('move_thread', { runner: 'cloud', then: 'go' })).error, true);
   assert.equal((await call('move_thread', {})).error, true);
   // Without the main Mac's mover, it says what's needed.
   const none = toolsWith(h, me.id, undefined);
   assert.match((await none('move_thread', { runner: 'cloud' })).text, /main Mac's runner/);
+});
+
+// Thread dcdc60a3 (11 Nov 2026): an ffmpeg job's exit came with end_turn's
+// "Now write your reply". The reply counted as reading the notice, the Stop
+// hook asked for end_turn again, and the "Done." after that second one became
+// the turn's reply in place of the full one.
+test('one reply: a notice handed over with "Now write your reply" leaves the reply as the reply', async () => {
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  const { call } = tools(h, thread.id, undefined, () => true);
+  const send = async (itemId: string, input: Record<string, unknown>) => {
+    toolCall(s, itemId, END_TURN, input);
+    const r = await call('end_turn', input);
+    s.out({ kind: 'event', event: { type: 'tool.result', itemId, ok: !r.error, text: r.text, truncated: false, images: [] } });
+    return r;
+  };
+  s.text('m0', 'Ready. Now writing the reply.');
+  s.out({ kind: 'event', event: { type: 'system.note', text: 'Background command "ffmpeg" failed with exit code 255', wake: true } });
+  const ask = { needs: 'you', asks: [{ question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+  assert.equal((await send('e1', ask)).error, false);
+  const reply = 'Here is the full reply, with the GIF, the video and the table.';
+  s.text('m1', reply);
+  // Had the Stop hook asked anyway, a repeat says the message above stands,
+  // and text after it doesn't take the reply's place.
+  s.out({ kind: 'endTurnNudge' });
+  const again = await send('e2', ask);
+  assert.match(again.text, /your message above is the reply/);
+  s.text('m2', 'Done.');
+  s.result('completed');
+  await tick();
+  const texts = h.events(thread.id).filter((e) => e.type === 'assistant.text');
+  assert.ok(texts.some((e) => e.type === 'assistant.text' && e.itemId === 'm1' && e.final === true), 'the reply is the final text');
+  assert.ok(!texts.some((e) => e.type === 'assistant.text' && e.itemId === 'm2'), '"Done." is dropped');
+  assert.equal(h.runner.get(thread.id).needs, 'you');
+});
+
+// The same after the agent acts on the notice: the turn opens again, its next
+// end_turn says the message above is the reply, and a "Done." after that is
+// dropped rather than taking the reply's place.
+test('one reply: after a wake reopens the turn, text after a "message above is the reply" end_turn is dropped', async () => {
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  const { call } = tools(h, thread.id, undefined, () => true);
+  const send = async (itemId: string, input: Record<string, unknown>) => {
+    toolCall(s, itemId, END_TURN, input);
+    const r = await call('end_turn', input);
+    s.out({ kind: 'event', event: { type: 'tool.result', itemId, ok: !r.error, text: r.text, truncated: false, images: [] } });
+    return r;
+  };
+  s.out({ kind: 'event', event: { type: 'system.note', text: 'Background command "ffmpeg" failed with exit code 255', wake: true } });
+  const ask = { needs: 'you', asks: [{ question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+  await send('e1', ask);
+  s.text('m1', 'The first reply.');
+  toolCall(s, 'b1', 'Bash', { command: 'cat ffmpeg.log' });
+  toolResult(s, 'b1');
+  s.text('m2', 'The ffmpeg job that failed was the first try, which I had stopped; both files are fine.');
+  s.out({ kind: 'endTurnNudge' });
+  const again = await send('e2', ask);
+  assert.equal(again.error, false, again.text);
+  assert.match(again.text, /your message above is the reply/);
+  s.text('m3', 'Done.');
+  s.result('completed');
+  await tick();
+  const texts = h.events(thread.id).filter((e) => e.type === 'assistant.text');
+  assert.ok(texts.some((e) => e.type === 'assistant.text' && e.itemId === 'm2'), 'the report is kept');
+  assert.ok(!texts.some((e) => e.type === 'assistant.text' && e.itemId === 'm3'), '"Done." is dropped');
+});
+
+// From Codex's review: an end_turn taken in the older form ("Noted.", as
+// Codex's bullets form answers) after a one-reply one, once a wake opened the
+// turn, means text after it isn't the reply.
+test('one reply: a later end_turn taken in the older form ends the reply that comes after', async () => {
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  const { call } = tools(h, thread.id, undefined, () => true);
+  s.out({ kind: 'event', event: { type: 'system.note', text: 'Background command "Build" completed (exit code 0)', wake: true } });
+  const input = { needs: 'nothing' };
+  toolCall(s, 'e1', END_TURN, input);
+  const r = await call('end_turn', input);
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: true, text: r.text, truncated: false, images: [] } });
+  s.text('m1', 'The first reply.');
+  toolCall(s, 'b1', 'Bash', { command: 'cat build.log' });
+  toolResult(s, 'b1');
+  s.text('m2', 'The build passed, and here is everything it found.');
+  toolCall(s, 'e2', END_TURN, { summary: ['Built it.'], needs: 'nothing' });
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e2', ok: true, text: 'Noted. Write a short final answer.', truncated: false, images: [] } });
+  s.text('m3', 'Done.');
+  s.result('completed');
+  await tick();
+  assert.ok(!h.events(thread.id).some((e) => e.type === 'assistant.text' && e.itemId === 'm3' && e.final === true), '"Done." is not the reply');
 });

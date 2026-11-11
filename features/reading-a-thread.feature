@@ -93,3 +93,16 @@ Feature: Reading a thread
     And I press the block's play icon
     Then the Terminal shows "npm test" at its prompt
     And nothing has run until I press Return
+
+  @manual @gpui-pending @terminal.putcommand
+  Scenario: Only the thread in the main panel puts its commands in the Terminal
+    When I open a thread whose reply has a bash block with "npm test"
+    And another Mac's thread with a bash block is open in a panel of its own
+    Then that panel's block has its copy icon and no play icon
+    And a block in another of this Mac's threads open in a panel of its own has no play icon either
+
+  @manual @gpui-pending @terminal.panel
+  Scenario: A link clicked in the Terminal is checked like a link in a reply
+    When the Terminal shows a hyperlink to a ".command" file
+    And I click the link
+    Then Threadbear asks before opening it

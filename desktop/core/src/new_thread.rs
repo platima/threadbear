@@ -342,6 +342,88 @@ pub fn pool_providers(pool: &Pool, accounts: &[Account]) -> Vec<String> {
     seen
 }
 
+/// `AccountUsageText.ChipBadge`: after a chip's title, "· 12%" in orange
+/// when a login is running out, "Limit reached" in red at its limit.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ChipBadge {
+    Low(String),
+    Blocked,
+}
+
+/// `AccountUsageText.chipBadge`, for one login.
+pub fn chip_badge(account: Option<&Account>) -> Option<ChipBadge> {
+    let usage = usage_of(account?)?;
+    if usage.blocked {
+        return Some(ChipBadge::Blocked);
+    }
+    let left = room(&usage)?;
+    (left < CHIP_WARNING).then(|| ChipBadge::Low(percent(left)))
+}
+
+/// `Pools.bestRoom`: the most room any of its logins has, a blocked one
+/// counting as none.
+pub fn best_room(pool: &Pool, accounts: &[Account]) -> Option<f64> {
+    pool_logins(pool, accounts, None)
+        .into_iter()
+        .filter_map(|a| {
+            let usage = usage_of(a)?;
+            if usage.blocked {
+                Some(0.)
+            } else {
+                room(&usage)
+            }
+        })
+        .fold(None, |best: Option<f64>, r| Some(best.map_or(r, |b| b.max(r))))
+}
+
+/// `Pools.chipBadge`: the model chip's badge on a pool thread, only once
+/// every login in the pool is running out (or all are at their limit).
+pub fn pool_chip_badge(pool: &Pool, accounts: &[Account]) -> Option<ChipBadge> {
+    let usages: Vec<Option<AccountUsage>> = pool_logins(pool, accounts, None).into_iter().map(usage_of).collect();
+    if usages.is_empty() {
+        return None;
+    }
+    if usages.iter().all(|u| u.as_ref().is_some_and(|u| u.blocked)) {
+        return Some(ChipBadge::Blocked);
+    }
+    let low = usages.iter().all(|u| match u {
+        Some(u) if u.blocked => true,
+        Some(u) => room(u).is_some_and(|r| r < CHIP_WARNING),
+        None => false,
+    });
+    if !low {
+        return None;
+    }
+    best_room(pool, accounts).map(|best| ChipBadge::Low(percent(best)))
+}
+
+/// `AccountUsageText.switchTarget`: where a thread that hit its limit could
+/// go: the login with the most room (known, and at least the floor), on the
+/// same provider first, never one with a note or at its limit.
+pub fn switch_target<'a>(accounts: &'a [Account], from: &str) -> Option<&'a Account> {
+    let room_of = |a: &Account| usage_of(a).as_ref().and_then(room);
+    let others: Vec<&'a Account> = accounts.iter().filter(|a| a.id != from && is_eligible(a) && room_of(a).is_some()).collect();
+    let best = |list: Vec<&'a Account>| -> Option<&'a Account> {
+        let top = list.iter().filter_map(|a| room_of(a)).fold(None, |m: Option<f64>, r| Some(m.map_or(r, |m| m.max(r))))?;
+        list.into_iter().find(|a| room_of(a) == Some(top))
+    };
+    if let Some(provider) = accounts.iter().find(|a| a.id == from).map(|a| a.provider_id()) {
+        if let Some(same) = best(others.iter().copied().filter(|a| a.provider_id() == provider).collect()) {
+            return Some(same);
+        }
+    }
+    best(others)
+}
+
+/// `AccountUsageText.switchTitle`: "Switch to mike (78% left)".
+pub fn switch_title(target: &Account, accounts: &[Account]) -> String {
+    let mut title = format!("Switch to {}", short_account_name(&target.id, accounts));
+    if let Some(left) = usage_of(target).as_ref().and_then(room) {
+        title.push_str(&format!(" ({} left)", percent(left)));
+    }
+    title
+}
+
 /// `Pools.hasRoom`: not blocked, and at or over the floor (or usage unknown).
 pub fn has_room(account: &Account) -> bool {
     let Some(usage) = usage_of(account) else { return true };
@@ -730,13 +812,39 @@ mod tests {
         RunnerLogins::from_hello(&json!({
             "accounts": [
                 { "id": "claude-main", "provider": "claude", "email": "mike@gmail.com", "usage": usage(52.0, 67.0) },
-                { "id": "claude-2", "provider": "claude", "email": "mike@convex.dev", "note": "Convex work only", "usage": usage(90.0, 90.0) },
+                { "id": "claude-2", "provider": "claude", "email": "mike@work.example", "note": "Convex work only", "usage": usage(90.0, 90.0) },
                 { "id": "claude-3", "provider": "claude", "email": "mike@bearworks.io", "usage": usage(20.0, 88.0) },
                 { "id": "codex-main", "provider": "codex", "title": "Codex · sam@example.com" }
             ],
             "pools": pools,
             "defaults": { "cwd": cwd, "accountId": "claude-main", "poolId": "claude", "permissionMode": "auto" }
         }))
+    }
+
+    #[test]
+    fn a_thread_at_its_limit_is_offered_the_login_with_most_room() {
+        let l = with_pools();
+        // claude-main has 52% (5h, the tighter), claude-3 20%, claude-2 a note.
+        let target = switch_target(&l.accounts, "claude-3").expect("somewhere to go");
+        assert_eq!(target.id, "claude-main");
+        // Three Claude logins share "mike", so the whole address (AccountName.short).
+        assert_eq!(switch_title(target, &l.accounts), "Switch to mike@gmail.com (52% left)");
+        // The noted one is never offered, and codex has no room known.
+        assert_eq!(switch_target(&l.accounts, "claude-main").map(|a| a.id.as_str()), Some("claude-3"));
+    }
+
+    #[test]
+    fn a_pools_chip_badge_waits_for_every_login_to_run_low() {
+        let mut l = with_pools();
+        let pool = l.pool("claude").unwrap().clone();
+        assert_eq!(pool_chip_badge(&pool, &l.accounts), None, "claude-main still has room");
+        l.accounts[0].usage = Some(usage(12.0, 40.0));
+        assert_eq!(pool_chip_badge(&pool, &l.accounts), Some(ChipBadge::Low("20%".into())), "the best room of two low logins");
+        for a in l.accounts.iter_mut() {
+            a.usage = Some(json!({ "blocked": true, "windows": [] }));
+        }
+        assert_eq!(pool_chip_badge(&pool, &l.accounts), Some(ChipBadge::Blocked));
+        assert_eq!(chip_badge(l.accounts.first()), Some(ChipBadge::Blocked));
     }
 
     fn with_pools() -> RunnerLogins {
@@ -942,7 +1050,7 @@ mod tests {
         assert_eq!(account_label("claude-main", &l.accounts), "gmail");
         assert_eq!(account_label("claude-3", &l.accounts), "bearworks");
         assert_eq!(account_label("codex-main", &l.accounts), "Codex");
-        assert_eq!(login_name("claude-2", &l.accounts), "convex");
+        assert_eq!(login_name("claude-2", &l.accounts), "work");
     }
 
     #[test]

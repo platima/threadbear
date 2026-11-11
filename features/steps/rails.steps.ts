@@ -6,6 +6,9 @@ import type { ThreadbearWorld } from '../support/world.ts';
 const shortcut: Record<string, string> = { Threads: '⌘1', Scheduled: '⌘2', Projects: '⌘3', Librarian: '⌘4' };
 
 When('I click {string} in the activity bar', async function (this: ThreadbearWorld, title: string) {
+  // Scheduled, Projects and Librarian are only there once the runner has
+  // said it has them, which can come after the threads.
+  await this.until(`${title} in the activity bar`, (d) => d.rails?.activity.some((b) => b.title === title));
   // The button's tooltip names it with its key, as in the Swift app.
   await this.app.do({ cmd: 'click', tip: `${title} (${shortcut[title] ?? ''})` });
 });

@@ -268,7 +268,7 @@ extension AppModel {
                     permissionMode: state.permissionMode
                 ))
             }
-            replace(saved)
+            replace(saved, insert: state.isNew)
             if let key = state.draftKey {
                 // Images can't go with a schedule, so they stay in the box.
                 if var draft = drafts[key], !draft.images.isEmpty {
@@ -368,11 +368,14 @@ extension AppModel {
     }
 
     /// A reply's schedule goes in straight away; `schedules.updated` brings
-    /// the whole list (in order) a moment later anyway.
-    private func replace(_ schedule: Schedule) {
+    /// the whole list (in order) a moment later anyway. Only a new one is
+    /// added: a Run now or Pause answered after the schedule was deleted
+    /// brought it back as a row with nothing behind it (found reviewing the
+    /// GPUI app's copy of this, 11 Nov).
+    private func replace(_ schedule: Schedule, insert: Bool = false) {
         if let index = schedules.firstIndex(where: { $0.id == schedule.id }) {
             schedules[index] = schedule
-        } else {
+        } else if insert {
             schedules.insert(schedule, at: 0)
         }
     }

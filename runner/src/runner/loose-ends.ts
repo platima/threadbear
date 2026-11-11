@@ -8,7 +8,7 @@ import type { Runner, ThreadState } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { LooseEnd } from '../protocol.ts';
 import { experimentOn } from '../experiments.ts';
-import { childLooseEnds, scheduleLooseEnds, worktreeLooseEnds, type ChildThread } from '../loose-ends.ts';
+import { agentLooseEnds, childLooseEnds, editedLooseEnds, scheduleLooseEnds, worktreeLooseEnds, type ChildThread } from '../loose-ends.ts';
 
 // Opening a thread checks again at most this often: a click between
 // threads shouldn't run git each time.
@@ -36,7 +36,14 @@ export const looseEndsPart = {
     const ends: LooseEnd[] = [];
     try {
       const w = rec.worktree;
-      if (w && !w.removedAt) ends.push(...(await worktreeLooseEnds(w)));
+      const own = w && !w.removedAt ? w : undefined;
+      if (own) ends.push(...(await worktreeLooseEnds(own)));
+      // What it changed anywhere else, and the commits it made there.
+      this.catchUpHighlights(st);
+      const hl = rec.highlights;
+      const commits = (hl?.items ?? []).filter((h) => h.kind === 'commit' && h.sha && !h.pushed).map((h) => h.sha!);
+      ends.push(...(await editedLooseEnds(hl?.edited ?? [], commits, own?.path)));
+      ends.push(...agentLooseEnds(rec.needs?.open));
       const children: ChildThread[] = [];
       for (const other of this.threads.values()) {
         const o = other.rec;

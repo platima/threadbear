@@ -57,6 +57,8 @@ extension AppModel {
             if let v = update.followMain { shown.followMain = v }
             if let v = update.bulletReplies { shown.bulletReplies = v }
             if let v = update.oneReply { shown.oneReply = v }
+            if let v = update.labReview { shown.labReview = v }
+            if let v = update.keepAwake { shown.keepAwake = v }
             if let v = update.bringIn { shown.bringIn = v }
             if let v = update.pool { shown.models.pool = v }
             if let v = update.privateFolders { shown.models.privateFolders = v }
@@ -69,9 +71,6 @@ extension AppModel {
             do {
                 receive(try await client.settingsUpdate(update))
                 settingsError = nil
-                // Standing instructions' box shows only while its
-                // experiment is on, so ask again rather than wait for a reopen.
-                if update.experiments != nil { loadStandingInstructions() }
             } catch {
                 settingsError = error.localizedDescription
                 AppLog.write("rpc", "settings.update failed: \(error.localizedDescription)")

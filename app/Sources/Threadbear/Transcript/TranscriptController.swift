@@ -147,6 +147,7 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     @objc private func buttonsChanged() {
         guard !buttonsPending else { return }
         buttonsPending = true
+        composerCard?.buttonsChanged()
         rerender { [weak self] in self?.buttonsPending = false } where: { RenderCache.holdsButtons($0) }
     }
 
@@ -1103,6 +1104,9 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
             else if n != Decisions.ownAnswer, let now = app.threads[thread.id], app.picks(for: now)[index] == n {
                 composerCard?.pagePast(index)
             }
+        case "run":
+            guard thread.asksSeq == card.seq, let id = ask.run?.buttonId else { return }
+            app.pressRunButton(id, threadId: thread.id)
         case "link":
             guard ask.links.indices.contains(n), let url = ask.links[n].target else { return }
             if WorkLinks.reviewId(of: url) != nil { return openReviewLink(url) }

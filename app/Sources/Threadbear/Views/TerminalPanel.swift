@@ -26,7 +26,7 @@ import ThreadbearCore
 final class Terminals {
     static let shared = Terminals()
 
-    @ObservationIgnored private var sessions: [String: TerminalSession] = [:]
+    @ObservationIgnored private var sessions: [TerminalKey: TerminalSession] = [:]
     /// Bumped to ask the showing terminal to take the keyboard.
     private(set) var focusTick = 0
 
@@ -53,35 +53,67 @@ final class Terminals {
         return s
     }
 
-    /// Stops a thread's shell (the thread was archived or deleted).
+    /// Stops a thread's shell (the thread was archived or deleted). Never
+    /// the shared home shell, whatever the thread is called.
     func stop(threadId: String) {
-        guard let s = sessions.removeValue(forKey: threadId) else { return }
+        stop(.thread(threadId))
+    }
+
+    private func stop(_ key: TerminalKey) {
+        guard let s = sessions.removeValue(forKey: key) else { return }
         s.stop()
         generation += 1
     }
 
     /// Called whenever the app's thread list changes: stops the shells of
-    /// threads that have been archived. Threads missing from the list are
-    /// left alone here, as the list can be briefly incomplete; a deleted
-    /// thread's shell is stopped from `forget`, or from `stopAll(except:)`
-    /// once the runner's full list comes back after a reconnect.
-    func stopArchived(in threads: [String: ThreadSummary]) {
-        for key in sessions.keys where threads[key]?.isArchived == true { stop(threadId: key) }
+    /// this Mac's threads that have been archived. Threads missing from the
+    /// list are left alone here, as the list can be briefly incomplete; a
+    /// deleted thread's shell is stopped from `forget`, or from
+    /// `stopAll(except:)` once the runner's full list comes back after a
+    /// reconnect.
+    ///
+    /// Only a summary from this Mac's runner counts. Another runner's index
+    /// names its threads whatever it likes, and one of its rows called
+    /// "home", archived, stopped the home shell Mike was using (Daybreak,
+    /// 10 Nov). The home shell now has a key of its own (TerminalKey.home)
+    /// that no thread id can be, and only this Mac's own threads have
+    /// shells of their own here, so only their summaries stop one.
+    func stopArchived(in threads: [String: ThreadSummary], except unconfirmed: Set<String> = []) {
+        for key in Self.archived(Array(sessions.keys), in: threads, except: unconfirmed) { stop(key) }
+    }
+
+    /// Which of `keys` are shells of this Mac's threads that `threads`
+    /// says are archived. Never the home shell, nor one whose archive the
+    /// runner hasn't agreed to yet (`unconfirmed`, AppModel.archivesInFlight).
+    static func archived(_ keys: [TerminalKey], in threads: [String: ThreadSummary],
+                         except unconfirmed: Set<String> = []) -> [TerminalKey] {
+        keys.filter { key in
+            guard case .thread(let id) = key, let thread = threads[id], !unconfirmed.contains(id) else { return false }
+            return !thread.isRemote && thread.isArchived
+        }
     }
 
     /// The runner's full thread list has come back (on connecting): any
     /// thread's shell not in it belongs to a thread deleted while the app
     /// wasn't listening, so it stops. The shared home shell stays.
     func stopAll(except threadIds: some Collection<String>) {
+        for key in Self.gone(Array(sessions.keys), keeping: threadIds) { stop(key) }
+    }
+
+    /// Which of `keys` are thread shells whose thread isn't in `threadIds`.
+    static func gone(_ keys: [TerminalKey], keeping threadIds: some Collection<String>) -> [TerminalKey] {
         let keep = Set(threadIds)
-        for key in sessions.keys where key != "home" && !keep.contains(key) { stop(threadId: key) }
+        return keys.filter { key in
+            guard case .thread(let id) = key else { return false }
+            return !keep.contains(id)
+        }
     }
 
     enum PutOutcome { case typed, alreadyThere, busy }
 
     /// Threads with a command on its way, so a second click while the shell
     /// is still starting doesn't queue another.
-    @ObservationIgnored private var putting: Set<String> = []
+    @ObservationIgnored private var putting: Set<TerminalKey> = []
     @ObservationIgnored private var keyWatch: Any?
 
     /// Keys are seen here, ahead of the terminal, as SwiftTerm's keyDown
@@ -128,7 +160,7 @@ final class Terminals {
     }
 
     /// A new shell in place of one that has exited.
-    func restart(_ key: String) {
+    func restart(_ key: TerminalKey) {
         guard let old = sessions[key] else { return }
         let fresh = TerminalSession(target: old.target)
         sessions[key] = fresh
@@ -139,13 +171,52 @@ final class Terminals {
 
     /// For the automation and `dump`: what's running where.
     var debugSummary: [String] {
-        sessions.values.sorted { $0.target.key < $1.target.key }.map { "\($0.target.key) \($0.exited ? "exited" : "running") in \($0.target.cwd)" }
+        sessions.values.map { "\($0.target.key) \($0.exited ? "exited" : "running") in \($0.target.cwd)" }.sorted()
     }
 }
 
-/// The terminal view, saying when text reaches it without a key press.
+/// The terminal view, saying when text reaches it without a key press,
+/// and opening the links in it through OpenGate.
 final class PromptWatchingTerminalView: LocalProcessTerminalView {
     var onText: (() -> Void)?
+    /// The folder a link that's a relative path is read from: the shell's
+    /// starting folder.
+    var linkFolder = NSHomeDirectory()
+
+    /// A link clicked in the terminal: an OSC 8 hyperlink any program or
+    /// file can print (`cat` of a repo's README, a build's output), or a
+    /// path SwiftTerm spotted in the text. SwiftTerm's own handler gives it
+    /// straight to NSWorkspace, any scheme, so a `file:` link to a repo's
+    /// `.command` ran it in Terminal with no question (Daybreak, 10 Nov).
+    /// It goes through OpenGate like every other link: a web page opens, a
+    /// file is followed to the real one and a program asks first, and any
+    /// other scheme asks by name. Never call super here.
+    override func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        guard let url = Self.linkURL(link, folder: linkFolder) else {
+            OpenGate.refuse("Threadbear couldn't open that link: it isn't a web address or a file on this Mac.")
+            return
+        }
+        OpenGate.openLink(url, origin: .thisMac)
+    }
+
+    /// What a terminal link names: a file, if it's the path of one (read
+    /// from `folder` when relative, with a `:12:4` line and column left
+    /// off when the whole isn't a file), else a URL with a scheme. The
+    /// path comes first as `main.swift:12` parses as a URL whose scheme is
+    /// `main.swift`. Nil when it's neither. Whichever it is, OpenGate
+    /// decides what opens.
+    nonisolated static func linkURL(_ link: String, folder: String, files: FileManager = .default) -> URL? {
+        guard !link.isEmpty, link.utf8.count <= 4096 else { return nil }
+        var path = (link as NSString).expandingTildeInPath
+        if !path.hasPrefix("/") { path = (folder as NSString).appendingPathComponent(path) }
+        if files.fileExists(atPath: path) { return URL(fileURLWithPath: path) }
+        if let at = path.range(of: #":[0-9]+(?::[0-9]+)?$"#, options: .regularExpression) {
+            let bare = String(path[..<at.lowerBound])
+            if files.fileExists(atPath: bare) { return URL(fileURLWithPath: bare) }
+        }
+        if let url = URL(string: link), let scheme = url.scheme, !scheme.isEmpty { return url }
+        return nil
+    }
 
     override func paste(_ sender: Any) {
         onText?()
@@ -161,9 +232,24 @@ final class PromptWatchingTerminalView: LocalProcessTerminalView {
     }
 }
 
-/// Where a terminal runs: its key (the thread, or "home") and folder.
+/// Which shell: the one shared home-folder shell, or a thread's own. Two
+/// kinds rather than one string, so no thread id (another runner's
+/// included) can ever name the home shell (Daybreak, 10 Nov).
+enum TerminalKey: Hashable, CustomStringConvertible {
+    case home
+    case thread(String)
+
+    var description: String {
+        switch self {
+        case .home: return "home"
+        case .thread(let id): return "thread:\(id)"
+        }
+    }
+}
+
+/// Where a terminal runs: its key (the thread, or home) and folder.
 struct TerminalTarget: Equatable {
-    var key: String
+    var key: TerminalKey
     var cwd: String
     /// Said above the terminal when its folder isn't the thread's.
     var note: String?
@@ -171,22 +257,22 @@ struct TerminalTarget: Equatable {
     @MainActor
     static func `for`(_ thread: ThreadSummary?, runnerName: (ThreadSummary) -> String?) -> TerminalTarget {
         let home = NSHomeDirectory()
-        guard let thread else { return TerminalTarget(key: "home", cwd: home) }
+        guard let thread else { return TerminalTarget(key: .home, cwd: home) }
         // An archived thread's worktree may have been handed to a newer
         // thread since (archive keeps it as a spare), so its folder could be
         // someone else's checkout now. Its own shell was stopped on archive.
         if thread.isArchived {
-            return TerminalTarget(key: "home", cwd: home, note: "This thread is archived, so this terminal is in your home folder.")
+            return TerminalTarget(key: .home, cwd: home, note: "This thread is archived, so this terminal is in your home folder.")
         }
         if thread.isRemote {
             let where_ = runnerName(thread).map { "on \($0)" } ?? "on another machine"
-            return TerminalTarget(key: "home", cwd: home, note: "This thread runs \(where_), so this terminal is on this Mac, in your home folder.")
+            return TerminalTarget(key: .home, cwd: home, note: "This thread runs \(where_), so this terminal is on this Mac, in your home folder.")
         }
         var isDir: ObjCBool = false
         guard !thread.cwd.isEmpty, FileManager.default.fileExists(atPath: thread.cwd, isDirectory: &isDir), isDir.boolValue else {
-            return TerminalTarget(key: "home", cwd: home, note: "This thread's folder isn't on this Mac any more, so this terminal is in your home folder.")
+            return TerminalTarget(key: .home, cwd: home, note: "This thread's folder isn't on this Mac any more, so this terminal is in your home folder.")
         }
-        return TerminalTarget(key: thread.id, cwd: thread.cwd)
+        return TerminalTarget(key: .thread(thread.id), cwd: thread.cwd)
     }
 }
 
@@ -216,6 +302,7 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         super.init()
         view.processDelegate = self
         view.onText = { [weak self] in self?.noteText() }
+        view.linkFolder = target.cwd
         view.font = TerminalStyle.font
         TerminalStyle.apply(to: view)
         start()

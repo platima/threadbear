@@ -358,12 +358,18 @@ export const RUNNER_KEY_CAPS = {
   threadDoc: 8_192,
   recap: 1_000, // the librarian's 200 + 600, with room for multi-byte text
   threadText: 1_000, // title, preview, cwd, working line, each
+  keywords: 400, // the runner's 200 characters (keywords.ts), with room for multi-byte text
   threadsInView: 300, // per view the phone reads whole (inbox, hibernating)
   // A runner key's threads in all, every view (the M5 had 714 on 5 Nov,
   // Bruce 7): past it a new one waits (left out, sent again later).
   threads: 3_000,
   message: 10_000,
   messageDoc: 12_288,
+  // A Plan first plan (`plan`, API 72) goes whole up to the runner's 24,000
+  // characters (PLAN_CHARS), as it's read through before Go ahead: room for
+  // that many three-byte characters, and the rest of the row.
+  planMessage: 80_000,
+  planDoc: 84_000,
   // A runner key's messages' bytes in all: past it its oldest anywhere give
   // way before a new one goes in. The M5's whole history, about 83,000
   // messages, is about 21 MB.
@@ -445,8 +451,8 @@ function tooMany(what: string, max: number): ConvexError<{ kind: string; message
 }
 
 // A runner key's thread row cut to fit, or undefined: its text fields cut,
-// then the open card, follow-ups, links and projects dropped if it's still
-// too big (the phone shows the thread without them).
+// then the done card's loose ends, the open card, follow-ups, links and
+// projects dropped if it's still too big (the phone shows the thread without them).
 function fitThread<T extends Record<string, any>>(t: T): T | undefined {
   const out: Record<string, any> = { ...t };
   // Never in the future: lists are by activity, and a far-off time would
@@ -454,6 +460,8 @@ function fitThread<T extends Record<string, any>>(t: T): T | undefined {
   if (typeof out.lastActivityMs === 'number') out.lastActivityMs = Math.min(out.lastActivityMs, Date.now());
   for (const f of ['title', 'preview', 'cwd', 'working', 'asked']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], f === 'title' ? 300 : CAP.threadText);
   if (typeof out.recap === 'string') out.recap = cutBytes(out.recap, CAP.recap);
+  if (Array.isArray(out.looseEnds)) out.looseEnds = out.looseEnds.slice(0, 10).map((e: any) => ({ ...e, text: cutBytes(String(e.text ?? ''), 300) }));
+  if (typeof out.keywords === 'string') out.keywords = cutBytes(out.keywords, CAP.keywords);
   if (out.startedBy) out.startedBy = { ...out.startedBy, label: cutBytes(String(out.startedBy.label ?? ''), 100), ...(out.startedBy.why !== undefined ? { why: cutBytes(String(out.startedBy.why), 300) } : {}) };
   // The card waiting on Mike is cut, never dropped: the phone shows the
   // thread waiting, and its push goes, with shorter text.
@@ -464,7 +472,9 @@ function fitThread<T extends Record<string, any>>(t: T): T | undefined {
   if (docBytes(out) > CAP.threadDoc && Array.isArray(out.asks) && out.asks.some((a: any) => a?.optionNotes)) {
     out.asks = out.asks.map(({ optionNotes: _notes, ...a }: any) => a);
   }
-  for (const f of ['asks', 'next', 'links', 'projects']) {
+  // The done card's loose ends go first: the Mac has them, and the card
+  // still says Done without them.
+  for (const f of ['looseEnds', 'asks', 'next', 'links', 'projects']) {
     if (docBytes(out) <= CAP.threadDoc) break;
     delete out[f];
   }
@@ -491,14 +501,21 @@ function onTheMac(p: Record<string, any>): Record<string, any> {
   return { approvalId: p.approvalId, kind: 'approval', name: String(p.name ?? p.kind ?? 'question').slice(0, 60), title: p.kind === 'question' ? 'A question is waiting. Answer it on the Mac.' : 'This is waiting for you. Answer it on the Mac.', options: [] };
 }
 
+// A row with the room of a plan (CAP.planDoc): one the agent wrote, marked plan.
+function isPlanRow(m: Record<string, any>): boolean {
+  return m.plan === true && m.role === 'assistant';
+}
+
 // A runner key's message cut to fit whole (CAP.messageDoc): its text, and
 // every other field too.
 function fitMessage<T extends Record<string, any>>(m: T): T | undefined {
-  const out: Record<string, any> = { ...m, text: cutBytes(String(m.text ?? ''), CAP.message), at: cutBytes(String(m.at ?? ''), 64) };
+  // Only an agent's text can be a plan: a tool row's line never gets the room.
+  const plan = isPlanRow(m);
+  const out: Record<string, any> = { ...m, text: cutBytes(String(m.text ?? ''), plan ? CAP.planMessage : CAP.message), at: cutBytes(String(m.at ?? ''), 64) };
   for (const f of ['origin', 'toolKind', 'turn']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], 100);
   if (Array.isArray(out.wokeBy)) out.wokeBy = out.wokeBy.slice(0, 5).map((w: any) => ({ kind: cutBytes(String(w?.kind ?? ''), 40), description: cutBytes(String(w?.description ?? ''), 200) }));
   if (Array.isArray(out.buttons)) out.buttons = out.buttons.slice(0, MESSAGE_BUTTONS).map((b: any) => fitButton(b));
-  return docBytes(out) <= CAP.messageDoc ? (out as T) : undefined;
+  return docBytes(out) <= (plan ? CAP.planDoc : CAP.messageDoc) ? (out as T) : undefined;
 }
 
 // A message links at most this many buttons that the mirror keeps.
@@ -520,6 +537,7 @@ function fitIndexRow<T extends Record<string, any>>(r: T): T | undefined {
   const out: Record<string, any> = { ...r };
   for (const f of ['title', 'preview', 'cwd', 'asked']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], 300);
   if (typeof out.recap === 'string') out.recap = cutBytes(out.recap, CAP.recap);
+  if (typeof out.keywords === 'string') out.keywords = cutBytes(out.keywords, CAP.keywords);
   if (out.startedBy) out.startedBy = { ...out.startedBy, label: cutBytes(String(out.startedBy.label ?? ''), 100), ...(out.startedBy.why !== undefined ? { why: cutBytes(String(out.startedBy.why), 300) } : {}), ...(out.startedBy.threadTitle !== undefined ? { threadTitle: cutBytes(String(out.startedBy.threadTitle), 200) } : {}) };
   return docBytes(out) <= CAP.indexRow ? (out as T) : undefined;
 }
@@ -1299,6 +1317,7 @@ const messageDoc = v.object({
   origin: v.optional(v.string()),
   toolKind: v.optional(v.string()),
   summary: v.optional(v.boolean()), // API 14
+  plan: v.optional(v.boolean()), // API 72
   turn: v.optional(v.string()), // API 26
   wokeBy: v.optional(v.array(v.object({ kind: v.string(), description: v.string() }))), // API 33
   buttons: v.optional(v.array(messageButton)), // API 59
@@ -1378,7 +1397,7 @@ export const appendMessages = mutation({
         if (!caller.owner) {
           // Whole, as it would be stored, within a row's cap: its old text
           // with new buttons can be over it though each fit as sent.
-          if (storedBytes({ ...existing, ...patch, runnerId: undefined }) > CAP.messageDoc) {
+          if (storedBytes({ ...existing, ...patch, runnerId: undefined }) > (isPlanRow(existing) ? CAP.planDoc : CAP.messageDoc)) {
             skipped.push(`${m.threadId}:${m.seq}`);
             continue;
           }
@@ -1720,11 +1739,32 @@ const UPLOAD_BYTES_PER_HOUR = 200 * 1024 * 1024;
 const STORED_BYTES_PER_RUNNER = 150 * 1024 * 1024;
 const MIN_UPLOAD_CHARGE = 64 * 1024;
 
+// A move's chunk may also take up to a whole move's worth on top of what
+// the runner may keep, so a thread as big as a move can be still moves
+// from a runner with pictures stored; only while the move holds them, as
+// they go (and are given back) when it ends.
+const MOVE_ROOM_BYTES = 12 * MAX_RUNNER_UPLOAD_BYTES; // MAX_MOVE_CHUNKS (moves.ts) chunks
+
+// A move ticket is good only while its move takes chunks from its runner:
+// one left over from a move that ended (failed, cancelled, packed) stores
+// nothing.
+async function moveTakesChunks(ctx: QueryCtx | MutationCtx, row: { moveId?: string; runnerId: string }): Promise<boolean> {
+  if (!row.moveId) return true;
+  const m = await ctx.db
+    .query('threadMoves')
+    .withIndex('by_moveId', (q) => q.eq('moveId', row.moveId!))
+    .unique();
+  return !!m && m.state === 'packing' && m.from === row.runnerId;
+}
+
 // For /runner/upload, before it stores anything.
 export const uploadTicketOk = internalQuery({
   args: { ticket: v.string() },
   returns: v.boolean(),
-  handler: async (ctx, { ticket }) => (await liveTicket(ctx, ticket)) !== null,
+  handler: async (ctx, { ticket }) => {
+    const row = await liveTicket(ctx, ticket);
+    return row !== null && (await moveTakesChunks(ctx, row));
+  },
 });
 
 // The stored file is the ticket's runner's. False (the route then deletes
@@ -1743,12 +1783,23 @@ export const redeemUpload = internalMutation({
       await ctx.db.patch(row._id, { usedAt: now, bytes: MAX_RUNNER_UPLOAD_BYTES });
       return false;
     }
-    // A move's chunk (moves.ts moveChunkUrl) is the move's, not one of the
-    // runner's pictures: bounded by the move's tickets, kept with nothing
-    // counted against the runner, and deleted when the move ends.
+    // A move's chunk (moves.ts moveChunkUrl): only while its move takes
+    // chunks, charged to the runner's stored bytes like any upload (with a
+    // move's worth of room on top, MOVE_ROOM_BYTES), and named with the
+    // move, so it goes and is given back when the move ends however it ends
+    // (moves.ts dropChunks), not only if movePacked listed it (security
+    // review, 10 Nov 2026: a runner could keep 24 uploads of 10 MB from a
+    // move it then failed, uncharged and never cleaned up). Outside the
+    // hour's allowance, which the move's 24 tickets bound instead.
     if (row.moveId) {
+      bytes = Math.max(bytes, MIN_UPLOAD_CHARGE);
       await ctx.db.patch(row._id, { usedAt: now, bytes });
-      await ctx.db.insert('storageOwners', { storageId, runnerId: row.runnerId, at: now, bytes: 0, attachedAt: now });
+      if (!(await moveTakesChunks(ctx, row))) return false;
+      const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', row.runnerId)).unique();
+      if ((usage?.bytes ?? 0) + bytes > STORED_BYTES_PER_RUNNER + MOVE_ROOM_BYTES) return 'later';
+      if (usage) await ctx.db.patch(usage._id, { bytes: usage.bytes + bytes });
+      else await ctx.db.insert('runnerStorage', { runnerId: row.runnerId, bytes });
+      await ctx.db.insert('storageOwners', { storageId, runnerId: row.runnerId, at: now, bytes, attachedAt: now, moveId: row.moveId });
       return true;
     }
     // Each file counts as at least MIN_UPLOAD_CHARGE, so how many a runner key
@@ -3062,6 +3113,7 @@ const indexDoc = v.object({
   startedBy: v.optional(v.object({ kind: v.string(), label: v.string(), icon: v.optional(v.string()), threadTitle: v.optional(v.string()), why: v.optional(v.string()) })),
   asked: v.optional(v.string()), // since API 32
   recap: v.optional(v.string()), // since API 70
+  keywords: v.optional(v.string()), // since API 74
 });
 
 // Rows made or changed, and threads gone. With `keep`, every row of the
