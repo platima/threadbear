@@ -9,10 +9,16 @@
 //   node scripts/setup-sync.mjs [--dry-run] [--yes] [--team SLUG] [--project NAME]
 //                               [--region REGION] [--name NAME] [--home DIR]
 //                               [--no-restart]
+//   node scripts/setup-sync.mjs --join [--url URL] [--key-file FILE] [--id RUNNERID]
+//                               [--name NAME] [--delete-key-file] [--dry-run] [--yes]
+//                               [--home DIR] [--no-restart]
 //
 // Run it from a clone of the repository (git clone, not Download ZIP): the
 // backend is deployed from the clone's commit. Convex cloud only. A self-hosted
 // backend (docs/self-hosting.md) stays Mac-only.
+//
+// --join is for a second computer, which uses the backend the first one made
+// instead of making one (see "Joining" below).
 //
 //   1. this computer: Node 24 or newer, git, npm and tar, the repository, and the
 //      runner's data folder (%APPDATA%\Threadbear on Windows, and
@@ -37,6 +43,36 @@
 // it deploys sends phone notifications through the push relay, which is Mike's
 // unless PUSH_RELAY is off: docs/pairing.md, "Privacy".)
 //
+// Joining (--join): a second computer, a work PC say, whose threads should show up
+// beside the first one's. It is not given the backend's keys. The first computer
+// makes it a runner key (tb runner add --out FILE --id RUNNERID), which acts as that
+// one runner and can do nothing else on the backend. This computer ends up with
+// that key, a runner.json that names the backend, and no Convex login, deploy key,
+// project, packages, git or clone. It needs only this script, the files it imports
+// and Node 24 or newer, so a Download ZIP or the app's own node.exe will do. Two
+// runs of the same command:
+//
+//   part one  no key file yet. Records sync.url, sync.runnerId (a new id if the
+//             runner hasn't made one) and sync.name in runner.json, and prints the
+//             tb runner add command to run on the first computer, in a terminal of
+//             your own, with this computer's id in it. Nothing else is changed.
+//   part two  with --key-file FILE, the file that command wrote. The backend is asked
+//             whether the key is live and is this runner's (a read), and only then is
+//             the key put in secrets/convex-key, runner.json brought up to date, and
+//             the runner restarted. --delete-key-file removes FILE after the key reads
+//             back from secrets/convex-key.
+//
+// Steps 2, 3 and 7 are skipped, and step 4 is the backend's address (--url, or
+// sync.url in runner.json) and a look that it answers. A computer is refused, with
+// nothing changed and no way round it, if it has any of the five things tb runner
+// check looks for beside a runner key (a deploy key, a self-hosted admin key, a team
+// token, a Convex panel key, a Convex CLI login), or if secrets/convex-key already
+// holds a key that is not a runner key (the main key is never replaced). The key
+// file is read as bytes (a byte order mark and Windows PowerShell's UTF-16 are
+// understood), must be a regular file of at most 1 KiB outside this clone, and its
+// text is never printed. scripts/runner-key-plan.mjs (joinKeyPlan) decides what
+// happens to the key.
+//
 // Node built-ins and the runner's own sources only, so it runs before the repo's
 // packages are installed. Those sources are TypeScript, which only Node 24 and
 // newer (and some 22) load, so they are loaded after the Node version has been
@@ -50,7 +86,7 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isJoining, runnerKeyPlan } from './runner-key-plan.mjs';
+import { isJoining, joinKeyPlan, runnerKeyPlan } from './runner-key-plan.mjs';
 
 export const MIN_NODE = 24;
 
@@ -79,10 +115,11 @@ function ranAsScript() {
 }
 
 // The runner's own modules, which the steps below use. Left unset on a Node too old to load them.
-let ConvexAdminError, convexEnv, readConvexAdmin, siteOf;
+let ConvexAdminError, convexEnv, readConvexAdmin, siteOf, SELF_HOSTED_ENV_FILE, DEPLOY_ENV_FILE;
 let readRunnerJson, RunnerJsonError, writeRunnerJson;
 let dataDirFor, dataDirWarning;
 let nodeBin, npmCommand, pathWith, tarProgram;
+let atomicWriteFileSync;
 const tooOld = oldNodeMessage();
 if (tooOld) {
   // Nothing more can be loaded. As a program it says so and stops; imported by something else it throws.
@@ -90,14 +127,18 @@ if (tooOld) {
   console.error(`\nFailed: ${tooOld}`);
   process.exitCode = 1;
 } else {
-  ({ ConvexAdminError, convexEnv, readConvexAdmin, siteOf } = await import('../runner/src/convex-admin.ts'));
+  ({ ConvexAdminError, convexEnv, readConvexAdmin, siteOf, SELF_HOSTED_ENV_FILE, DEPLOY_ENV_FILE } = await import('../runner/src/convex-admin.ts'));
   ({ readRunnerJson, RunnerJsonError, writeRunnerJson } = await import('../runner/src/config.ts'));
   ({ dataDirFor, dataDirWarning } = await import('../runner/src/platform.ts'));
   ({ nodeBin, npmCommand, pathWith, tarProgram } = await import('../runner/src/node-tools.ts'));
+  ({ atomicWriteFileSync } = await import('../runner/src/fsutil.ts'));
 }
 
 export const USAGE = `node scripts/setup-sync.mjs [--dry-run] [--yes] [--team SLUG] [--project NAME]
                             [--region REGION] [--name NAME] [--home DIR] [--no-restart]
+node scripts/setup-sync.mjs --join [--url URL] [--key-file FILE] [--id RUNNERID]
+                            [--name NAME] [--delete-key-file] [--dry-run] [--yes]
+                            [--home DIR] [--no-restart]
 
 Sets up the Convex sync backend for a Windows or Linux copy of Threadbear so a
 phone or a browser can be paired (docs/pairing.md). Safe to run again: it only
@@ -113,6 +154,31 @@ does what is missing.
                  The installed runner is restarted only when this is the folder it uses
   --no-restart   don't restart the runner; say how to do it. (It is never restarted
                  from inside a Threadbear thread, as that would end the thread's turn)
+
+A second computer joins the backend the first one made, with --join. It is given
+a runner key of its own and nothing else: no Convex login, deploy key, project,
+packages or git, and no clone is needed (only Node 24 or newer). Run it twice:
+
+  1. node scripts/setup-sync.mjs --join --url ADDRESS
+     records the address and this computer's runner id, and prints the command to
+     run on the first computer (tb runner add NAME --out FILE --id RUNNERID).
+  2. node scripts/setup-sync.mjs --join --url ADDRESS --key-file FILE
+     checks the key with the backend, installs it, and restarts the runner.
+
+A computer with a deploy key, a Convex login or any other admin credential for
+the backend is refused (tb runner check lists them), as is one whose
+secrets/convex-key holds the main key. Nothing is changed in either case.
+
+  --join             join the backend another computer set up (the options below
+                     go with it; --team, --project and --region don't)
+  --url URL          the first computer's sync.url, like https://calm-fox-123.convex.cloud
+                     (not needed when runner.json already has it)
+  --key-file FILE    the file tb runner add --out wrote on the first computer. Keep it
+                     off the repository folder, OneDrive and shared folders
+  --id RUNNERID      the runner id the key was made for. Only when runner.json has no
+                     sync.runnerId yet, or the same one. Part one makes an id if there is none
+  --delete-key-file  delete FILE once the key in secrets/convex-key reads back the same
+                     (a USB stick's deletion is not a secure erase)
 `;
 
 // The nearest Convex region to this computer's time zone, so the phone and the
@@ -172,6 +238,122 @@ const quote = (p) => (/[\s"]/.test(p) ? `"${p}"` : p);
 // The last few lines a command said, for a failure message.
 function tail(r, lines = 3) {
   return redact(r.stderr || r.stdout || r.error?.message || '').trim().split(/\r?\n/).filter(Boolean).slice(-lines).join(' ');
+}
+
+// ---------------------------------------------------------------- --join
+
+// Anything the backend or the network said, or a person typed, as it is put in a message: no control
+// characters or escape sequences (which could rewrite the terminal), no zero-width or direction marks, one
+// line, cut short. As runner/src/runner-keys.ts `clean`.
+// The characters it takes out, as ranges of code points: the C0 and C1 controls, zero-width and direction
+// marks, line and paragraph separators, and the byte order mark.
+const UNSEEN = new RegExp(`[${[[0x00, 0x1f], [0x7f, 0x9f], [0x200b, 0x200f], [0x2028, 0x202e], [0x2060, 0x2069], [0xfeff, 0xfeff]].map(([a, b]) => `${String.fromCodePoint(a)}-${String.fromCodePoint(b)}`).join('')}]`, 'g');
+export function oneLine(text, max = 160) {
+  const one = String(text ?? '')
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\u001b[@-_]/g, '')
+    .replace(UNSEEN, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+}
+
+// A runner id as convex/runnerAccess.ts RUNNER_ID has it (a unit test keeps them the same), and not "any",
+// which is the phone's "whichever runner".
+export const RUNNER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const validRunnerId = (id) => RUNNER_ID.test(id) && id !== 'any';
+
+// The options that don't go together, said before anything is looked at. Undefined when they do.
+export function joinUsageProblem(v) {
+  if (v.join) {
+    for (const flag of ['team', 'project', 'region']) {
+      if (v[flag] !== undefined) return `--${flag} doesn't go with --join: a joining computer makes no project and no deployment. Leave out --team, --project and --region.`;
+    }
+    if (v['delete-key-file'] && v['key-file'] === undefined) return '--delete-key-file needs --key-file.';
+    return undefined;
+  }
+  const why = {
+    url: 'it is the address of the backend the first computer made',
+    'key-file': 'it is the file that tb runner add --out wrote on the first computer',
+    id: 'it is the runner id the first computer made the key for',
+    'delete-key-file': 'it deletes the key file once the key is in place',
+  };
+  for (const [flag, reason] of Object.entries(why)) {
+    if (v[flag] !== undefined && v[flag] !== false) return `--${flag} goes with --join: ${reason}. Add --join, or leave --${flag} out.`;
+  }
+  return undefined;
+}
+
+// The text of a key file, from its bytes: a UTF-8 byte order mark is dropped, UTF-16 LE with one (which is what
+// Windows PowerShell 5.1 writes for > and Out-File) is decoded, and blanks around it go.
+export function parseKeyText(bytes) {
+  let b = Buffer.from(bytes);
+  if (b.length >= 2 && b[0] === 0xff && b[1] === 0xfe) return b.subarray(2).toString('utf16le').trim();
+  if (b.length >= 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) b = b.subarray(3);
+  return b.toString('utf8').trim();
+}
+
+// The five things `tb runner check` looks for beside a runner key (runner/src/runner-keys.ts: localAdmin,
+// hasAdmin and adminAdvice), as this computer has them. Any of them can do anything to the backend, so a computer
+// that has one is not given a runner key to join with. This is a copy of that code, because runner-keys.ts needs
+// the runner's packages and this runs before they are installed; runner-keys.test.ts runs both over the same
+// folders and fails if they ever say different things.
+const PANEL_KEY = /^threadbear-panel-[a-z0-9-]{1,40}-[0-9a-f]{6}$/;
+const DEPLOYMENT = /^[a-z0-9-]{1,64}$/;
+
+export function localAdmin(home, userHome) {
+  const dir = path.join(home, 'secrets', 'convex-panels');
+  let panels = [];
+  try {
+    panels = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => {
+        try {
+          const name = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')).name;
+          return typeof name === 'string' ? name : '(no name)';
+        } catch {
+          return '(unreadable)';
+        }
+      });
+  } catch {
+    // no panel keys
+  }
+  return {
+    deployEnv: fs.existsSync(path.join(home, 'secrets', DEPLOY_ENV_FILE)),
+    cliLogin: fs.existsSync(path.join(userHome, '.convex', 'config.json')),
+    teamToken: fs.existsSync(path.join(home, 'secrets', 'convex-team-token')),
+    selfHostedEnv: fs.existsSync(path.join(home, 'secrets', SELF_HOSTED_ENV_FILE)),
+    panels,
+  };
+}
+
+export const hasAdmin = (a) => a.deployEnv || a.cliLogin || a.panels.length > 0 || Boolean(a.teamToken) || Boolean(a.selfHostedEnv);
+
+function deploymentOf(url) {
+  try {
+    const d = new URL(url).hostname.split('.')[0] ?? '';
+    return DEPLOYMENT.test(d) ? d : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// What to do about them, as tb runner check says it. `words` changes only who is meant: by default this is
+// that command's own text for a Mac, and a joining computer says "computer" and "the first computer".
+export function adminAdvice(a, where, url, { rotateAt = 'here', mac = 'Mac', owner = 'the main Mac' } = {}) {
+  const deployment = deploymentOf(url);
+  const good = a.panels.filter((n) => PANEL_KEY.test(n));
+  const odd = a.panels.length - good.length;
+  const have = [a.deployEnv && `setup's deploy key (secrets/convex-deploy.env, named threadbear-runner-<that ${mac}'s name>)`, ...good.map((n) => `the Convex panel's deploy key ${n}`), odd && `${odd} panel key file${odd === 1 ? '' : 's'} with an unrecognised name (secrets/convex-panels/)`, a.cliLogin && 'a Convex CLI login (~/.convex/config.json)', a.teamToken && 'a Convex team access token (secrets/convex-team-token, which reaches every project on the team)', a.selfHostedEnv && `the self-hosted backend's admin key (secrets/${SELF_HOSTED_ENV_FILE})`].filter(Boolean);
+  const settings = deployment ? `https://dashboard.convex.dev/d/${deployment}/settings` : "the deployment's settings in the Convex dashboard";
+  const commands = deployment && good.length ? `, or from this ${mac}: ${good.map((n) => `npx convex deployment token delete ${n} --deployment ${deployment}`).join('; ')}` : '';
+  return [
+    `${where} also has ${have.join(', ')}. Any of them can do anything to the deployment, so its runner key keeps nothing out, and deleting the files doesn't stop a copy someone already took. In this order:`,
+    `  1. Revoke them on Convex's side: the deploy keys in ${settings} (Deploy keys)${commands}.${odd ? ' Look there for any you don\'t recognise too.' : ''}${a.cliLogin ? ` The CLI login: in the Convex dashboard's account settings, revoke that ${mac}'s access token (named after its hostname).` : ''}${a.teamToken ? " The team token: in the Convex dashboard's team settings (Access tokens)." : ''}${a.selfHostedEnv ? " A self-hosted admin key can't be revoked on its own: every one comes from the backend's instance secret, so changing that is the only way (docs/self-hosting.md, \"Keys\")." : ''}`,
+    `  2. Then remove them there: the files above${a.cliLogin ? ', and npx convex logout' : ''}.`,
+    `  3. Then rotate the main key, which they could read: tb runner rotate-owner ${rotateAt}. Only ${owner} needs any of these.`,
+  ].join('\n');
 }
 
 // ---------------------------------------------------------------- the real machine
@@ -234,7 +416,11 @@ class Setup {
     this.changed = { runnerJson: false, runnerKey: false };
     this.teams = undefined;
     this.restarted = false;
-    const given = v.home ?? d.env.THREADBEAR_HOME ?? d.env.THREADBEAR_DATA_DIR ?? d.env.THREADBARE_HOME;
+    // --join: what step 1 worked out for the steps after it (see checkJoin), and whether this computer is
+    // still waiting for its key (part one), so there is nothing to restart yet.
+    this.jn = undefined;
+    this.waiting = false;
+    const given =v.home ?? d.env.THREADBEAR_HOME ?? d.env.THREADBEAR_DATA_DIR ?? d.env.THREADBARE_HOME;
     this.home = given ? path.resolve(expand(given, d.homedir)) : dataDirFor({ platform: d.platform, env: d.env, home: d.homedir });
     this.secrets = path.join(this.home, 'secrets');
     this.runnerJsonPath = path.join(this.home, 'runner.json');
@@ -362,7 +548,11 @@ class Setup {
   checkPlatform() {
     const { d } = this;
     if (d.platform === 'darwin') {
-      throw new Fail('This script is for Windows and Linux. On a Mac, run ./threadbear setup instead: it does this and builds the runner and the Mac app (docs/setup-and-updates.md, section 2.2).');
+      throw new Fail(
+        this.v.join
+          ? 'This script is for Windows and Linux. On a Mac, run ./threadbear setup --existing instead: it joins the backend another Mac set up (docs/setup-and-updates.md, section 2.2).'
+          : 'This script is for Windows and Linux. On a Mac, run ./threadbear setup instead: it does this and builds the runner and the Mac app (docs/setup-and-updates.md, section 2.2).',
+      );
     }
     if (d.platform !== 'win32' && d.platform !== 'linux') throw new Fail(`Threadbear runs on Windows, Linux and macOS, and this is ${d.platform}.`);
     this.ok(`${d.platform === 'win32' ? 'Windows' : 'Linux'} ${d.arch}`);
@@ -420,7 +610,7 @@ class Setup {
       throw new Fail(`This computer has a self-hosted Convex backend (${admin.file}). This script sets up Convex cloud only; a self-hosted backend is Mac-only for now (docs/self-hosting.md), so nothing was changed.`);
     }
     if (isJoining({ existing: false, local: this.localKey() })) {
-      throw new Fail(`${this.runnerKeyFile} is a key of this runner's own, given by another computer's Threadbear (tb runner add). That computer owns the backend, and has its own phone pairing; this computer has joined that backend and has nothing to set up.`);
+      throw new Fail(`${this.runnerKeyFile} is a key of this runner's own, given by another computer's Threadbear (tb runner add). That computer owns the backend, and has its own phone pairing; this computer has joined that backend and has nothing to set up. To check the key or give it a new one, run this with --join.`);
     }
     const json = this.readRunner();
     if (json.sync?.enabled === false) {
@@ -429,10 +619,15 @@ class Setup {
     if (v.team &&!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(v.team)) throw new Fail(`--team wants a team slug like my-team, not ${JSON.stringify(v.team)}.`);
     if (v.region && !/^[a-z0-9-]+$/.test(v.region)) throw new Fail(`--region wants a Convex region like aws-ap-southeast-2, not ${JSON.stringify(v.region)}.`);
     if (v.project !== undefined && !/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/.test(v.project)) throw new Fail(`--project wants a name of letters, numbers, spaces, dots, dashes and underscores, not ${JSON.stringify(v.project)}.`);
-    if (v.name !== undefined && (!v.name.trim() || v.name.length > 64 || /[\u0000-\u001f]/.test(v.name))) throw new Fail('--name wants a short name for this computer, such as Desk PC.');
+    this.checkName();
     // An address with no way to deploy to it here: a backend somebody else made. Said now, not at
     // step 4 after the list has promised packages and a Convex login that would come to nothing.
     if (json.sync?.url && admin.kind !== 'cloud' && !this.envLocal()) throw new Fail(this.noDeployKeyHere(json.sync.url));
+  }
+
+  checkName() {
+    const { v } = this;
+    if (v.name !== undefined && (!v.name.trim() || v.name.length > 64 || /[\u0000-\u001f]/.test(v.name))) throw new Fail('--name wants a short name for this computer, such as Desk PC.');
   }
 
   // ---- 2. packages
@@ -514,7 +709,7 @@ class Setup {
   }
 
   noDeployKeyHere(have) {
-    return `runner.json already mirrors to ${have}, so this won't make a second backend, but there is no deploy key for it here and this clone isn't linked to its project. Either remove the "url" line under "sync" in ${this.runnerJsonPath} to start a new backend, or link this clone to the project that owns it (npx convex dev --once --configure existing) and run this again.`;
+    return `runner.json already mirrors to ${have}, so this won't make a second backend, but there is no deploy key for it here and this clone isn't linked to its project. Either remove the "url" line under "sync" in ${this.runnerJsonPath} to start a new backend, or link this clone to the project that owns it (npx convex dev --once --configure existing) and run this again. If this is a second computer joining a backend the first one made, run it with --join.`;
   }
 
   async project() {
@@ -734,6 +929,9 @@ class Setup {
   async restart() {
     const { d, v } = this;
     this.say('8. Restart the runner');
+    // Part one of a join: runner.json names the backend but the key hasn't come yet, so a restart now would only
+    // start a runner that can't sync. Part two restarts it.
+    if (this.waiting) return this.ok('not needed yet: the runner has no key to use until it is in');
     if (!this.changed.runnerJson && !this.changed.runnerKey) {
       this.ok('nothing the runner reads was changed in this run');
       return this.note(`If Settings > Phone & browser still says the sync backend is off, the runner started before those settings were written: restart it (${path.basename(this.installerScript())} --stop and then --start, or the Runners page).`);
@@ -792,7 +990,350 @@ class Setup {
     if (d.platform === 'win32') this.note("Your deploy key and runner key are in the data folder's secrets folder. Don't copy them anywhere or paste them into a thread.");
   }
 
+  // ---- --join: a computer that is not the first one. The steps keep their numbers, so what is said lines up
+  // with the first computer's run and with docs/pairing.md.
+
+  // Where a key file would go, for the command to run on the first computer: a USB stick is the usual way over.
+  sampleKeyPath() {
+    return this.d.platform === 'win32' ? `E:\\${keyHost(this.d.hostname)}.key` : `/media/usb/${keyHost(this.d.hostname)}.key`;
+  }
+
+  // What to run on the first computer to make this one's key. The name goes in double quotes, which every
+  // shell understands, so it keeps to letters, digits, spaces and a few marks.
+  ownerCommand(name, id, out = this.sampleKeyPath()) {
+    const label = String(name).replace(/[^\p{L}\p{N} ._()-]/gu, '-').trim() || 'this-computer';
+    return `tb runner add "${label}" --out ${quote(out)} --id ${id}`;
+  }
+
+  // A Convex cloud address, as the origin the runner can use (lower case, no slash), or a refusal that says
+  // what is wanted. `what` names where it came from. The address is never echoed with a name or password in it.
+  convexAddress(raw, what) {
+    let u;
+    try {
+      u = new URL(String(raw).trim());
+    } catch {
+      // not an address at all
+    }
+    const fine = u && u.protocol === 'https:' && !u.username && !u.password && !u.port && (u.pathname === '/' || u.pathname === '') && !u.search && !u.hash && /^[a-z0-9-]+(?:\.[a-z0-9-]+)?\.convex\.cloud$/.test(u.hostname);
+    if (fine) return u.origin;
+    const shown = oneLine(String(raw).replace(/\/\/[^/@\s]*@/, '//'), 120);
+    throw new Fail(`${what} wants a Convex cloud address like https://calm-fox-123.convex.cloud or https://calm-fox-123.ap-southeast-2.convex.cloud, with nothing after the name, not "${shown}". A self-hosted backend can't be joined from here yet (docs/self-hosting.md). Nothing has been changed.`);
+  }
+
+  // The words for a key file that can't be used. `hint` says how the first computer makes one.
+  keyRefusal(why, file, hint) {
+    if (why === 'local') {
+      return `${this.runnerKeyFile} holds the main key, not a runner key. That is the key of the computer that owns the backend, or a copy someone made. Joining would replace it, so this refuses. If this is the first computer, you don't want --join here. If it is a second computer that was given a copy, move the file somewhere safe, run this again, then rotate the main key on the first computer (tb runner rotate-owner) so the copy stops working. Nothing has been changed.`;
+    }
+    if (why === 'file-empty') return `${file} is empty. ${hint} Nothing has been changed.`;
+    if (why === 'file-main') return `${file} holds the main key, not a runner key. Don't copy the main key to another computer: delete that copy, and make a runner key for this one on the first computer with tb runner add. Nothing has been changed.`;
+    if (why === 'file-deploy') return `${file} holds a Convex deploy key, not a runner key. A deploy key can do anything to the backend, so it doesn't belong on this computer: delete that copy, and make a runner key for this one on the first computer with tb runner add. Nothing has been changed.`;
+    return `${file} doesn't hold a runner key (tbr_ and then 64 digits and letters a to f). Nothing has been changed.`;
+  }
+
+  // The key file's text, or undefined when it isn't there but a runner key already is (the same command line
+  // works again after --delete-key-file). Anything else wrong with it is a refusal that says nothing about its contents.
+  readKeyFile(file, local, hint) {
+    const rel = path.relative(this.d.repo, file);
+    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+      throw new Fail(`${file} is inside the repository clone, where git could pick it up. Move it somewhere outside the clone and run this again. Nothing has been changed.`);
+    }
+    const unreadable = (what) => new Fail(`Couldn't read the key file ${file} (${what}). ${hint} Nothing has been changed.`);
+    let stat;
+    try {
+      stat = fs.statSync(file);
+    } catch (e) {
+      if (e.code === 'ENOENT' && local) {
+        this.note(`Couldn't find the key file ${file}; using the key already in ${this.runnerKeyFile}`);
+        return undefined;
+      }
+      throw unreadable(e.code ?? 'error');
+    }
+    if (!stat.isFile()) throw unreadable('it is not a file');
+    if (stat.size > 1024) throw new Fail(`${file} is bigger than a key file ever is (over 1 KiB). ${hint} Nothing has been changed.`);
+    try {
+      return parseKeyText(fs.readFileSync(file));
+    } catch (e) {
+      throw unreadable(e.code ?? 'error');
+    }
+  }
+
+  // Step 1 for a computer that joins, once the platform and the data folder are done: everything that can be
+  // refused from what is on this computer. So a refusal has asked nothing of the network and changed nothing.
+  checkJoin() {
+    const { d, v } = this;
+
+    // Admin power over the backend, which a runner key can't keep out: any of the five that tb runner check finds.
+    const admin = localAdmin(this.home, d.homedir);
+    if (hasAdmin(admin)) {
+      let guess = v.url ?? '';
+      try {
+        guess ||= readRunnerJson(this.home).sync?.url ?? '';
+      } catch {
+        // a runner.json that can't be read is said below, if it gets that far
+      }
+      throw new Fail(`Joining needs a computer with no admin power over the backend. ${adminAdvice(admin, 'This computer', String(guess), { rotateAt: 'on the first computer', mac: 'computer', owner: 'the first computer' })} Nothing has been changed.`);
+    }
+
+    // The key that is here. Anything but a runner key is the main key or a copy of it, and is never replaced.
+    let local = '';
+    try {
+      local = fs.readFileSync(this.runnerKeyFile, 'utf8').trim();
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw new Fail(`Couldn't read ${this.runnerKeyFile} (${e.code ?? 'error'}), so this can't tell whether it holds a runner key. Nothing has been changed.`);
+    }
+    if (joinKeyPlan({ local }).action === 'refuse') throw new Fail(this.keyRefusal('local'));
+
+    const json = this.readRunner();
+    if (json.sync?.enabled === false) {
+      throw new Fail(`${this.runnerJsonPath} has "sync": { "enabled": false }, so the runner won't use a backend whatever this sets up. Remove that line (or set it to true) and run this again. Nothing has been changed.`);
+    }
+    this.checkName();
+    const name = v.name ?? json.sync?.name ?? shortHost(d.hostname);
+
+    // The backend's address: --url, or the one runner.json has. Two that differ are a refusal: what this computer
+    // has already sent stays where it went.
+    const given = v.url !== undefined ? this.convexAddress(v.url, '--url') : undefined;
+    const saved = typeof json.sync?.url === 'string' && json.sync.url.trim() ? this.convexAddress(json.sync.url, `The sync.url in ${this.runnerJsonPath}`) : undefined;
+    if (given && saved && given !== saved) {
+      throw new Fail(`${this.runnerJsonPath} already mirrors to ${saved}, not ${given}. What this computer has already sent stays in ${saved}. If you do mean to move to ${given}, take the "url" line out of the "sync" part of that file and run this again. Nothing has been changed.`);
+    }
+    const url = given ?? saved;
+    if (!url) {
+      throw new Fail('A joining computer needs the address of the backend the first computer made. Run this again with --url https://<name>.convex.cloud. The address is sync.url in runner.json on the first computer (on Windows: %APPDATA%\\Threadbear\\runner.json, on a Mac or Linux: ~/Library/Application Support/Threadbear/runner.json), and it is on the deployment\'s page in the Convex dashboard. Nothing has been changed.');
+    }
+
+    // This computer's runner id: the one runner.json has (the runner makes one when it first starts), which is
+    // never changed, or --id when it has none, or (in part one only) a new one made when this runs for real.
+    const had = json.sync?.runnerId;
+    if (had !== undefined && had !== null && had !== '' && (typeof had !== 'string' || !validRunnerId(had))) {
+      throw new Fail(`The sync.runnerId in ${this.runnerJsonPath} (${oneLine(JSON.stringify(had), 80)}) isn't a runner id (1 to 64 letters, digits, - or _, and not "any"). Nothing has been changed.`);
+    }
+    let id = had || undefined;
+    if (v.id !== undefined) {
+      if (!validRunnerId(v.id)) throw new Fail(`--id wants a runner id (1 to 64 letters, digits, - or _, and not "any"), not ${JSON.stringify(oneLine(v.id, 80))}.`);
+      if (id && v.id !== id) {
+        throw new Fail(`--id ${v.id} isn't this computer's runner id: ${this.runnerJsonPath} says it is ${id}, and a runner keeps its id. Make the key for ${id} on the first computer: ${this.ownerCommand(name, id)}. Nothing has been changed.`);
+      }
+      id = v.id;
+    }
+
+    if (d.env.THREADBEAR_SYNC_URL?.trim()) this.warn('THREADBEAR_SYNC_URL is set in this environment, and a runner started with it mirrors to that address instead of the one in runner.json. Unset it unless you mean it.');
+
+    // The key file, if one was named.
+    let file;
+    let fileText;
+    if (v['key-file'] !== undefined) {
+      file = path.resolve(expand(v['key-file'], d.homedir));
+      fileText = this.readKeyFile(file, local, `On the first computer, ${this.ownerCommand(name, id ?? '<runner id>', file)} writes it.`);
+      if (/(^|[\\/])(?:OneDrive|Dropbox|Google Drive)[^\\/]*(?:[\\/]|$)/i.test(file)) {
+        this.warn(`The key file ${file} is in a folder that looks synced or backed up (OneDrive, Dropbox or Google Drive), so a copy of the key may already be somewhere else.`);
+      }
+    }
+    const plan = joinKeyPlan({ local, file: fileText });
+    if (plan.action === 'refuse') throw new Fail(this.keyRefusal(plan.why, file, `On the first computer, ${this.ownerCommand(name, id ?? '<runner id>', file)} writes it.`));
+    // A key doesn't say whose it is, so checking it needs the id it was made for.
+    if (plan.action !== 'need' && !id) {
+      throw new Fail("This computer has no runner id yet (no sync.runnerId in runner.json), and a runner key doesn't say which runner it is for, so it can't be checked. Run this again with --id and the id the key was made for (tb runner list on the first computer shows it). Nothing has been changed.");
+    }
+    this.jn = { url, id, hadId: Boolean(had), name, local, file, fileText, plan, fileKept: false };
+  }
+
+  // ---- 4. the backend's address, for a computer that joins
+  async joinAddress() {
+    this.say('4. Backend address');
+    const { url } = this.jn;
+    let res;
+    try {
+      res = await this.d.fetch(`${url}/version`, { signal: AbortSignal.timeout(10_000), redirect: 'error' });
+    } catch (e) {
+      throw new Fail(this.unreachable(url, e));
+    }
+    if (!res.ok) throw new Fail(`${url} answered, but it doesn't look like a Convex deployment (HTTP ${res.status}). Check the address against the first computer's runner.json. Nothing has been changed.`);
+    this.ok(`${url} answers`);
+  }
+
+  // The words for a request that got no answer. A certificate error here is most often a work network that checks
+  // HTTPS traffic with a certificate of its own: Node keeps its own list of authorities and ignores the one the
+  // system has unless it is asked to use it.
+  unreachable(url, e) {
+    const said = oneLine(redact([e?.message, e?.cause?.message, e?.cause?.code].filter(Boolean).join(' ')), 200);
+    let text = `Couldn't reach ${url} (${said || 'no answer'}). Check your internet connection (and any proxy or VPN), then run this again. Nothing has been changed.`;
+    if (/^(?:UNABLE_TO_|SELF_SIGNED_CERT|DEPTH_ZERO_SELF_SIGNED|CERT_|ERR_TLS_CERT)/.test(String(e?.cause?.code ?? e?.code ?? ''))) {
+      const win = this.d.platform === 'win32';
+      text += ` This network may be checking HTTPS traffic (a work proxy). Node doesn't use the ${win ? 'Windows' : "system's"} certificate store unless asked: set NODE_USE_SYSTEM_CA=1 in this terminal (Node 24.6 or newer) and run this again.`;
+      if (win) text += ' In PowerShell that is $env:NODE_USE_SYSTEM_CA = "1"; in Command Prompt, set NODE_USE_SYSTEM_CA=1.';
+    }
+    return text;
+  }
+
+  // Asks the backend whether `key` is live and is runner `id`'s: sync:messageHeads, which returns only thread ids
+  // and sequence numbers, and fails with kind "auth" for a key it doesn't know or has revoked and "forbidden" for
+  // another runner's. A read, so a dry run does it too. Throws a refusal, or returns.
+  async verifyKey(url, id, key) {
+    const { name, file } = this.jn;
+    const command = this.ownerCommand(name, id, file ?? undefined);
+    let res;
+    try {
+      res = await this.d.fetch(`${url}/api/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: 'sync:messageHeads', args: { key, runnerId: id }, format: 'json' }),
+        redirect: 'error',
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (e) {
+      throw new Fail(this.unreachable(url, e));
+    }
+    const body = await res.json().catch(() => undefined);
+    if (body?.status === 'success') return;
+    const said = oneLine(redact(body?.errorData?.message ?? body?.errorMessage ?? ''), 160);
+    const kind = body?.errorData?.kind;
+    if (kind === 'auth') {
+      throw new Fail(`The backend turned the key down (bad runner key). It was replaced or revoked, or this address isn't the backend that made it. On the first computer, make a new one: ${command} --replace. Nothing has been changed.`);
+    }
+    if (kind === 'forbidden') {
+      const told = said ? `${said}${/[.!?]$/.test(said) ? '' : '.'}` : 'it gave no reason.';
+      const remedy = this.jn.hadId ? `On the first computer, make a key for ${id}: ${command}` : `Use the id the key was made for with --id, or make a key for ${id} on the first computer: ${command}`;
+      throw new Fail(`That key is for a different runner than ${id}. The backend said: ${told} ${remedy}. Nothing has been changed.`);
+    }
+    // A backend from before runner keys has no such function: the key can't be checked, and the runner will say if
+    // it is turned down.
+    if (/could not find (public )?function/i.test(String(body?.errorMessage ?? ''))) {
+      this.note("the backend is older than this script expects, so the key couldn't be checked. The runner will say if it turns the key down.");
+      return;
+    }
+    if (!body || typeof body !== 'object' || typeof body.status !== 'string') {
+      throw new Fail(`${url} answered the key check with something that isn't a Convex reply (HTTP ${res.status}). Check the address against the first computer's runner.json. Nothing has been changed.`);
+    }
+    throw new Fail(`The backend couldn't check the key (HTTP ${res.status}${said ? `: ${said}` : ''}). Run this again in a minute. Nothing has been changed.`);
+  }
+
+  // The key, in a temporary file and then renamed, so the runner never reads half of it. Owner only where the
+  // system has modes (a file in a Windows profile already belongs to its user).
+  writeSecretAtomic(file, text) {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    atomicWriteFileSync(file, text, 0o600);
+    if (this.d.platform !== 'win32') fs.chmodSync(file, 0o600);
+  }
+
+  // ---- 5. the runner key, for a computer that joins
+  async joinKey() {
+    const { v } = this;
+    this.say('5. Runner key');
+    const { plan, url, id, local, file, fileText } = this.jn;
+    if (plan.action === 'need') {
+      this.waiting = true;
+      return this.note("no runner key yet: this computer's comes from the first computer (step 9 says how).");
+    }
+    const key = plan.action === 'keep' ? local : fileText;
+    // Before anything is written, whether it is kept, installed or replaces another.
+    await this.verifyKey(url, id, key);
+    if (plan.action === 'keep') this.ok(`the key already in ${this.runnerKeyFile} is accepted by the backend`);
+    else this.ok('the backend accepts the key');
+    if (plan.action === 'install' || plan.action === 'replace') {
+      this.changed.runnerKey = true;
+      if (this.dry) {
+        this.todo(plan.action === 'install' ? `write the runner key from ${file} to ${this.runnerKeyFile} (owner only)` : `replace the runner key in ${this.runnerKeyFile} with the one in ${file}: the first computer made it to replace the old one, which no longer works`);
+      } else {
+        this.writeSecretAtomic(this.runnerKeyFile, `${key}\n`);
+        if (this.localKey() !== key) throw new Fail(`Wrote ${this.runnerKeyFile}, but it doesn't read back as the key. Check that nothing else is writing in that folder, then run this again.`);
+        this.ok(plan.action === 'install' ? `runner key saved in ${this.runnerKeyFile}` : `runner key in ${this.runnerKeyFile} replaced with the one in ${file}`);
+      }
+    }
+    if (fileText === undefined) return;
+    if (!v['delete-key-file']) {
+      this.jn.fileKept = true;
+      return;
+    }
+    if (this.dry) return this.todo(`delete ${file} once the key is in place (--delete-key-file)`);
+    // Only once the key reads back from secrets/convex-key: the file is then the only other copy.
+    if (this.localKey() !== key) throw new Fail(`${this.runnerKeyFile} doesn't hold the key, so ${file} was not deleted.`);
+    try {
+      fs.rmSync(file);
+      this.ok(`deleted ${file}`);
+    } catch (e) {
+      this.jn.fileKept = true;
+      this.note(`couldn't delete ${file} (${e.code ?? 'error'}): delete it yourself, and don't send it anywhere`);
+    }
+  }
+
+  // ---- 6. runner.json, for a computer that joins
+  joinRunnerJson() {
+    this.say('6. runner.json');
+    const json = this.readRunner();
+    const { url, name } = this.jn;
+    // Part one on a computer whose runner has never started: the id is made now, and kept, so it is the one
+    // the first computer is told. A dry run makes none, so it names none.
+    if (!this.jn.id && !this.dry) this.jn.id = crypto.randomBytes(6).toString('hex');
+    const { id } = this.jn;
+    const next = { ...json, sync: { ...json.sync, url, ...(id ? { runnerId: id } : {}), name } };
+    if (JSON.stringify(next) === JSON.stringify(json)) return this.ok(`${this.runnerJsonPath} as it was (mirrors to ${url} as ${name}, runner ${id})`);
+    this.changed.runnerJson = true;
+    if (this.dry) return this.todo(`write ${this.runnerJsonPath}: sync.url ${url}, sync.runnerId ${id ?? '(a new one, chosen when this is run for real)'} and sync.name ${name}; everything else in it stays`);
+    try {
+      writeRunnerJson(this.home, next);
+    } catch (e) {
+      if (e instanceof RunnerJsonError) throw new Fail(`${e.message} Nothing has been changed.`);
+      throw e;
+    }
+    this.ok(`mirrors to ${url} as ${name} (runner ${id})`);
+  }
+
+  // ---- 9. what happens next, for a computer that joins
+  joinFinish() {
+    const { d, v } = this;
+    const { url, id, name, file } = this.jn;
+    if (this.waiting) {
+      this.say('9. Get this computer\'s key');
+      const who = id ? `This computer is runner ${id} ("${name}")` : `This computer is a new runner, and its id is chosen when this is run for real ("${name}")`;
+      this.note(`${who}. Its key comes from the first computer, which owns the backend. On the first computer, in your own terminal, run:`);
+      this.say(`    ${this.ownerCommand(name, id ?? '<shown when run for real>')}`);
+      const sample = d.platform === 'win32' ? 'E:' : '/media/usb';
+      const care = d.platform === 'win32' ? "Not Desktop or Documents if OneDrive backs them up, and not a Dropbox or shared folder. If tb isn't found there, open a new terminal; the runner task has to have been installed for tb to exist." : "Not a folder that OneDrive, Dropbox or another service syncs, and not a shared one. If tb isn't found there, open a new terminal; the runner has to have been installed for tb to exist.";
+      this.note(`(${sample} stands for a USB stick; use the path of yours. ${care})`);
+      this.note('Bring that file here (USB stick or your own network, not email or chat), then run:');
+      this.say(`    node ${d.platform === 'win32' ? 'scripts\\setup-sync.mjs' : 'scripts/setup-sync.mjs'} --join --url ${url} --key-file <that file>${v.home ? ` --home ${quote(v.home)}` : ''}`);
+      return;
+    }
+    this.say('9. What this computer can do');
+    if ((this.changed.runnerJson || this.changed.runnerKey) && !this.restarted) this.note('First restart the runner (step 8), so it reads the new settings.');
+    this.note(`This computer is runner ${id} ("${name}") and has a key of its own. It acts as that runner and nothing else: it writes this computer's threads to the backend, but it can't make pairing codes, read the first computer's threads or deploy.`);
+    this.note(`To pair a phone or sign a browser in, use Settings > Phone & browser on the first computer. This computer's threads show there as "${name}".`);
+    if (this.jn.fileKept) this.note(`${file} is a second copy of the key. Delete it (--delete-key-file does that next time) and don't send it anywhere.`);
+    this.note('tb runner check here says if a deploy key or Convex login turns up later.');
+    this.note('What this made and how to undo it: docs/pairing.md, "Joining from a second computer".');
+  }
+
+  async joinAll() {
+    this.say('1. This computer');
+    this.checkPlatform();
+    this.checkDataFolder('the runner key');
+    this.checkJoin();
+    this.say();
+    this.say('2. Packages');
+    this.ok('skipped (a joining computer deploys nothing)');
+    this.say();
+    this.say('3. Convex login');
+    this.ok('skipped (a Convex login can do anything to the deployment, so a joining computer has none)');
+    this.say();
+    await this.joinAddress();
+    this.say();
+    await this.joinKey();
+    this.say();
+    this.joinRunnerJson();
+    this.say();
+    this.say('7. Backend and website');
+    this.ok('skipped (the first computer deploys them)');
+    this.say();
+    await this.restart();
+    this.say();
+    this.joinFinish();
+    return this.jn.url;
+  }
+
   async all() {
+    if (this.v.join) return this.joinAll();
     this.checkComputer();
     this.say();
     this.packages();
@@ -833,6 +1374,11 @@ export async function main(argv, d = realDeps()) {
         name: { type: 'string' },
         home: { type: 'string' },
         'no-restart': { type: 'boolean' },
+        join: { type: 'boolean' },
+        url: { type: 'string' },
+        'key-file': { type: 'string' },
+        id: { type: 'string' },
+        'delete-key-file': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
       },
     }));
@@ -844,14 +1390,20 @@ export async function main(argv, d = realDeps()) {
     d.say(USAGE);
     return 0;
   }
+  const usage = joinUsageProblem(v);
+  if (usage) {
+    d.err(`${usage}\n\n${USAGE}`);
+    return 2;
+  }
   const fail = (e) => {
     if (!(e instanceof Fail)) throw e;
     d.err(`\nFailed: ${e.message}\nFix that and run it again; it carries on from where it stopped.`);
     return 1;
   };
+  const title = v.join ? "Threadbear sync setup, joining another computer's backend" : 'Threadbear sync setup';
 
   if (v['dry-run']) {
-    d.say('Threadbear sync setup (dry run: nothing changes)\n');
+    d.say(`${title} (dry run: nothing changes)\n`);
     try {
       const plan = new Setup(d, v, { dry: true, out: d.say });
       await plan.all();
@@ -868,12 +1420,12 @@ export async function main(argv, d = realDeps()) {
   try {
     await plan.all();
   } catch (e) {
-    d.say('Threadbear sync setup\n');
+    d.say(`${title}\n`);
     for (const l of lines) d.say(l);
     return fail(e);
   }
   if (plan.todos.length) {
-    d.say('Threadbear sync setup\n');
+    d.say(`${title}\n`);
     d.say('This will:');
     for (const t of plan.todos) d.say(`  - ${t}`);
     if (plan.warnings.length) {
@@ -892,11 +1444,11 @@ export async function main(argv, d = realDeps()) {
       }
     }
     d.say('');
-  } else d.say('Threadbear sync setup\n');
+  } else d.say(`${title}\n`);
   try {
     const run = new Setup(d, v, { dry: false, out: d.say });
     await run.all();
-    d.say('\nDone.');
+    d.say(run.waiting ? '\nPart one done. This computer is waiting for its key (step 9).' : '\nDone.');
     return 0;
   } catch (e) {
     return fail(e);
